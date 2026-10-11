@@ -5,19 +5,12 @@ class Item(Base):
     __tablename__ = "items"
 
     id = Column(Integer, primary_key=True, index=True)
-    item_number = Column(String, unique=True, index=True)  # e.g., "ASM-001"
-    type = Column(String)                                  # "Assembly" or "Part"
-    name = Column(String)
-    make_or_buy = Column(String)
-    unit_cost = Column(Float, default=0.0)
-    qty_on_hand = Column(Integer, default=0)
-    procurement_status = Column(String, default="Planned")
-    drive_link = Column(String, default="")
-
-class BomLink(Base):
-    __tablename__ = "bom_links"
-
-    id = Column(Integer, primary_key=True, index=True)
-    parent_id = Column(Integer, ForeignKey("items.id"))
-    child_id = Column(Integer, ForeignKey("items.id"))
-    quantity = Column(Float, default=1.0)
+    item_id = Column(String, unique=True, index=True)      # e.g., "D01"
+    subsystem = Column(String)                             # "Active drive", "Mechanical", etc.
+    component_name = Column(String)                        
+    purpose = Column(String)                               # Integration purpose
+    qty = Column(Integer, default=1)
+    unit_cost = Column(Float, nullable=True)               # Can be 0 or null for unpriced quotes
+    supplier_link = Column(String, default="")
+    cost_basis = Column(String)                            # "Vendor", "Allowance", "Quote"
+    stage = Column(String, default="Baseline")             # "Baseline" or "Optional"

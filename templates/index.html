@@ -1,96 +1,133 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Exo PLM Dashboard</title>
-    <!-- Pico.css for instant modern styling -->
-    <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@picocss/pico@2/css/pico.min.css">
+    <meta charset="utf-8">
+    <meta name="viewport" content="width=device-width,initial-scale=1">
+    <title>EXO Unilateral Engineering Explorer</title>
+    <style>
+        :root{--ink:#142333;--blue:#13486a;--light:#f4f7f9;--line:#dce4e9;--white:#fff}*{box-sizing:border-box}body{margin:0;background:var(--light);color:var(--ink);font:15px/1.5 Arial,sans-serif}header{background:#152e42;color:white;padding:20px max(20px,calc((100vw - 1150px)/2))}header h1{margin:0 0 3px;font-size:22px}header small{color:#cbd7e0}.wrap{max-width:1150px;margin:auto;padding:20px}nav{display:flex;gap:8px;flex-wrap:wrap;margin-bottom:18px}nav button,button{cursor:pointer;border:1px solid #afc3d2;background:#fff;color:#15364e;border-radius:4px;padding:9px 13px}nav button.active{background:#13486a;color:#fff}h2{margin:9px 0 15px;font-size:21px}h3{font-size:16px}section{display:none;background:white;border:1px solid var(--line);padding:22px;margin-bottom:16px}section.active{display:block}.cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px}.card{padding:13px;background:#f7f9fb;border:1px solid var(--line);border-radius:4px}.card strong{font-size:19px;display:block}.control{display:flex;flex-wrap:wrap;gap:10px;margin-bottom:13px}input,select{padding:8px;border:1px solid #abb9c4;border-radius:3px;max-width:100%;font-size:15px}label{display:block;font-size:13px;color:#334b5c}.maths{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:12px}.maths label input{display:block;width:100%}.output{background:#eef4f8;border-left:4px solid #13486a;padding:15px;margin:12px 0;white-space:pre-wrap}.scroll{overflow:auto}table{width:100%;border-collapse:collapse;font-size:12px}th,td{padding:8px;border-bottom:1px solid #d9e2e8;text-align:left;vertical-align:top}th{background:#ecf1f5;position:sticky;top:0}td.num{text-align:right;white-space:nowrap}a{color:#075a87}.tag{font-size:11px;background:#edf1f4;padding:2px 5px;border-radius:2px}.warning{border-left:4px solid #9c5c20;padding:11px;background:#fff9ee}.two{display:grid;grid-template-columns:1fr 1fr;gap:20px}ul{padding-left:20px}@media(max-width:700px){.two{grid-template-columns:1fr}section{padding:15px}}@media print{nav,.control,button{display:none!important}section{display:block;break-before:page}body{background:white}header{background:white;color:black}}
+    </style>
 </head>
 <body>
-    <main class="container">
-        <nav>
-            <ul>
-                <li><strong>IEEE Exo PLM</strong></li>
-            </ul>
-        </nav>
+<header>
+    <h1>IEEE USF EXO | Unilateral engineering explorer</h1>
+    <small>1 powered hip + 1 powered knee + passive spring ankle · Rev 3.0 · Database Integrated</small>
+</header>
 
-        <!-- Form to Add a New Part -->
-        <section>
-            <h2>Add New Part / Assembly</h2>
-            <form action="/items/add" method="POST">
-                <div class="grid">
-                    <input type="text" name="item_number" placeholder="Item Number (e.g., ASM-001)" required>
-                    <select name="type" required>
-                        <option value="" disabled selected>Select Type</option>
-                        <option value="Assembly">Assembly</option>
-                        <option value="Part">Part</option>
+<main class="wrap">
+    <nav id="nav"></nav>
+
+    <section id="overview">
+        <h2>System overview</h2>
+        <div class="cards">
+            <div class="card">Powered actuators<strong>2 × AK80-9 V3</strong>9 Nm rated / 22 Nm peak</div>
+            <div class="card">Battery concept<strong>43.2 V / 194.4 Wh</strong>12S1P P45B, 50.4 V full</div>
+            <div class="card">Passive ankle<strong>5.6 N/mm pilot</strong>Interchangeable spring cartridge</div>
+            <div class="card">Real-time control<strong>Teensy 4.1</strong>CAN torque command / FSR & IMUs</div>
+        </div>
+        <p>Powered hip and knee provide controlled assistive torque. Ankle operation is passive: pulley + cable + extension spring with optional clutch. Aluminum is the primary structural load path; printed polymers are cuffs/guards/prototypes.</p>
+        <p class="warning">The demonstrated calculations are sizing examples. Do not use the prototype on a person until structure, electrical interruption, regeneration, torque limits, clutch behavior and supported-stance fall prevention are validated.</p>
+    </section>
+
+    <!-- LIVE DATABASE BOM SECTION -->
+    <section id="bom" class="active">
+        <h2>Full searchable master BOM</h2>
+        
+        <!-- UI Search & Filter Bar (Currently visual only) -->
+        <div class="control">
+            <input type="search" id="find" placeholder="Search part, ID, supplier...">
+            <select id="category">
+                <option value="">All subsystems</option>
+            </select>
+            <select id="stage">
+                <option value="">All stages</option>
+                <option>Baseline</option>
+                <option>Optional</option>
+            </select>
+        </div>
+
+        <!-- Summary Cards -->
+        <div class="cards" id="total">
+            <div class="card">Visible lines<strong>{{ visible_lines }}</strong></div>
+            <div class="card">Visible priced sum<strong>${{ "%.2f"|format(priced_sum) }}</strong></div>
+            <div class="card">Unpriced quote lines<strong>{{ unpriced_lines }}</strong></div>
+        </div>
+
+        <!-- Add New Part Form -->
+        <div style="background: var(--light); padding: 15px; border: 1px solid var(--line); margin-top: 15px; margin-bottom: 15px;">
+            <h3>Add New Component</h3>
+            <form action="/items/add" method="POST" style="display: flex; gap: 10px; flex-wrap: wrap;">
+                <input type="text" name="item_id" placeholder="ID (e.g. D01)" required style="width: 120px;">
+                <select name="subsystem" required>
+                    <option value="" disabled selected>Select Subsystem</option>
+                    <option value="Active drive">Active drive</option>
+                    <option value="Mechanical">Mechanical</option>
+                    <option value="Passive ankle">Passive ankle</option>
+                    <option value="Power">Power</option>
+                    <option value="Controls">Controls</option>
+                    <option value="Fabrication">Fabrication</option>
+                    <option value="Test & QA">Test & QA</option>
+                </select>
+                <input type="text" name="component_name" placeholder="Component Name" required>
+                <input type="text" name="purpose" placeholder="Integration Purpose" required style="flex-grow: 1;">
+                
+                <div style="width: 100%; display: flex; gap: 10px;">
+                    <input type="number" name="qty" placeholder="Qty" value="1" required style="width: 80px;">
+                    <input type="number" step="0.01" name="unit_cost" placeholder="Unit Cost ($)" style="width: 120px;">
+                    <select name="cost_basis" required>
+                        <option value="Vendor">Vendor</option>
+                        <option value="Allowance">Allowance</option>
+                        <option value="Quote">Quote</option>
                     </select>
-                    <input type="text" name="name" placeholder="Part Name" required>
-                </div>
-                <div class="grid">
-                    <select name="make_or_buy" required>
-                        <option value="Buy">Buy (COTS)</option>
-                        <option value="Make">Make (Custom)</option>
+                    <select name="stage" required>
+                        <option value="Baseline">Baseline</option>
+                        <option value="Optional">Optional</option>
                     </select>
-                    <input type="number" step="0.01" name="unit_cost" placeholder="Unit Cost ($)" required>
-                    <input type="number" name="qty_on_hand" placeholder="Qty on Hand" required>
+                    <input type="url" name="supplier_link" placeholder="Supplier Link" style="flex-grow: 1;">
+                    <button type="submit" style="background:#13486a; color:white;">Add Part</button>
                 </div>
-                <div class="grid">
-                    <select name="procurement_status" required>
-                        <option value="Planned">Planned</option>
-                        <option value="Ordered">Ordered</option>
-                        <option value="Received">Received</option>
-                    </select>
-                    <input type="url" name="drive_link" placeholder="Google Drive Link (Optional)">
-                </div>
-                <button type="submit">Add to Database</button>
             </form>
-        </section>
+        </div>
 
-        <hr>
+        <div class="scroll">
+            <table>
+                <thead>
+                    <tr>
+                        <th>ID</th>
+                        <th>Subsystem</th>
+                        <th>Component / integration purpose</th>
+                        <th>Qty</th>
+                        <th>Unit $</th>
+                        <th>Ext $</th>
+                        <th>Supplier link</th>
+                        <th>Cost basis</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for item in items %}
+                    <tr>
+                        <td><b>{{ item.item_id }}</b><br><span class="tag">{{ item.stage }}</span></td>
+                        <td>{{ item.subsystem }}</td>
+                        <td><b>{{ item.component_name }}</b><br>{{ item.purpose }}</td>
+                        <td class="num">{{ item.qty }}</td>
+                        <td class="num">{% if item.unit_cost %}${{ "%.2f"|format(item.unit_cost) }}{% else %}Quote{% endif %}</td>
+                        <td class="num">{% if item.unit_cost %}${{ "%.2f"|format(item.unit_cost * item.qty) }}{% else %}Quote{% endif %}</td>
+                        <td>
+                            {% if item.supplier_link %}
+                            <a href="{{ item.supplier_link }}" target="_blank">Link</a>
+                            {% endif %}
+                        </td>
+                        <td>{{ item.cost_basis }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </section>
 
-        <!-- Table Displaying Inventory -->
-        <section>
-            <h2>Master Inventory</h2>
-            <div class="overflow-auto">
-                <table class="striped">
-                    <thead>
-                        <tr>
-                            <th>Item #</th>
-                            <th>Name</th>
-                            <th>Type</th>
-                            <th>Make/Buy</th>
-                            <th>Cost</th>
-                            <th>Qty</th>
-                            <th>Status</th>
-                            <th>CAD File</th>
-                        </tr>
-                    </thead>
-                    <tbody>
-                        <!-- Jinja2 Loop to display database items -->
-                        {% for item in items %}
-                        <tr>
-                            <td>{{ item.item_number }}</td>
-                            <td>{{ item.name }}</td>
-                            <td>{{ item.type }}</td>
-                            <td>{{ item.make_or_buy }}</td>
-                            <td>${{ "%.2f"|format(item.unit_cost) }}</td>
-                            <td>{{ item.qty_on_hand }}</td>
-                            <td>{{ item.procurement_status }}</td>
-                            <td>
-                                {% if item.drive_link %}
-                                <a href="{{ item.drive_link }}" target="_blank">View</a>
-                                {% else %}
-                                -
-                                {% endif %}
-                            </td>
-                        </tr>
-                        {% endfor %}
-                    </tbody>
-                </table>
-            </div>
-        </section>
-    </main>
-</body>
-</html>
+    <!-- RETAINED ENGINEERING CALCULATORS -->
+    <section id="kinematics"><h2>2-link sagittal kinematics</h2><p>x = L<sub>t</sub> sin(q<sub>h</sub>) + L<sub>s</sub> sin(q<sub>h</sub> - q<sub>k</sub>); z = -L<sub>t</sub> cos(q<sub>h</sub>) - L<sub>s</sub> cos(q<sub>h</sub> - q<sub>k</sub>). Hip flexion and knee flexion positive. Hip origin at (0,0); z positive up.</p><div class="maths"><label>Thigh L (m)<input type="number" id="L1" step=".01" value="0.43"></label><label>Shank L (m)<input type="number" id="L2" step=".01" value="0.43"></label><label>Hip q (deg)<input type="number" id="qh" step="1" value="20"></label><label>Knee q (deg)<input type="number" id="qk" step="1" value="40"></label><label>Hip speed (rad/s)<input type="number" id="v1" step=".1" value="0.8"></label><label>Knee speed (rad/s)<input type="number" id="v2" step=".1" value="1.1"></label></div><div class="output" id="kout"></div></section>
+    
+    <section id="dynamics"><h2>Planar dynamics and torque worksheet</h2><p>M(q)q̈ + C(q,q̇) + G(q) = τ. Sample link masses/inertias approximate a human leg for math demonstration only; do not equate modeled net torques with desired exoskeleton motor assistance.</p><div class="maths"><label>Thigh mass (kg)<input id="m1" type="number" value="7.5" step=".1"></label><label>Shank mass (kg)<input id="m2" type="number" value="3.5" step=".1"></label><label>Thigh COM a (m)<input id="a1" type="number" value="0.19" step=".01"></label><label>Shank COM a (m)<input id="a2" type="number" value="0.185" step=".01"></label><label>Thigh I (kg m²)<input id="i1" type="number" value="0.12" step=".01"></label><label>Shank I (kg m²)<input id="i2" type="number" value="0.06" step=".01"></label><label>Hip acceleration (rad/s²)<input id="ac1" type="number" value="1.5" step=".1"></label><label>Knee acceleration (rad/s²)<input id="ac2" type="number" value="2" step=".1"></label></div><div class="output" id="dout"></div><p>Actuator rating: 9 Nm continuous, 22 Nm peak at rated test conditions. Define assistance torque from inverse dynamics, exoskeleton weight/inertia and desired assist fraction, then calculate RMS and peak along the gait cycle.</p></section>
+    
+    <section id="ankle"><h2>Passive ankle spring and moment arm</h2><p>F = F_initial + k Δx; torque = force × instantaneous cable moment arm × efficiency. Extension spring initial tension may be significant.</p><div class="maths"><label>Spring rate (N/mm)<select id="ks"><option>5.6</option><option>7.9</option><option>10.5</option><option>13.3</option><option>17.2</option></select></label><label>Extension (mm)<input type="number" id="ext" value="15" step="1"></label><label>Initial tension (N)<input type="number" id="f0" value="0" step="1"></label><label>Moment arm (mm)<input type="number" id="r" value="40" step="1"></label><label>
