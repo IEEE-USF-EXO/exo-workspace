@@ -37,6 +37,19 @@ def read_root(request: Request, db: Session = Depends(get_db)):
         }
     )
 
+@app.post("/items/delete/{item_db_id}")
+def delete_item(item_db_id: int, db: Session = Depends(get_db)):
+    # Find the item in the database
+    item_to_delete = db.query(models.Item).filter(models.Item.id == item_db_id).first()
+    
+    # If it exists, delete it and save the changes
+    if item_to_delete:
+        db.delete(item_to_delete)
+        db.commit()
+        
+    # Refresh the page
+    return RedirectResponse(url="/", status_code=303)
+
 @app.post("/items/add")
 def add_item(
     item_id: str = Form(...),
