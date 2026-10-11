@@ -1,5 +1,8 @@
-from database import SessionLocal
+from database import SessionLocal, engine
 import models
+
+# Build the tables in Supabase if they don't exist
+models.Base.metadata.create_all(bind=engine)
 
 original_data = [
     {"id": "D01", "category": "Active drive", "name": "CubeMars AK80-9 V3.0 hip actuator", "qty": 1, "unit": 479.9, "source": "CubeMars", "url": "https://www.cubemars.com/product/ak80-9-v3-0-robotic-actuator.html", "stage": "Baseline", "basis": "Vendor", "purpose": "48 V rated, 9 Nm rated, 22 Nm peak, 9:1 QDD actuator; confirm installed driver limits."},
