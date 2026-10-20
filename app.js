@@ -40,21 +40,6 @@ async function signInWithGitHub() {
     );
     return;
   }
-
-  async function loadSharedBOM() {
-    const { data, error } = await supabaseClient
-      .from("bom_items")
-      .select("id, project_id, item_id, subsystem, component, purpose, quantity, unit_cost, extended_cost, supplier, cost_basis, stage, source")
-      .order("project_id")
-      .order("item_id");
-    if (error) {
-      if (error.code === "42P01") return;
-      notify("Shared BOM could not be loaded: " + error.message);
-      return;
-    }
-    sharedBOMRows = data || [];
-    if (view === "bom") previewBOM();
-  }
   try {
     const { error } = await supabaseClient.auth.signInWithOAuth({
       provider: "github",
@@ -67,6 +52,21 @@ async function signInWithGitHub() {
   } catch (error) {
     notify("GitHub sign-in failed: " + error.message);
   }
+}
+
+async function loadSharedBOM() {
+  const { data, error } = await supabaseClient
+    .from("bom_items")
+    .select("id, project_id, item_id, subsystem, component, purpose, quantity, unit_cost, extended_cost, supplier, cost_basis, stage, source")
+    .order("project_id")
+    .order("item_id");
+  if (error) {
+    if (error.code === "42P01") return;
+    notify("Shared BOM could not be loaded: " + error.message);
+    return;
+  }
+  sharedBOMRows = data || [];
+  if (view === "bom") previewBOM();
 }
 
 async function signOut() {
