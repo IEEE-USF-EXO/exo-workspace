@@ -364,6 +364,8 @@ const folderIds = [
   ["pid-spoon", "Electrical", "16DcGIMgwtcuZrYI7QaQJs6lVmQ6q1_ZE"],
   ["pid-spoon", "Mechanical", "1a1LPEQUeCjfbkV6nDJag9Hsq55-Go0J8"],
 ];
+const teamLabel = (project, team) =>
+  project === "pid-spoon" && team === "Mechanical" ? "CAD" : team;
 const driveFolderFor = (project, team) =>
   folderIds.find(([folderProject, folderTeam]) =>
     folderProject === project && folderTeam === team)?.[2] || null;
@@ -381,7 +383,7 @@ const knownResources = [
     id,
     project,
     team,
-    title: team + " Drive folder",
+    title: teamLabel(project, team) + " Drive folder",
     url: "https://drive.google.com/drive/folders/" + id,
   })),
 ];
@@ -406,9 +408,17 @@ const githubRepoFor = (project, team) => {
   );
   return match ? { owner: match[1], repo: match[2] } : null;
 };
-const teamOptions = (value) =>
-  teams
-    .map((t) => `<option ${value === t ? "selected" : ""}>${t}</option>`)
+const teamOptions = (value, project = null) =>
+  (project
+    ? folderIds
+        .filter(([folderProject]) => folderProject === project)
+        .map(([, team]) => team)
+    : teams
+  )
+    .map(
+      (t) =>
+        `<option value="${esc(t)}" ${value === t ? "selected" : ""}>${esc(teamLabel(project, t))}</option>`,
+    )
     .join("");
 const projectOptions = (value) =>
   state.projects
@@ -612,11 +622,24 @@ function projectForm() {
 // Save locally in IndexedDB and upload to the selected Google Drive folder.
 function showUpload(photos = false) {
   const initialProject = currentProject();
-  const initialTeam = "Shared";
+  const initialTeam =
+    folderIds.find(([project]) => project === initialProject)?.[1] || "";
   openModal(
     photos ? "Add project photos" : "Add project files",
-    `<form id="upload-form"><p class="hint" style="margin-bottom:14px">Files are uploaded to the selected Google Drive folder and kept in this browser for reference.</p><label class="field">${photos ? "Photos" : "Files"}<input type="file" name="files" ${photos ? 'accept="image/png,image/jpeg,image/webp,image/gif,image/avif"' : ""} multiple required><small>Up to 25 MB each.</small></label>${scope === "all" ? `<label class="field">Project<select name="project">${projectOptions(initialProject)}</select><small>Choose a project before uploading from All projects.</small></label>` : `<label class="field">Project<input value="${esc(nameOf(initialProject))}" readonly><input type="hidden" name="project" value="${esc(initialProject)}"></label>`}<label class="field">Destination team<select name="team">${teamOptions(initialTeam)}</select></label><label class="field">Note or photo caption<textarea name="note" maxlength="1000" placeholder="Context, version, or what the photo shows"></textarea></label>${actions(photos ? "Add photos" : "Add files")}</form>`,
+    `<form id="upload-form"><p class="hint" style="margin-bottom:14px">Files are uploaded to the selected Google Drive team folder and kept in this browser for reference.</p><label class="field">${photos ? "Photos" : "Files"}<input type="file" name="files" ${photos ? 'accept="image/png,image/jpeg,image/webp,image/gif,image/avif"' : ""} multiple required><small>Up to 25 MB each.</small></label>${scope === "all" ? `<label class="field">Project<select name="project">${projectOptions(initialProject)}</select><small>Choose a project before uploading from All projects.</small></label>` : `<label class="field">Project<input value="${esc(nameOf(initialProject))}" readonly><input type="hidden" name="project" value="${esc(initialProject)}"></label>`}<label class="field">Destination team<select name="team">${teamOptions(initialTeam, initialProject)}</select></label><label class="field">Note or photo caption<textarea name="note" maxlength="1000" placeholder="Context, version, or what the photo shows"></textarea></label>${actions(photos ? "Add photos" : "Add files")}</form>`,
   );
+  if (scope === "all") {
+    $("#upload-form").elements.project.onchange = (event) => {
+      const project = String(event.target.value);
+      const availableTeam = folderIds.find(
+        ([folderProject]) => folderProject === project,
+      )?.[1] || "";
+      $("#upload-form").elements.team.innerHTML = teamOptions(
+        availableTeam,
+        project,
+      );
+    };
+  }
   $("#upload-form").onsubmit = async (e) => {
     e.preventDefault();
     const form = new FormData(e.target),
