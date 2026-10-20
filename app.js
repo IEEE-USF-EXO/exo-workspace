@@ -464,6 +464,20 @@ function writeStores(nextState, blobs = [], replace = false) {
       reject(tx.error || new Error("Storage write interrupted"));
   });
 }
+function removeBlob(id) {
+  return new Promise((resolve, reject) => {
+    if (!db) {
+      resolve();
+      return;
+    }
+    const tx = db.transaction("blobs", "readwrite");
+    tx.objectStore("blobs").delete(id);
+    tx.oncomplete = () => resolve();
+    tx.onerror = () => reject(tx.error);
+    tx.onabort = () =>
+      reject(tx.error || new Error("Storage deletion interrupted"));
+  });
+}
 function persist() {
   const snapshot = structuredClone(state);
   $("#save-status").textContent = "Saving…";
@@ -533,6 +547,33 @@ async function downloadFile(id) {
     return;
   }
   download(blob, f?.name || "file");
+}
+async function removeLocalFile(id) {
+  const file = state.files.find((item) => item.id === id);
+  if (!file) return;
+  if (!window.confirm(`Remove "${file.name}" from this browser? This will not delete it from Google Drive.`)) {
+    return;
+  }
+  state.files = state.files.filter((item) => item.id !== id);
+  for (const node of state.nodes) {
+    node.files = (node.files || []).filter((fileId) => fileId !== id);
+  }
+  for (const project of state.projects) {
+    if (state.bom[project.id] === id) delete state.bom[project.id];
+  }
+  const url = urls.get(id);
+  if (url) {
+    URL.revokeObjectURL(url);
+    urls.delete(id);
+  }
+  try {
+    await removeBlob(id);
+    await persist();
+    render();
+    notify(`Removed ${file.name} from this browser.`);
+  } catch (error) {
+    notify("Could not remove the local file: " + error.message);
+  }
 }
 function openModal(title, html) {
   $("#modal-title").textContent = title;
@@ -1010,7 +1051,7 @@ function fileRows(files) {
   return files
     .map(
       (f) =>
-        `<tr><td><div class="file-title"><strong>${esc(f.name)}</strong><small>${esc(f.note || nameOf(f.project))}</small></div></td><td>${esc(nameOf(f.project))}</td><td><span class="tag ${f.team.toLowerCase()}">${esc(f.team)}</span></td><td>${sizeOf(f.size)}</td><td><button class="text-button" data-download="${f.id}">↓ Download</button></td></tr>`,
+        `<tr><td><div class="file-title"><strong>${esc(f.name)}</strong><small>${esc(f.note || nameOf(f.project))}</small></div></td><td>${esc(nameOf(f.project))}</td><td><span class="tag ${f.team.toLowerCase()}">${esc(f.team)}</span></td><td>${sizeOf(f.size)}</td><td><button class="text-button" data-download="${f.id}">↓ Download</button> <button class="text-button danger-text" data-remove-file="${f.id}">Remove</button></td></tr>`,
     )
     .join("");
 }
@@ -1033,7 +1074,7 @@ function filesHTML() {
 }
 function galleryHTML() {
   const photos = state.files.filter(inScope).filter(isPhoto);
-  return `<section class="panel"><div class="panel-head"><div><h2>Project photo gallery</h2><p>Your actual photos, with their project, team, and notes.</p></div><span class="pill">${photos.length} photos</span></div>${photos.length ? `<div class="tiles">${photos.map((f) => `<article class="photo"><button class="photo-image" data-photo="${f.id}" aria-label="View ${esc(f.name)}"><img data-local-image="${f.id}" alt="${esc(f.note || f.name)}"></button><div class="photo-info"><b>${esc(f.name)}</b><p>${esc(nameOf(f.project))} · ${esc(f.team)}</p><p>${esc(f.note)}</p><button class="text-button" data-download="${f.id}">↓ Original photo</button></div></article>`).join("")}</div>` : empty("▧", "Show what you are building.", "Add photos of prototypes, assemblies, and team progress.", '<button class="secondary" data-action="photos">＋ Add photos</button>')}</section>`;
+  return `<section class="panel"><div class="panel-head"><div><h2>Project photo gallery</h2><p>Your actual photos, with their project, team, and notes.</p></div><span class="pill">${photos.length} photos</span></div>${photos.length ? `<div class="tiles">${photos.map((f) => `<article class="photo"><button class="photo-image" data-photo="${f.id}" aria-label="View ${esc(f.name)}"><img data-local-image="${f.id}" alt="${esc(f.note || f.name)}"></button><div class="photo-info"><b>${esc(f.name)}</b><p>${esc(nameOf(f.project))} · ${esc(f.team)}</p><p>${esc(f.note)}</p><button class="text-button" data-download="${f.id}">↓ Original photo</button> <button class="text-button danger-text" data-remove-file="${f.id}">Remove</button></div></article>`).join("")}</div>` : empty("▧", "Show what you are building.", "Add photos of prototypes, assemblies, and team progress.", '<button class="secondary" data-action="photos">＋ Add photos</button>')}</section>`;
 }
 async function loadImages() {
   for (const img of $$("[data-local-image]")) {
@@ -1595,6 +1636,11 @@ document.addEventListener("click", async (e) => {
   if (el.dataset.download) {
     e.preventDefault();
     downloadFile(el.dataset.download);
+  }
+  if (el.dataset.removeFile) {
+    e.preventDefault();
+    await removeLocalFile(el.dataset.removeFile);
+    return;
   }
   if (el.dataset.selectEdge) {
     selected = { kind: "edge", id: el.dataset.selectEdge };
