@@ -33,27 +33,23 @@
             <span class="symbol">▧</span>Photo gallery
           </button>
           <button class="nav" data-view="resources">
-            <span class="symbol">↗</span>Resources
+            <span class="symbol">↗</span>Repositories &amp; links
           </button>
         </nav>
-        <div class="nav-label" style="margin-top: 27px">PROJECTS</div>
-        <div id="project-list" class="project-list"></div>
         <button class="add-project" id="new-project">＋ New project</button>
         <div class="sidebar-bottom">
           <div class="local-badge">
             <b>● Hybrid Workspace</b>Saved locally in this browser + synced to
             GitHub when signed in.
           </div>
-          <div class="sidebar-actions">
-            <button data-action="export">Export backup</button
-            ><button data-action="import">Import backup</button>
-          </div>
         </div>
       </aside>
       <main>
         <header class="topbar">
           <div class="breadcrumbs">
-            Workspace <span>›</span><b id="crumb">All projects</b>
+            <label class="project-context" for="project-context">Project</label>
+            <select id="project-context" aria-label="Current project"></select>
+            <span>›</span><b id="crumb">Project files</b>
           </div>
           <div class="topbar-right">
             <span id="save-status" class="status" role="status"
@@ -61,7 +57,7 @@
             >
             <span id="auth-status" class="pill">OFFLINE PROTOTYPE</span>
             <button class="text-button" data-action="storage">
-              Storage & backup
+              More actions
             </button>
             <button
               id="login-btn"

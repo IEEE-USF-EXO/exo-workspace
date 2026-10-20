@@ -204,7 +204,7 @@ document.addEventListener("input", (event) => {
 let state = initial(),
   db = null,
   view = "canvas",
-  scope = "all",
+  scope = "exo",
   tool = "select",
   selected = null,
   connectFrom = null,
@@ -431,15 +431,18 @@ function showUpload(photos = false) {
   const initialProject = currentProject();
   const initialTeam = "Shared";
   const initialRepo = githubRepoFor(initialProject, initialTeam);
-  const initialDestination = initialRepo
-    ? `${initialRepo.owner}/${initialRepo.repo}`
-    : "No GitHub repository configured";
+  const initialDestination =
+    scope === "all"
+      ? "Choose a project"
+      : initialRepo
+        ? `${initialRepo.owner}/${initialRepo.repo}`
+        : "No GitHub repository configured";
   const ghStatusNote = githubAccessToken
-    ? `Signed in: Files will be saved locally and pushed to <b id="upload-repo">${initialDestination}</b>.`
+    ? "Signed in: files will be saved locally and pushed to the destination below."
     : `Not signed in to GitHub: Files will be saved locally in this browser only. Sign in at the top right to also push to GitHub.`;
   openModal(
     photos ? "Add project photos" : "Add project files",
-    `<form id="upload-form"><p class="hint" style="margin-bottom:14px">${ghStatusNote}</p><label class="field">${photos ? "Photos" : "Files"}<input type="file" name="files" ${photos ? 'accept="image/png,image/jpeg,image/webp,image/gif,image/avif"' : ""} multiple required><small>Up to 25 MB each.</small></label><div class="form-grid"><label class="field">Project<select name="project">${projectOptions(initialProject)}</select></label><label class="field">Team<select name="team">${teamOptions(initialTeam)}</select></label></div><label class="field">GitHub target folder<input name="folder" value="uploads" placeholder="e.g. uploads or cad/actuators"><small>Folder inside the selected project/team repository.</small></label><label class="field">Note or photo caption<textarea name="note" maxlength="1000" placeholder="Context, version, or what the photo shows"></textarea></label>${actions(photos ? "Add photos" : "Add files")}</form>`,
+    `<form id="upload-form"><p class="hint" style="margin-bottom:14px">${ghStatusNote}</p><label class="field">${photos ? "Photos" : "Files"}<input type="file" name="files" ${photos ? 'accept="image/png,image/jpeg,image/webp,image/gif,image/avif"' : ""} multiple required><small>Up to 25 MB each.</small></label>${scope === "all" ? `<label class="field">Project<select name="project">${projectOptions(initialProject)}</select><small>Choose a project before uploading from All projects.</small></label>` : `<label class="field">Project<input value="${esc(nameOf(initialProject))}" readonly><input type="hidden" name="project" value="${esc(initialProject)}"></label>`}<label class="field">Destination team<select name="team">${teamOptions(initialTeam)}</select></label><div class="destination-preview">GitHub destination: <b id="upload-repo">${initialDestination}</b></div><label class="field">Folder<input name="folder" value="uploads" placeholder="e.g. uploads or cad/actuators"><small>Folder inside the selected project/team repository.</small></label><label class="field">Note or photo caption<textarea name="note" maxlength="1000" placeholder="Context, version, or what the photo shows"></textarea></label>${actions(photos ? "Add photos" : "Add files")}</form>`,
   );
   const updateUploadRepo = () => {
     const form = $("#upload-form");
@@ -929,7 +932,7 @@ const empty = (symbol, title, description, action) =>
   `<div class="empty"><div class="empty-symbol">${symbol}</div><h3>${title}</h3><p>${description}</p>${action || ""}</div>`;
 function filesHTML() {
   const files = filteredFiles();
-  return `<section class="panel"><div class="panel-head"><div><h2>Your file library</h2><p>Files added here save in this browser and push to the selected project/team repository when signed in.</p></div><button class="secondary" data-action="github">↗ GitHub uploader</button></div><div class="section-tools"><input id="file-search" aria-label="Search files" placeholder="Search files, notes, projects…" value="${esc(search)}"><select id="team-filter" aria-label="Filter by team"><option value="all">All teams</option>${teamOptions(fileTeam)}</select></div>${files.length ? `<div class="table-scroll"><table><thead><tr><th>File name</th><th>Project</th><th>Team</th><th>Size</th><th>Access</th></tr></thead><tbody>${fileRows(files)}</tbody></table></div>` : empty("▱", "Your files go here.", "Add your own drawings, spreadsheets, documents, or code.", '<button class="secondary" data-action="upload">＋ Add files</button>')}<div class="table-footer">${files.length} files · Browser storage + project/team GitHub sync</div></section>`;
+  return `<section class="panel"><div class="panel-head"><div><h2>Your file library</h2><p>Files added here save in this browser and push to the selected project/team repository when signed in.</p></div><button class="secondary" data-action="github">Advanced: upload to a repository</button></div><div class="section-tools"><input id="file-search" aria-label="Search files" placeholder="Search files, notes, projects…" value="${esc(search)}"><select id="team-filter" aria-label="Filter by team"><option value="all">All teams</option>${teamOptions(fileTeam)}</select></div>${files.length ? `<div class="table-scroll"><table><thead><tr><th>File name</th><th>Project</th><th>Team</th><th>Size</th><th>Access</th></tr></thead><tbody>${fileRows(files)}</tbody></table></div>` : empty("▱", "Your files go here.", "Add your own drawings, spreadsheets, documents, or code.", '<button class="secondary" data-action="upload">＋ Add files</button>')}<div class="table-footer">${files.length} files · Browser storage + project/team GitHub sync</div></section>`;
 }
 function galleryHTML() {
   const photos = state.files.filter(inScope).filter(isPhoto);
@@ -1057,7 +1060,7 @@ function chooseBOM() {
 }
 function resourcesHTML() {
   const links = [...knownResources, ...state.resources].filter(inScope);
-  return `<section class="panel"><div class="panel-head"><div><h2>Connected resources</h2><p>Existing GitHub repositories and documented Drive folders. Their own access rules apply.</p></div></div><div class="resource-grid">${links.map((r) => `<a class="resource" href="${esc(r.url)}" target="_blank" rel="noopener noreferrer"><div><b>${esc(r.title)}</b><small>${esc(nameOf(r.project))} ·${esc(r.team)}</small></div><span>↗</span></a>`).join("")}</div>${!links.length ? empty("↗", "Connect your project.", "Add a repository, folder, or reference link.") : ""}</section>`;
+  return `<section class="panel"><div class="panel-head"><div><h2>Repositories & links</h2><p>GitHub repositories, Google Drive folders, and other project references. Add a GitHub repository here to configure uploads.</p></div></div><div class="resource-grid">${links.map((r) => `<a class="resource" href="${esc(r.url)}" target="_blank" rel="noopener noreferrer"><div><b>${esc(r.title)}</b><small>${esc(nameOf(r.project))} ·${esc(r.team)}</small></div><span>↗</span></a>`).join("")}</div>${!links.length ? empty("↗", "Connect your project.", "Add a repository, folder, or reference link.") : ""}</section>`;
 }
 function resourceForm() {
   openModal(
@@ -1352,21 +1355,34 @@ function render() {
   $("#page-description").textContent = labels[view][1];
   $("#page-action").textContent = labels[view][2];
   $("#eyebrow").textContent =
-    (scope === "all" ? "WORKSPACE" : nameOf(scope).toUpperCase()) +
+    (scope === "all" ? "ALL PROJECTS" : nameOf(scope).toUpperCase()) +
     " / " +
-    (view === "canvas" ? "DRAWING BOARD" : view.toUpperCase());
-  $("#crumb").textContent = scope === "all" ? "All projects" : nameOf(scope);
-  $$("#nav .nav").forEach((b) =>
-    b.classList.toggle("active", b.dataset.view === view),
-  );
-  $("#project-list").innerHTML =
-    `<button class="project-button ${scope === "all" ? "active" : ""}" data-project="all"><span class="dot" style="background:#a9b294"></span>All projects</button>` +
+    (view === "canvas"
+      ? "DRAWING BOARD"
+      : view === "resources"
+        ? "REPOSITORIES & LINKS"
+        : view.toUpperCase());
+  $("#crumb").textContent =
+    scope === "all" ? "All projects" : `${nameOf(scope)} / ${view}`;
+  $("#project-context").innerHTML =
+    `<option value="all" ${scope === "all" ? "selected" : ""}>All projects</option>` +
     state.projects
       .map(
         (p) =>
-          `<button class="project-button ${scope === p.id ? "active" : ""}" data-project="${p.id}"><span class="dot"></span>${esc(p.name)}</button>`,
+          `<option value="${esc(p.id)}" ${scope === p.id ? "selected" : ""}>${esc(p.name)}</option>`,
       )
       .join("");
+  $("#project-context").onchange = (e) => {
+    scope = e.target.value;
+    selected = null;
+    connectFrom = null;
+    search = "";
+    fileTeam = "all";
+    render();
+  };
+  $$("#nav .nav").forEach((b) =>
+    b.classList.toggle("active", b.dataset.view === view),
+  );
   $("#view").innerHTML =
     view === "canvas"
       ? boardHTML()
