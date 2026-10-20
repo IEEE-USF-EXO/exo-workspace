@@ -316,7 +316,7 @@ document.addEventListener("input", (event) => {
 });
 let state = initial(),
   db = null,
-  view = "canvas",
+  view = "overview",
   scope = "exo",
   tool = "select",
   selected = null,
