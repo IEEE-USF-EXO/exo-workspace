@@ -1,7 +1,7 @@
 "use strict";
 
 // ==========================================
-// 1. GITHUB & SUPABASE CONFIGURATION
+// 1. GOOGLE & SUPABASE CONFIGURATION
 // ==========================================
 const GITHUB_ORG_OR_USERNAME = "IEEE-USF-EXO";
 const GITHUB_REPOSITORIES = {
@@ -30,27 +30,28 @@ const supabaseClient = window.supabase.createClient(
   },
 );
 
-let githubAccessToken = localStorage.getItem("gh_provider_token") || null;
+let googleAccessToken = null;
 let sharedBOMRows = [];
 
-async function signInWithGitHub() {
+async function signInWithGoogle() {
   if (window.location.protocol === "file:") {
     notify(
-      "GitHub sign-in requires this app to run from http://localhost, not a file:// URL.",
+      "Google sign-in requires this app to run from http://localhost, not a file:// URL.",
     );
     return;
   }
   try {
     const { error } = await supabaseClient.auth.signInWithOAuth({
-      provider: "github",
+      provider: "google",
       options: {
-        scopes: "repo", // Supports both public and private target repositories
+        scopes: "https://www.googleapis.com/auth/drive.file",
+        queryParams: { access_type: "offline", prompt: "consent" },
         redirectTo: window.location.origin + window.location.pathname,
       },
     });
     if (error) throw error;
   } catch (error) {
-    notify("GitHub sign-in failed: " + error.message);
+    notify("Google sign-in failed: " + error.message);
   }
 }
 
@@ -70,8 +71,6 @@ async function loadSharedBOM() {
 }
 
 async function signOut() {
-  localStorage.removeItem("gh_provider_token");
-  githubAccessToken = null;
   await supabaseClient.auth.signOut();
   window.location.reload();
 }
@@ -84,17 +83,13 @@ async function checkUserSession() {
   const logoutBtn = document.getElementById("logout-btn");
 
   if (session) {
-    if (session.provider_token) {
-      githubAccessToken = session.provider_token;
-      localStorage.setItem("gh_provider_token", session.provider_token);
-    }
+    googleAccessToken = session.provider_token || null;
     if (loginBtn) loginBtn.style.display = "none";
     if (logoutBtn) logoutBtn.style.display = "inline-flex";
     await ensureMemberProfile(session.user);
     await loadSharedBOM();
   } else {
-    localStorage.removeItem("gh_provider_token");
-    githubAccessToken = null;
+    googleAccessToken = null;
     sharedBOMRows = [];
     if (loginBtn) loginBtn.style.display = "inline-flex";
     if (logoutBtn) logoutBtn.style.display = "none";
@@ -119,12 +114,39 @@ async function checkUserSession() {
 }
 
 supabaseClient.auth.onAuthStateChange((event, session) => {
-  if (session && session.provider_token) {
-    githubAccessToken = session.provider_token;
-    localStorage.setItem("gh_provider_token", session.provider_token);
-  }
   checkUserSession();
 });
+
+async function uploadFileToGoogleDrive(file, folderId) {
+  if (!googleAccessToken) {
+    throw new Error("Google Drive access is unavailable. Sign in again.");
+  }
+  const boundary = "exo-dashboard-upload";
+  const body = new Blob([
+    `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n`,
+    JSON.stringify({ name: file.name, parents: [folderId] }),
+    `\r\n--${boundary}\r\nContent-Type: ${file.type || "application/octet-stream"}\r\n\r\n`,
+    file,
+    `\r\n--${boundary}--`,
+  ]);
+  const response = await fetch(
+    "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart",
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${googleAccessToken}`,
+        "Content-Type": `multipart/related; boundary=${boundary}`,
+      },
+      body,
+    },
+  );
+  if (!response.ok) {
+    const details = await response.json().catch(() => ({}));
+    throw new Error(
+      details.error?.message || `Google Drive upload failed (HTTP ${response.status})`,
+    );
+  }
+}
 
 // Helper to push a File object directly to GitHub REST API (supports creating & updating files)
 async function pushFileToGitHub(file, owner, repo, folderPath, note = "") {
@@ -342,6 +364,9 @@ const folderIds = [
   ["pid-spoon", "Electrical", "16DcGIMgwtcuZrYI7QaQJs6lVmQ6q1_ZE"],
   ["pid-spoon", "Mechanical", "1a1LPEQUeCjfbkV6nDJag9Hsq55-Go0J8"],
 ];
+const driveFolderFor = (project, team) =>
+  folderIds.find(([folderProject, folderTeam]) =>
+    folderProject === project && folderTeam === team)?.[2] || null;
 const knownResources = [
   ...Object.entries(GITHUB_REPOSITORIES).flatMap(([project, repos]) =>
     Object.entries(repos).map(([team, repo]) => ({
@@ -543,39 +568,14 @@ function projectForm() {
   };
 }
 
-// Save locally in IndexedDB and push to the repository for the selected project/team.
+// Save locally in IndexedDB and upload to the selected Google Drive folder.
 function showUpload(photos = false) {
   const initialProject = currentProject();
   const initialTeam = "Shared";
-  const initialRepo = githubRepoFor(initialProject, initialTeam);
-  const initialDestination =
-    scope === "all"
-      ? "Choose a project"
-      : initialRepo
-        ? `${initialRepo.owner}/${initialRepo.repo}`
-        : "No GitHub repository configured";
-  const ghStatusNote = githubAccessToken
-    ? "Signed in: files will be saved locally and pushed to the destination below."
-    : `Not signed in to GitHub: Files will be saved locally in this browser only. Sign in at the top right to also push to GitHub.`;
   openModal(
     photos ? "Add project photos" : "Add project files",
-    `<form id="upload-form"><p class="hint" style="margin-bottom:14px">${ghStatusNote}</p><label class="field">${photos ? "Photos" : "Files"}<input type="file" name="files" ${photos ? 'accept="image/png,image/jpeg,image/webp,image/gif,image/avif"' : ""} multiple required><small>Up to 25 MB each.</small></label>${scope === "all" ? `<label class="field">Project<select name="project">${projectOptions(initialProject)}</select><small>Choose a project before uploading from All projects.</small></label>` : `<label class="field">Project<input value="${esc(nameOf(initialProject))}" readonly><input type="hidden" name="project" value="${esc(initialProject)}"></label>`}<label class="field">Destination team<select name="team">${teamOptions(initialTeam)}</select></label><div class="destination-preview">GitHub destination: <b id="upload-repo">${initialDestination}</b></div><label class="field">Folder<input name="folder" value="uploads" placeholder="e.g. uploads or cad/actuators"><small>Folder inside the selected project/team repository.</small></label><label class="field">Note or photo caption<textarea name="note" maxlength="1000" placeholder="Context, version, or what the photo shows"></textarea></label>${actions(photos ? "Add photos" : "Add files")}</form>`,
+    `<form id="upload-form"><p class="hint" style="margin-bottom:14px">Files are uploaded to the selected Google Drive folder and kept in this browser for reference.</p><label class="field">${photos ? "Photos" : "Files"}<input type="file" name="files" ${photos ? 'accept="image/png,image/jpeg,image/webp,image/gif,image/avif"' : ""} multiple required><small>Up to 25 MB each.</small></label>${scope === "all" ? `<label class="field">Project<select name="project">${projectOptions(initialProject)}</select><small>Choose a project before uploading from All projects.</small></label>` : `<label class="field">Project<input value="${esc(nameOf(initialProject))}" readonly><input type="hidden" name="project" value="${esc(initialProject)}"></label>`}<label class="field">Destination team<select name="team">${teamOptions(initialTeam)}</select></label><label class="field">Note or photo caption<textarea name="note" maxlength="1000" placeholder="Context, version, or what the photo shows"></textarea></label>${actions(photos ? "Add photos" : "Add files")}</form>`,
   );
-  const updateUploadRepo = () => {
-    const form = $("#upload-form");
-    const destination = githubRepoFor(
-      String(form.elements.project.value),
-      String(form.elements.team.value),
-    );
-    const repoLabel = $("#upload-repo");
-    if (repoLabel) {
-      repoLabel.textContent = destination
-        ? `${destination.owner}/${destination.repo}`
-        : "No GitHub repository configured";
-    }
-  };
-  $("#upload-form").elements.project.onchange = updateUploadRepo;
-  $("#upload-form").elements.team.onchange = updateUploadRepo;
   $("#upload-form").onsubmit = async (e) => {
     e.preventDefault();
     const form = new FormData(e.target),
@@ -594,8 +594,13 @@ function showUpload(photos = false) {
     const proj = String(form.get("project")),
       team = String(form.get("team")),
       note = String(form.get("note")),
-      folder = String(form.get("folder") || "uploads").trim();
-    const destination = githubRepoFor(proj, team);
+      folderId = driveFolderFor(proj, team);
+    if (!folderId) {
+      notify("No Google Drive folder is configured for this project and team.");
+      button.disabled = false;
+      button.textContent = photos ? "Add photos" : "Add files";
+      return;
+    }
     const additions = files.map((f) => ({
       id: uid(),
       name: f.name,
@@ -617,36 +622,10 @@ function showUpload(photos = false) {
         state = next;
         $("#save-status").textContent = "Saved in this browser";
       }
-      if (githubAccessToken) {
-        if (!destination) {
-          throw new Error(
-            `No GitHub repository is configured for ${nameOf(proj)}/${team}.`,
-          );
-        }
-        const pullRequests = [];
-        for (const f of files) {
-          pullRequests.push(await pushFileToGitHub(
-            f,
-            destination.owner,
-            destination.repo,
-            folder,
-            note,
-          ));
-        }
-        $("#dialog").close();
-        render();
-        notify(
-          `Saved locally and opened ${pullRequests.length} pull request(s) for ${destination.owner}/${destination.repo}/${folder}.`,
-        );
-      } else {
-        $("#dialog").close();
-        render();
-        notify(
-          photos
-            ? "Photos added to browser gallery (Sign in with GitHub to sync to repo)."
-            : "Files added to browser storage (Sign in with GitHub to sync to repo).",
-        );
-      }
+      for (const file of files) await uploadFileToGoogleDrive(file, folderId);
+      $("#dialog").close();
+      render();
+      notify(photos ? "Photos uploaded to Google Drive." : "Files uploaded to Google Drive.");
     } catch (error) {
       notify("Upload error: " + error.message);
       button.disabled = false;
@@ -1050,7 +1029,7 @@ const empty = (symbol, title, description, action) =>
   `<div class="empty"><div class="empty-symbol">${symbol}</div><h3>${title}</h3><p>${description}</p>${action || ""}</div>`;
 function filesHTML() {
   const files = filteredFiles();
-  return `<section class="panel"><div class="panel-head"><div><h2>Your file library</h2><p>Files added here save in this browser and push to the selected project/team repository when signed in.</p></div><button class="secondary" data-action="github">Advanced: upload to a repository</button></div><div class="section-tools"><input id="file-search" aria-label="Search files" placeholder="Search files, notes, projects…" value="${esc(search)}"><select id="team-filter" aria-label="Filter by team"><option value="all">All teams</option>${teamOptions(fileTeam)}</select></div>${files.length ? `<div class="table-scroll"><table><thead><tr><th>File name</th><th>Project</th><th>Team</th><th>Size</th><th>Access</th></tr></thead><tbody>${fileRows(files)}</tbody></table></div>` : empty("▱", "Your files go here.", "Add your own drawings, spreadsheets, documents, or code.", '<button class="secondary" data-action="upload">＋ Add files</button>')}<div class="table-footer">${files.length} files · Browser storage + project/team GitHub sync</div></section>`;
+  return `<section class="panel"><div class="panel-head"><div><h2>Your file library</h2><p>Files added here are saved in this browser and uploaded to Google Drive.</p></div></div><div class="section-tools"><input id="file-search" aria-label="Search files" placeholder="Search files, notes, projects…" value="${esc(search)}"><select id="team-filter" aria-label="Filter by team"><option value="all">All teams</option>${teamOptions(fileTeam)}</select></div>${files.length ? `<div class="table-scroll"><table><thead><tr><th>File name</th><th>Project</th><th>Team</th><th>Size</th><th>Access</th></tr></thead><tbody>${fileRows(files)}</tbody></table></div>` : empty("▱", "Your files go here.", "Add your own drawings, spreadsheets, documents, or code.", '<button class="secondary" data-action="upload">＋ Add files</button>')}<div class="table-footer">${files.length} files · Browser storage + Google Drive</div></section>`;
 }
 function galleryHTML() {
   const photos = state.files.filter(inScope).filter(isPhoto);
@@ -1223,12 +1202,12 @@ function chooseBOM() {
 }
 function resourcesHTML() {
   const links = [...knownResources, ...state.resources].filter(inScope);
-  return `<section class="panel"><div class="panel-head"><div><h2>Repositories & links</h2><p>GitHub repositories, Google Drive folders, and other project references. Add a GitHub repository here to configure uploads.</p></div></div><div class="resource-grid">${links.map((r) => `<a class="resource" href="${esc(r.url)}" target="_blank" rel="noopener noreferrer"><div><b>${esc(r.title)}</b><small>${esc(nameOf(r.project))} ·${esc(r.team)}</small></div><span>↗</span></a>`).join("")}</div>${!links.length ? empty("↗", "Connect your project.", "Add a repository, folder, or reference link.") : ""}</section>`;
+  return `<section class="panel"><div class="panel-head"><div><h2>Repositories & links</h2><p>Open project Google Drive folders and GitHub repositories as needed. Upload shared files to Drive; move them to GitHub separately when needed.</p></div></div><div class="resource-grid">${links.map((r) => `<a class="resource" href="${esc(r.url)}" target="_blank" rel="noopener noreferrer"><div><b>${esc(r.title)}</b><small>${esc(nameOf(r.project))} ·${esc(r.team)}</small></div><span>↗</span></a>`).join("")}</div>${!links.length ? empty("↗", "Connect your project.", "Add a repository, folder, or reference link.") : ""}</section>`;
 }
 function resourceForm() {
   openModal(
     "Add a resource",
-    `<form id="resource-form"><p class="hint" style="margin-bottom:14px">Add a GitHub repository here to make it the upload destination for the selected project and team.</p><label class="field">Title<input name="title" required maxlength="100"></label><label class="field">HTTPS address<input name="url" type="url" required placeholder="https://…" maxlength="2000"></label><div class="form-grid"><label class="field">Project<select name="project">${projectOptions(currentProject())}</select></label><label class="field">Team<select name="team">${teamOptions("Shared")}</select></label></div>${actions("Add resource")}</form>`,
+    `<form id="resource-form"><p class="hint" style="margin-bottom:14px">Add a Google Drive folder, GitHub repository, or other project reference.</p><label class="field">Title<input name="title" required maxlength="100"></label><label class="field">HTTPS address<input name="url" type="url" required placeholder="https://…" maxlength="2000"></label><div class="form-grid"><label class="field">Project<select name="project">${projectOptions(currentProject())}</select></label><label class="field">Team<select name="team">${teamOptions("Shared")}</select></label></div>${actions("Add resource")}</form>`,
   );
   $("#resource-form").onsubmit = (e) => {
     e.preventDefault();
@@ -1639,7 +1618,7 @@ document.addEventListener("click", async (e) => {
   }
   if (el.hasAttribute("data-close")) $("#dialog").close();
   const action = el.dataset.action;
-  if (action === "login") signInWithGitHub();
+  if (action === "login") signInWithGoogle();
   if (action === "upload") showUpload();
   if (action === "photos") showUpload(true);
   if (action === "storage") showStorage();
@@ -1649,7 +1628,6 @@ document.addEventListener("click", async (e) => {
   if (action === "delete-selection") deleteSelection();
   if (action === "choose-bom") chooseBOM();
   if (action === "add-bom-row") addBOMRow();
-  if (action === "github") githubForm();
   if (action === "zoom-in" || action === "zoom-out") {
     zoom = Math.max(
       0.4,
