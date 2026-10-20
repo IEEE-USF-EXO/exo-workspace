@@ -803,6 +803,26 @@ td small {
 .bom-bar .row {
   flex-wrap: wrap;
 }
+.bom-tools {
+  padding-bottom: 14px;
+}
+.bom-tools input {
+  max-width: 430px;
+}
+.bom-stats {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 12px;
+  padding: 0 22px 20px;
+}
+.bom-stats .stat {
+  padding: 14px 16px;
+  background: #f8faf6;
+}
+.bom-stats .stat b {
+  font-size: 22px;
+  margin: 6px 0 2px;
+}
 .stats {
   display: grid;
   grid-template-columns: repeat(4, 1fr);

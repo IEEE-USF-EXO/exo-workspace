@@ -31,6 +31,7 @@ const supabaseClient = window.supabase.createClient(
 );
 
 let githubAccessToken = localStorage.getItem("gh_provider_token") || null;
+let sharedBOMRows = [];
 
 async function signInWithGitHub() {
   if (window.location.protocol === "file:") {
@@ -38,6 +39,21 @@ async function signInWithGitHub() {
       "GitHub sign-in requires this app to run from http://localhost, not a file:// URL.",
     );
     return;
+  }
+
+  async function loadSharedBOM() {
+    const { data, error } = await supabaseClient
+      .from("bom_items")
+      .select("id, project_id, item_id, subsystem, component, purpose, quantity, unit_cost, extended_cost, supplier, cost_basis, stage, source")
+      .order("project_id")
+      .order("item_id");
+    if (error) {
+      if (error.code === "42P01") return;
+      notify("Shared BOM could not be loaded: " + error.message);
+      return;
+    }
+    sharedBOMRows = data || [];
+    if (view === "bom") previewBOM();
   }
   try {
     const { error } = await supabaseClient.auth.signInWithOAuth({
@@ -64,7 +80,6 @@ async function checkUserSession() {
   const {
     data: { session },
   } = await supabaseClient.auth.getSession();
-  const authPill = document.getElementById("auth-status");
   const loginBtn = document.getElementById("login-btn");
   const logoutBtn = document.getElementById("logout-btn");
 
@@ -73,16 +88,33 @@ async function checkUserSession() {
       githubAccessToken = session.provider_token;
       localStorage.setItem("gh_provider_token", session.provider_token);
     }
-    if (authPill)
-      authPill.textContent = `Logged in: ${session.user.email || session.user.user_metadata?.user_name || "GitHub User"}`;
     if (loginBtn) loginBtn.style.display = "none";
     if (logoutBtn) logoutBtn.style.display = "inline-flex";
+    await ensureMemberProfile(session.user);
+    await loadSharedBOM();
   } else {
     localStorage.removeItem("gh_provider_token");
     githubAccessToken = null;
-    if (authPill) authPill.textContent = "OFFLINE PROTOTYPE";
+    sharedBOMRows = [];
     if (loginBtn) loginBtn.style.display = "inline-flex";
     if (logoutBtn) logoutBtn.style.display = "none";
+  }
+
+  async function ensureMemberProfile(user) {
+    const metadata = user.user_metadata || {};
+    const displayName =
+      metadata.user_name || metadata.full_name || metadata.name || user.email || "";
+    const { error } = await supabaseClient.from("members").upsert(
+      {
+        user_id: user.id,
+        display_name: displayName,
+        email: user.email || "",
+      },
+      { onConflict: "user_id" },
+    );
+    if (error && error.code !== "42P01") {
+      notify("Your group membership could not be saved: " + error.message);
+    }
   }
 }
 
@@ -196,6 +228,7 @@ const initial = () => ({
   strokes: [],
   resources: [],
   bom: {},
+  bomEntries: [],
 });
 let penColor = "#346d4b";
 document.addEventListener("input", (event) => {
@@ -211,6 +244,10 @@ let state = initial(),
   zoom = 1,
   search = "",
   fileTeam = "all",
+  bomSearch = "",
+  bomTeam = "all",
+  bomStage = "all",
+  bomPrice = "all",
   storageAvailable = false,
   history = [],
   saving = Promise.resolve(),
@@ -907,7 +944,7 @@ function overviewHTML() {
   const files = state.files.filter(inScope),
     nodes = state.nodes.filter(inScope),
     ids = new Set(nodes.map((n) => n.id));
-  return `<div class="stats"><div class="stat"><span>Files</span><b>${files.length}</b><small>${sizeOf(files.reduce((s, f) => s + f.size, 0))} stored locally</small></div><div class="stat"><span>Cards on board</span><b>${nodes.length}</b><small>Manually placed by you</small></div><div class="stat"><span>Relationships</span><b>${state.edges.filter((e) => ids.has(e.from) && ids.has(e.to)).length}</b><small>Connections you have drawn</small></div><div class="stat"><span>Gallery photos</span><b>${files.filter(isPhoto).length}</b><small>From this workspace</small></div></div><div class="overview-actions"><button class="overview-action" data-view="canvas"><b>↗ Draw the relationships</b><p>Arrange your work and link projects, teams, and files.</p></button><button class="overview-action" data-view="bom"><b>☷ Open the Master BOM</b><p>Choose your source file and inspect CSV parts lists.</p></button><button class="overview-action" data-view="gallery"><b>▧ Tell the story in photos</b><p>Build a gallery of assemblies, prototypes, and progress.</p></button></div><div class="panel"><div class="panel-head"><div><h2>A workspace you can take with you.</h2><p>Open the HTML, work locally, and push each file to the repository matching its project and team.</p></div><button class="secondary" data-action="storage">How storage works</button></div></div>`;
+  return `<div class="stats"><div class="stat"><span>Files</span><b>${files.length}</b><small>${sizeOf(files.reduce((s, f) => s + f.size, 0))} stored locally</small></div><div class="stat"><span>Cards on board</span><b>${nodes.length}</b><small>Manually placed by you</small></div><div class="stat"><span>Relationships</span><b>${state.edges.filter((e) => ids.has(e.from) && ids.has(e.to)).length}</b><small>Connections you have drawn</small></div><div class="stat"><span>Gallery photos</span><b>${files.filter(isPhoto).length}</b><small>From this workspace</small></div></div><div class="overview-actions"><button class="overview-action" data-view="canvas"><b>↗ Draw the relationships</b><p>Arrange your work and link projects, teams, and files.</p></button><button class="overview-action" data-view="bom"><b>☷ Open the BOM</b><p>Search components and compare project parts lists.</p></button><button class="overview-action" data-view="gallery"><b>▧ Tell the story in photos</b><p>Build a gallery of assemblies, prototypes, and progress.</p></button></div><div class="panel"><div class="panel-head"><div><h2>A workspace you can take with you.</h2><p>Open the HTML, work locally, and push each file to the repository matching its project and team.</p></div><button class="secondary" data-action="storage">How storage works</button></div></div>`;
 }
 function fileRows(files) {
   return files
@@ -945,10 +982,36 @@ async function loadImages() {
   }
 }
 function bomHTML() {
-  const project = currentProject(),
-    id = state.bom[project],
-    file = state.files.find((f) => f.id === id);
-  return `<section class="panel"><div class="panel-head"><div><h2>Master bill of materials</h2><p>${scope === "all" ? "Choose a project to see its BOM. Showing " + esc(nameOf(project)) + "." : "Choose the file your team treats as the source of truth."}</p></div></div><div class="bom-bar"><div><strong>${file ? esc(file.name) : "No master BOM selected"}</strong><small>${esc(nameOf(project))}${file ? " · " + esc(file.team) + " · " + sizeOf(file.size) : ""}</small></div><div class="row">${file ? `<button class="secondary" data-download="${file.id}">↓ Download source</button>` : ""}<button class="secondary" data-action="choose-bom">${file ? "Change file" : "Choose BOM file"}</button></div></div><div id="bom-preview">${file ? '<div class="empty"><p>Opening BOM…</p></div>' : empty("☷", "Keep the source easy to find.", "Add a BOM in Files, then select it here. CSV files display as a searchable table; other file types remain downloadable.")}</div></section>`;
+  const projects = scope === "all" ? state.projects : state.projects.filter((p) => p.id === scope);
+  const files = projects.map((p) => state.files.find((f) => f.id === state.bom[p.id])).filter(Boolean);
+  const hasSharedRows = sharedBOMRows.some((row) => scope === "all" || row.project_id === scope);
+  return `<section class="panel"><div class="panel-head"><div><h2>Bill of materials</h2><p>${scope === "all" ? "Showing BOM rows across every project. Use the project selector above to narrow the workspace." : "Showing the selected project's components and source file."}</p></div><button class="secondary" data-action="add-bom-row">＋ Add component</button></div><div class="bom-bar"><div><strong>${hasSharedRows ? "Shared Supabase BOM connected" : files.length ? `${files.length} source file${files.length === 1 ? "" : "s"} connected` : "No BOM source selected"}</strong><small>${hasSharedRows ? "Approved rows are shared with authenticated workspace users." : files.length ? files.map((f) => `${esc(nameOf(f.project))} · ${esc(f.name)}`).join("  /  ") : "Choose a CSV source in Files to preview its rows here."}</small></div><div class="row">${files.map((f) => `<button class="text-button" data-download="${f.id}">↓ ${esc(nameOf(f.project))}</button>`).join("")}<button class="secondary" data-action="choose-bom">${files.length ? "Manage sources" : "Choose BOM file"}</button></div></div><div id="bom-preview">${files.length || hasSharedRows ? '<div class="empty"><p>Opening BOM…</p></div>' : empty("☷", "Keep the source easy to find.", "Add a BOM in Files, then choose it here. CSV files display as a searchable table.")}</div></section>`;
+}
+function addBOMRow() {
+  openModal(
+    "Add component",
+    `<form id="bom-entry-form"><p class="hint" style="margin-bottom:18px">Add a planning row without changing the original CSV source. It will be saved in this browser and included in the BOM view.</p><div class="form-grid"><label class="field">Project<select name="project">${projectOptions(currentProject())}</select></label><label class="field">ID<input name="id" placeholder="e.g. D01" required maxlength="40"></label></div><div class="form-grid"><label class="field">Subsystem<input name="subsystem" placeholder="Controls"></label><label class="field">Component<input name="component" placeholder="Component or integration purpose" required></label></div><div class="form-grid"><label class="field">Quantity<input name="qty" type="number" min="0" step="any" value="1"></label><label class="field">Unit cost ($)<input name="unit" type="number" min="0" step="0.01" placeholder="0.00"></label></div><div class="form-grid"><label class="field">Supplier<input name="supplier" placeholder="Vendor or link"></label><label class="field">Cost basis<select name="basis"><option>Baseline</option><option>Quote</option><option>Estimate</option><option>Pending</option></select></label></div>${actions("Add component")}</form>`,
+  );
+  $("#bom-entry-form").onsubmit = (e) => {
+    e.preventDefault();
+    const form = new FormData(e.target);
+    state.bomEntries = state.bomEntries || [];
+    state.bomEntries.push({
+      project: String(form.get("project")),
+      team: "Shared",
+      id: String(form.get("id")).trim(),
+      subsystem: String(form.get("subsystem") || ""),
+      component: String(form.get("component")).trim(),
+      qty: String(form.get("qty") || "1"),
+      unit: String(form.get("unit") || ""),
+      ext: "",
+      supplier: String(form.get("supplier") || ""),
+      basis: String(form.get("basis") || "Baseline"),
+    });
+    persist();
+    $("#dialog").close();
+    render();
+  };
 }
 function parseCSV(text) {
   const rows = [];
@@ -983,54 +1046,72 @@ function parseCSV(text) {
 async function previewBOM() {
   const target = $("#bom-preview");
   if (!target) return;
-  const file = state.files.find((f) => f.id === state.bom[currentProject()]);
-  if (!file) return;
-  if (!/\.csv$/i.test(file.name)) {
-    target.innerHTML = empty(
-      "▱",
-      "Source file ready to download.",
-      "This offline prototype previews CSV tables. Download Excel, PDF, or other formats to open them in their original application.",
-    );
-    return;
-  }
-  if (file.size > 5 * 1024 * 1024) {
-    target.innerHTML = empty(
-      "☷",
-      "Large CSV source available.",
-      "The preview supports CSV files up to 5 MB. Use Download source for this file.",
-    );
-    return;
-  }
   try {
-    const blob = await getBlob(file.id);
-    if (!blob) throw new Error("The source file is missing from this browser.");
-    const rows = parseCSV((await blob.text()).replace(/^\uFEFF/, ""));
-    if (!target.isConnected) return;
-    if (!rows.length) {
-      target.innerHTML = empty(
-        "☷",
-        "Empty CSV.",
-        "The selected file has no table rows.",
-      );
+    const projects = scope === "all" ? state.projects : state.projects.filter((p) => p.id === scope);
+    const records = sharedBOMRows
+      .filter((row) => scope === "all" || row.project_id === scope)
+      .map((row) => ({
+        project: row.project_id,
+        team: "Shared",
+        id: row.item_id,
+        subsystem: row.subsystem,
+        component: row.component,
+        purpose: row.purpose || "",
+        qty: String(row.quantity),
+        unit: row.unit_cost == null ? "" : String(row.unit_cost),
+        ext: row.extended_cost == null ? "" : String(row.extended_cost),
+        supplier: row.supplier,
+        basis: row.stage || row.cost_basis,
+        source: row.source || "Supabase shared BOM",
+      }));
+    for (const project of projects) {
+      const file = state.files.find((f) => f.id === state.bom[project.id]);
+      if (!file || !/\.csv$/i.test(file.name) || file.size > 5 * 1024 * 1024) continue;
+      const blob = await getBlob(file.id);
+      if (!blob) throw new Error("The source file is missing from this browser.");
+      const rows = parseCSV((await blob.text()).replace(/^\uFEFF/, ""));
+      const [head, ...body] = rows;
+      if (!head) continue;
+      const key = (name) => head.findIndex((h) => h.toLowerCase().replace(/[^a-z]/g, "").includes(name));
+      body.forEach((row) => records.push({
+        project: project.id,
+        team: file.team,
+        id: row[key("id")] || row[0] || "",
+        subsystem: row[key("subsystem")] || "",
+        component: row[key("component")] || row[key("description")] || row[1] || "",
+        purpose: row[key("purpose")] || "",
+        qty: row[key("qty")] || row[key("quantity")] || "1",
+        unit: row[key("unitcost")] || row[key("unitprice")] || row[key("price")] || "",
+        ext: row[key("ext")] || row[key("total")] || "",
+        supplier: row[key("supplier")] || row[key("vendor")] || "",
+        basis: row[key("basis")] || row[key("stage")] || "",
+        source: file.name,
+      }));
+    }
+    records.push(...(state.bomEntries || []).filter((entry) => scope === "all" || entry.project === scope).map((entry) => ({ ...entry, purpose: entry.purpose || "", source: "Added in workspace" })));
+    if (!records.length) {
+      target.innerHTML = empty("☷", "No previewable BOM rows.", "CSV files up to 5 MB can be searched here. Other source types remain available to download.");
       return;
     }
-    const [head, ...body] = rows;
-    target.innerHTML = `<div class="section-tools"><input id="bom-search" placeholder="Search parts, descriptions, teams…" aria-label="Search BOM"></div><div class="table-scroll"><table><thead><tr>${head.map((v) => `<th>${esc(v)}</th>`).join("")}</tr></thead><tbody id="bom-rows"></tbody></table></div><div class="table-footer" id="bom-count"></div>`;
-    const draw = (query) => {
-      const list = body.filter((row) =>
-        row.join(" ").toLowerCase().includes(query.toLowerCase()),
-      );
-      $("#bom-rows").innerHTML = list
-        .map(
-          (row) =>
-            `<tr>${head.map((_, i) => `<td>${esc(row[i] || "")}</td>`).join("")}</tr>`,
-        )
-        .join("");
-      $("#bom-count").textContent =
-        list.length + " line items · CSV source preview";
+    const values = (field) => [...new Set(records.map((r) => r[field]).filter(Boolean))].sort();
+    const money = (value) => Number(String(value).replace(/[^0-9.-]/g, "")) || 0;
+    target.innerHTML = `<div class="section-tools bom-tools"><input id="bom-search" placeholder="Search ID, component, supplier…" aria-label="Search BOM" value="${esc(bomSearch)}"><select id="bom-team" aria-label="Filter by team"><option value="all">All teams</option>${values("team").map((v) => `<option ${bomTeam === v ? "selected" : ""}>${esc(v)}</option>`).join("")}</select><select id="bom-stage" aria-label="Filter by stage"><option value="all">All stages</option>${values("basis").map((v) => `<option ${bomStage === v ? "selected" : ""}>${esc(v)}</option>`).join("")}</select><select id="bom-price" aria-label="Filter by price"><option value="all">All pricing</option><option value="priced" ${bomPrice === "priced" ? "selected" : ""}>Priced only</option><option value="unpriced" ${bomPrice === "unpriced" ? "selected" : ""}>Needs pricing</option></select></div><div class="bom-stats" id="bom-stats"></div><div class="table-scroll"><table><thead><tr><th>ID</th><th>Project</th><th>Subsystem</th><th>Component / integration purpose</th><th>Qty</th><th>Unit $</th><th>Ext $</th><th>Supplier</th><th>Cost basis</th></tr></thead><tbody id="bom-rows"></tbody></table></div><div class="table-footer" id="bom-count"></div>`;
+    const draw = () => {
+      const query = bomSearch.toLowerCase();
+      const list = records.filter((r) => {
+        const searchable = Object.values(r).join(" ").toLowerCase();
+        return searchable.includes(query) && (bomTeam === "all" || r.team === bomTeam) && (bomStage === "all" || r.basis === bomStage) && (bomPrice === "all" || (bomPrice === "priced" ? money(r.unit) > 0 : money(r.unit) === 0));
+      });
+      const total = list.reduce((sum, r) => sum + money(r.ext || money(r.unit) * (Number(r.qty) || 1)), 0);
+      $("#bom-stats").innerHTML = `<div class="stat"><span>Visible lines</span><b>${list.length}</b><small>of ${records.length} total rows</small></div><div class="stat"><span>Visible priced sum</span><b>$${total.toFixed(2)}</b><small>Extended cost where available</small></div><div class="stat"><span>Needs pricing</span><b>${list.filter((r) => !money(r.unit)).length}</b><small>Rows without a unit price</small></div>`;
+      $("#bom-rows").innerHTML = list.map((r) => `<tr><td><strong>${esc(r.id)}</strong></td><td>${esc(nameOf(r.project))}<small>${esc(r.source)}</small></td><td>${esc(r.subsystem)}</td><td><strong>${esc(r.component)}</strong>${r.purpose ? `<small>${esc(r.purpose)}</small>` : ""}</td><td>${esc(r.qty)}</td><td>${r.unit ? "$" + money(r.unit).toFixed(2) : "—"}</td><td>${r.ext ? "$" + money(r.ext).toFixed(2) : "—"}</td><td>${esc(r.supplier)}</td><td>${esc(r.basis || "—")}</td></tr>`).join("");
+      $("#bom-count").textContent = `${list.length} visible line items · ${records.length} total rows`;
     };
-    draw("");
-    $("#bom-search").oninput = (e) => draw(e.target.value);
+    draw();
+    $("#bom-search").oninput = (e) => { bomSearch = e.target.value; draw(); };
+    $("#bom-team").onchange = (e) => { bomTeam = e.target.value; draw(); };
+    $("#bom-stage").onchange = (e) => { bomStage = e.target.value; draw(); };
+    $("#bom-price").onchange = (e) => { bomPrice = e.target.value; draw(); };
   } catch (error) {
     target.innerHTML = empty(
       "☷",
@@ -1040,19 +1121,20 @@ async function previewBOM() {
   }
 }
 function chooseBOM() {
-  const files = state.files.filter((f) => f.project === currentProject());
+  const project = currentProject();
+  const files = state.files.filter((f) => f.project === project);
   if (!files.length) {
     notify("Add a BOM file to this project first.");
     showUpload();
     return;
   }
   openModal(
-    "Choose the Master BOM",
-    `<form id="bom-form"><p class="hint" style="margin-bottom:18px">Select the source file for ${esc(nameOf(currentProject()))}. No BOM data is invented or imported automatically.</p><label class="field">Source file<select name="file" required><option value="">Choose a file…</option>${files.map((f) => `<option value="${f.id}" ${state.bom[currentProject()] === f.id ? "selected" : ""}>${esc(f.name)}</option>`).join("")}</select></label>${actions("Set Master BOM")}</form>`,
+    "Choose the BOM source",
+    `<form id="bom-form"><p class="hint" style="margin-bottom:18px">Select the source file for ${esc(nameOf(project))}. No BOM data is invented or imported automatically.</p><label class="field">Source file<select name="file" required><option value="">Choose a file…</option>${files.map((f) => `<option value="${f.id}" ${state.bom[project] === f.id ? "selected" : ""}>${esc(f.name)}</option>`).join("")}</select></label>${actions("Set BOM source")}</form>`,
   );
   $("#bom-form").onsubmit = (e) => {
     e.preventDefault();
-    state.bom[currentProject()] = String(new FormData(e.target).get("file"));
+    state.bom[project] = String(new FormData(e.target).get("file"));
     persist();
     $("#dialog").close();
     render();
@@ -1337,7 +1419,7 @@ function render() {
     ],
     bom: [
       "One place for the parts list.",
-      "Choose the source file your team uses as its Master BOM.",
+      "Search, filter, and compare components across every project.",
       "↑ Add BOM file",
     ],
     gallery: [
@@ -1371,13 +1453,23 @@ function render() {
         (p) =>
           `<option value="${esc(p.id)}" ${scope === p.id ? "selected" : ""}>${esc(p.name)}</option>`,
       )
-      .join("");
+      .join("") +
+    `<option value="__new-project__">＋ Add new project</option>`;
   $("#project-context").onchange = (e) => {
+    if (e.target.value === "__new-project__") {
+      e.target.value = scope;
+      projectForm();
+      return;
+    }
     scope = e.target.value;
     selected = null;
     connectFrom = null;
     search = "";
     fileTeam = "all";
+    bomSearch = "";
+    bomTeam = "all";
+    bomStage = "all";
+    bomPrice = "all";
     render();
   };
   $$("#nav .nav").forEach((b) =>
@@ -1429,6 +1521,10 @@ document.addEventListener("click", async (e) => {
     connectFrom = null;
     search = "";
     fileTeam = "all";
+    bomSearch = "";
+    bomTeam = "all";
+    bomStage = "all";
+    bomPrice = "all";
     render();
   }
   if (el.dataset.tool) {
@@ -1471,6 +1567,7 @@ document.addEventListener("click", async (e) => {
   if (action === "undo") undo();
   if (action === "delete-selection") deleteSelection();
   if (action === "choose-bom") chooseBOM();
+  if (action === "add-bom-row") addBOMRow();
   if (action === "github") githubForm();
   if (action === "zoom-in" || action === "zoom-out") {
     zoom = Math.max(
@@ -1491,7 +1588,6 @@ $("#page-action").onclick = () =>
       : view === "resources"
         ? resourceForm()
         : showUpload();
-$("#new-project").onclick = projectForm;
 $("#close-dialog").onclick = () => $("#dialog").close();
 $("#dialog").onclick = (e) => {
   if (e.target === $("#dialog")) $("#dialog").close();
