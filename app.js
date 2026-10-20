@@ -185,7 +185,7 @@ async function uploadFileToGoogleDrive(file, folderId) {
 function showDriveTestUpload() {
   openModal(
     "Test Google Drive upload",
-    `<form id="drive-test-upload-form"><p class="hint" style="margin-bottom:14px">Choose one file to test the Google Drive connection. It will be uploaded to the root of your Google Drive.</p><label class="field">File<input type="file" name="file" required><small>This test does not use the project folder structure.</small></label>${actions("Upload test file")}</form>`,
+    `<form id="drive-test-upload-form"><p class="hint" style="margin-bottom:14px">Choose one file to test the Google Drive connection. It will be uploaded to the <strong>Testing</strong> folder.</p><label class="field">File<input type="file" name="file" required><small>This test does not use the project folder structure.</small></label>${actions("Upload test file")}</form>`,
   );
   $("#drive-test-upload-form").onsubmit = async (event) => {
     event.preventDefault();
@@ -199,7 +199,7 @@ function showDriveTestUpload() {
     button.disabled = true;
     button.textContent = "Uploading to Google Drive…";
     try {
-      const driveFile = await uploadFileToGoogleDrive(file, "root");
+      const driveFile = await uploadFileToGoogleDrive(file, driveTestFolderId);
       $("#dialog").close();
       notify(
         `Test upload succeeded: ${driveFile.name || file.name}. ` +
@@ -466,6 +466,9 @@ async function pushFileToGitHub(file, owner, repo, folderPath, note = "") {
 // ==========================================
 const $ = (s, root = document) => root.querySelector(s),
   $$ = (s, root = document) => Array.from(root.querySelectorAll(s));
+$("#close-startup-overlay").onclick = () => {
+  $("#startup-overlay").hidden = true;
+};
 const esc = (v) =>
   String(v ?? "").replace(
     /[&<>"']/g,
@@ -546,6 +549,7 @@ const folderIds = [
   ["pid-spoon", "Electrical", "16DcGIMgwtcuZrYI7QaQJs6lVmQ6q1_ZE"],
   ["pid-spoon", "Mechanical", "1a1LPEQUeCjfbkV6nDJag9Hsq55-Go0J8"],
 ];
+const driveTestFolderId = "1kldWFbtd0S_Mr8zsrYBCrYiGJsc1zhl_";
 const teamLabel = (project, team) =>
   project === "pid-spoon" && team === "Mechanical" ? "CAD" : team;
 const driveFolderFor = (project, team) =>

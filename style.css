@@ -916,6 +916,54 @@ td small {
 .toast[hidden] {
   display: none;
 }
+.startup-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: grid;
+  place-items: center;
+  padding: 24px;
+  background: rgb(20 38 31 / 68%);
+  backdrop-filter: blur(3px);
+}
+.startup-card {
+  position: relative;
+  max-width: min(695px, 92vw);
+  max-height: 88vh;
+  border: 5px solid #fff;
+  border-radius: 10px;
+  background: #fff;
+  box-shadow: 0 20px 80px rgb(0 0 0 / 45%);
+}
+.startup-card img {
+  display: block;
+  max-width: 100%;
+  max-height: calc(88vh - 10px);
+  object-fit: contain;
+}
+.startup-close {
+  position: absolute;
+  top: -18px;
+  right: -18px;
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  width: 36px;
+  height: 36px;
+  border: 2px solid #fff;
+  border-radius: 50%;
+  background: #254b33;
+  color: #fff;
+  font-size: 25px;
+  line-height: 1;
+  box-shadow: 0 3px 12px rgb(0 0 0 / 35%);
+}
+.startup-close:hover {
+  background: #173b27;
+}
+.startup-overlay[hidden] {
+  display: none;
+}
 dialog {
   padding: 0;
   border: 1px solid var(--line);
