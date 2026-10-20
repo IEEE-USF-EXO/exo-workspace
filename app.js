@@ -44,7 +44,8 @@ async function signInWithGoogle() {
     const { error } = await supabaseClient.auth.signInWithOAuth({
       provider: "google",
       options: {
-        scopes: "https://www.googleapis.com/auth/drive.file",
+        scopes:
+          "https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/drive.metadata.readonly",
         queryParams: { access_type: "offline", prompt: "consent" },
         redirectTo: window.location.origin + window.location.pathname,
       },
@@ -88,6 +89,11 @@ async function checkUserSession() {
     if (logoutBtn) logoutBtn.style.display = "inline-flex";
     await ensureMemberProfile(session.user);
     await loadSharedBOM();
+    try {
+      await syncDriveFiles();
+    } catch (error) {
+      notify("Google Drive files could not be synchronized: " + error.message);
+    }
   } else {
     googleAccessToken = null;
     sharedBOMRows = [];
@@ -121,31 +127,97 @@ async function uploadFileToGoogleDrive(file, folderId) {
   if (!googleAccessToken) {
     throw new Error("Google Drive access is unavailable. Sign in again.");
   }
-  const boundary = "exo-dashboard-upload";
-  const body = new Blob([
-    `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n`,
-    JSON.stringify({ name: file.name, parents: [folderId] }),
-    `\r\n--${boundary}\r\nContent-Type: ${file.type || "application/octet-stream"}\r\n\r\n`,
-    file,
-    `\r\n--${boundary}--`,
-  ]);
-  const response = await fetch(
-    "https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart",
+  const sessionResponse = await fetch(
+    "https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&fields=id,name,mimeType,size,webViewLink,thumbnailLink",
     {
       method: "POST",
       headers: {
         Authorization: `Bearer ${googleAccessToken}`,
-        "Content-Type": `multipart/related; boundary=${boundary}`,
+        "Content-Type": "application/json; charset=UTF-8",
+        "X-Upload-Content-Type": file.type || "application/octet-stream",
+        "X-Upload-Content-Length": String(file.size),
       },
-      body,
+      body: JSON.stringify({ name: file.name, parents: [folderId] }),
     },
   );
-  if (!response.ok) {
-    const details = await response.json().catch(() => ({}));
+  if (!sessionResponse.ok) {
+    const details = await sessionResponse.json().catch(() => ({}));
     throw new Error(
-      details.error?.message || `Google Drive upload failed (HTTP ${response.status})`,
+      details.error?.message ||
+        `Google Drive upload could not start (HTTP ${sessionResponse.status})`,
     );
   }
+  const uploadUrl = sessionResponse.headers.get("Location");
+  if (!uploadUrl) throw new Error("Google Drive did not return an upload session.");
+  const chunkSize = 8 * 1024 * 1024;
+  let offset = 0;
+  let result = null;
+  while (offset < file.size) {
+    const end = Math.min(offset + chunkSize, file.size);
+    const response = await fetch(uploadUrl, {
+      method: "PUT",
+      headers: {
+        "Content-Length": String(end - offset),
+        "Content-Range": `bytes ${offset}-${end - 1}/${file.size}`,
+        "Content-Type": file.type || "application/octet-stream",
+      },
+      body: file.slice(offset, end),
+    });
+    if (response.status !== 308 && !response.ok) {
+      const details = await response.json().catch(() => ({}));
+      throw new Error(
+        details.error?.message ||
+          `Google Drive upload failed (HTTP ${response.status})`,
+      );
+    }
+    offset = end;
+    if (response.status !== 308) result = await response.json();
+  }
+  return result;
+}
+async function syncDriveFiles() {
+  if (!googleAccessToken) return;
+  const driveFiles = [];
+  for (const [project, team, folderId] of folderIds) {
+    const query = `'${folderId}' in parents and trashed = false`;
+    const response = await fetch(
+      `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&pageSize=1000&fields=files(id,name,mimeType,size,modifiedTime,webViewLink,thumbnailLink,parents)`,
+      { headers: { Authorization: `Bearer ${googleAccessToken}` } },
+    );
+    if (!response.ok) {
+      const details = await response.json().catch(() => ({}));
+      throw new Error(
+        details.error?.message ||
+          `Google Drive files could not be listed (HTTP ${response.status})`,
+      );
+    }
+    const data = await response.json();
+    for (const file of data.files || []) {
+      driveFiles.push({
+        id: `drive-${file.id}`,
+        driveId: file.id,
+        driveUrl:
+          file.webViewLink ||
+          `https://drive.google.com/open?id=${encodeURIComponent(file.id)}`,
+        thumbnailUrl:
+          file.thumbnailLink ||
+          `https://drive.google.com/thumbnail?id=${encodeURIComponent(file.id)}&sz=w1200`,
+        name: file.name,
+        type: file.mimeType || "application/octet-stream",
+        size: Number(file.size || 0),
+        project,
+        team,
+        note: "",
+        created: file.modifiedTime || new Date().toISOString(),
+      });
+    }
+  }
+  const localOnly = state.files.filter(
+    (file) => !file.driveId && !driveFiles.some((drive) => drive.name === file.name),
+  );
+  state.files = [...localOnly, ...driveFiles];
+  await persist();
+  if (view === "files" || view === "gallery" || view === "bom") render();
 }
 
 // Helper to push a File object directly to GitHub REST API (supports creating & updating files)
@@ -541,8 +613,24 @@ async function getBlob(id) {
       ? await record("blobs", id)
       : null;
 }
+async function getDriveBlob(file) {
+  if (!file?.driveId || !googleAccessToken) return null;
+  const response = await fetch(
+    `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(file.driveId)}?alt=media`,
+    { headers: { Authorization: `Bearer ${googleAccessToken}` } },
+  );
+  if (!response.ok) {
+    const details = await response.json().catch(() => ({}));
+    throw new Error(
+      details.error?.message || `Google Drive download failed (HTTP ${response.status})`,
+    );
+  }
+  return response.blob();
+}
 async function fileURL(id) {
   if (urls.has(id)) return urls.get(id);
+  const file = state.files.find((item) => item.id === id);
+  if (file?.thumbnailUrl) return file.thumbnailUrl;
   const blob = await getBlob(id);
   if (!blob) return null;
   const url = URL.createObjectURL(blob);
@@ -550,10 +638,14 @@ async function fileURL(id) {
   return url;
 }
 async function downloadFile(id) {
-  const f = state.files.find((x) => x.id === id),
-    blob = await getBlob(id);
+  const f = state.files.find((x) => x.id === id);
+  if (f?.driveUrl) {
+    window.open(f.driveUrl, "_blank", "noopener,noreferrer");
+    return;
+  }
+  const blob = await getBlob(id);
   if (!blob) {
-    notify("The file is missing. Import a complete backup or add it again.");
+    notify("This file is available in Google Drive, but its link is missing.");
     return;
   }
   download(blob, f?.name || "file");
@@ -626,7 +718,7 @@ function showUpload(photos = false) {
     folderIds.find(([project]) => project === initialProject)?.[1] || "";
   openModal(
     photos ? "Add project photos" : "Add project files",
-    `<form id="upload-form"><p class="hint" style="margin-bottom:14px">Files are uploaded to the selected Google Drive team folder and kept in this browser for reference.</p><label class="field">${photos ? "Photos" : "Files"}<input type="file" name="files" ${photos ? 'accept="image/png,image/jpeg,image/webp,image/gif,image/avif"' : ""} multiple required><small>Up to 25 MB each.</small></label>${scope === "all" ? `<label class="field">Project<select name="project">${projectOptions(initialProject)}</select><small>Choose a project before uploading from All projects.</small></label>` : `<label class="field">Project<input value="${esc(nameOf(initialProject))}" readonly><input type="hidden" name="project" value="${esc(initialProject)}"></label>`}<label class="field">Destination team<select name="team">${teamOptions(initialTeam, initialProject)}</select></label><label class="field">Note or photo caption<textarea name="note" maxlength="1000" placeholder="Context, version, or what the photo shows"></textarea></label>${actions(photos ? "Add photos" : "Add files")}</form>`,
+    `<form id="upload-form"><p class="hint" style="margin-bottom:14px">Files are uploaded to the selected Google Drive team folder. The dashboard keeps only file metadata and a Drive link.</p><label class="field">${photos ? "Photos" : "Files"}<input type="file" name="files" ${photos ? 'accept="image/png,image/jpeg,image/webp,image/gif,image/avif"' : ""} multiple required><small>Large files upload directly to Drive.</small></label>${scope === "all" ? `<label class="field">Project<select name="project">${projectOptions(initialProject)}</select><small>Choose a project before uploading from All projects.</small></label>` : `<label class="field">Project<input value="${esc(nameOf(initialProject))}" readonly><input type="hidden" name="project" value="${esc(initialProject)}"></label>`}<label class="field">Destination team<select name="team">${teamOptions(initialTeam, initialProject)}</select></label><label class="field">Note or photo caption<textarea name="note" maxlength="1000" placeholder="Context, version, or what the photo shows"></textarea></label>${actions(photos ? "Add photos" : "Add files")}</form>`,
   );
   if (scope === "all") {
     $("#upload-form").elements.project.onchange = (event) => {
@@ -644,8 +736,8 @@ function showUpload(photos = false) {
     e.preventDefault();
     const form = new FormData(e.target),
       files = Array.from(e.target.elements.files.files);
-    if (files.some((f) => !f.size || f.size > 25 * 1024 * 1024)) {
-      notify("Choose nonempty files up to 25 MB each.");
+    if (files.some((f) => !f.size)) {
+      notify("Choose nonempty files.");
       return;
     }
     if (photos && files.some((f) => !isPhoto(f))) {
@@ -654,7 +746,7 @@ function showUpload(photos = false) {
     }
     const button = $("[type=submit]", e.target);
     button.disabled = true;
-    button.textContent = "Saving & Uploading…";
+    button.textContent = "Uploading to Google Drive…";
     const proj = String(form.get("project")),
       team = String(form.get("team")),
       note = String(form.get("note")),
@@ -665,31 +757,40 @@ function showUpload(photos = false) {
       button.textContent = photos ? "Add photos" : "Add files";
       return;
     }
-    const additions = files.map((f) => ({
-      id: uid(),
-      name: f.name,
-      type: f.type || "application/octet-stream",
-      size: f.size,
-      project: proj,
-      team: team,
-      note: note,
-      created: new Date().toISOString(),
-    }));
     try {
-      if (db) {
-        await saving;
-        const next = { ...state, files: [...state.files, ...additions] };
-        await writeStores(
-          next,
-          additions.map((f, i) => ({ id: f.id, blob: files[i] })),
-        );
-        state = next;
-        $("#save-status").textContent = "Saved in this browser";
+      const additions = [];
+      for (const file of files) {
+        const driveFile = await uploadFileToGoogleDrive(file, folderId);
+        additions.push({
+          id: uid(),
+          driveId: driveFile.id,
+          driveUrl:
+            driveFile.webViewLink ||
+            `https://drive.google.com/open?id=${encodeURIComponent(driveFile.id)}`,
+          thumbnailUrl:
+            driveFile.thumbnailLink ||
+            `https://drive.google.com/thumbnail?id=${encodeURIComponent(driveFile.id)}&sz=w1200`,
+          name: driveFile.name || file.name,
+          type: driveFile.mimeType || file.type || "application/octet-stream",
+          size: Number(driveFile.size || file.size),
+          project: proj,
+          team,
+          note,
+          created: new Date().toISOString(),
+        });
       }
-      for (const file of files) await uploadFileToGoogleDrive(file, folderId);
+      await saving;
+      const next = { ...state, files: [...state.files, ...additions] };
+      await writeStores(next);
+      state = next;
+      $("#save-status").textContent = "Saved in this browser";
       $("#dialog").close();
       render();
-      notify(photos ? "Photos uploaded to Google Drive." : "Files uploaded to Google Drive.");
+      notify(
+        photos
+          ? "Photos uploaded to Google Drive."
+          : "Files uploaded to Google Drive.",
+      );
     } catch (error) {
       notify("Upload error: " + error.message);
       button.disabled = false;
@@ -737,7 +838,7 @@ function centerCard() {
 function showStorage() {
   openModal(
     "Your workspace storage",
-    `<p class="hint">This workspace saves locally in your browser (IndexedDB) and pushes files to the repository matching their selected project and team when you sign in.</p><ul class="storage-list"><li><b>Where it saves locally</b>IndexedDB in this browser profile, on this device. Projects, drawings, relationships, BOM selections, and uploaded file bytes are stored locally.</li><li><b>Direct GitHub Upload</b>When signed in via GitHub, adding files pushes them to the selected project/team repository through the GitHub API.</li><li><b>Share or back up</b>Export a JSON backup containing your workspace and files. Someone else can open this site and import this backup.</li></ul><div class="row"><button class="primary" data-action="export">↓ Export full backup</button><button class="secondary" data-action="import">↑ Import backup</button></div>`,
+    `<p class="hint">This workspace stores drawing state and Drive file metadata locally in your browser. File contents are uploaded to Google Drive.</p><ul class="storage-list"><li><b>Google Drive</b>Large files are uploaded directly to the selected project/team folder using resumable uploads.</li><li><b>Browser storage</b>Projects, drawings, relationships, BOM selections, and Drive file links are stored locally in this browser profile.</li><li><b>Share or back up</b>Export a JSON backup containing workspace data and Drive-backed file metadata. The backup does not duplicate large Drive files.</li></ul><div class="row"><button class="primary" data-action="export">↓ Export workspace backup</button><button class="secondary" data-action="import">↑ Import backup</button></div>`,
   );
 }
 function toolHint() {
@@ -1068,13 +1169,13 @@ function overviewHTML() {
   const files = state.files.filter(inScope),
     nodes = state.nodes.filter(inScope),
     ids = new Set(nodes.map((n) => n.id));
-  return `<div class="stats"><div class="stat"><span>Files</span><b>${files.length}</b><small>${sizeOf(files.reduce((s, f) => s + f.size, 0))} stored locally</small></div><div class="stat"><span>Cards on board</span><b>${nodes.length}</b><small>Manually placed by you</small></div><div class="stat"><span>Relationships</span><b>${state.edges.filter((e) => ids.has(e.from) && ids.has(e.to)).length}</b><small>Connections you have drawn</small></div><div class="stat"><span>Gallery photos</span><b>${files.filter(isPhoto).length}</b><small>From this workspace</small></div></div><div class="overview-actions"><button class="overview-action" data-view="canvas"><b>↗ Draw the relationships</b><p>Arrange your work and link projects, teams, and files.</p></button><button class="overview-action" data-view="bom"><b>☷ Open the BOM</b><p>Search components and compare project parts lists.</p></button><button class="overview-action" data-view="gallery"><b>▧ Tell the story in photos</b><p>Build a gallery of assemblies, prototypes, and progress.</p></button></div><div class="panel"><div class="panel-head"><div><h2>A workspace you can take with you.</h2><p>Open the HTML, work locally, and push each file to the repository matching its project and team.</p></div><button class="secondary" data-action="storage">How storage works</button></div></div>`;
+  return `<div class="stats"><div class="stat"><span>Files</span><b>${files.length}</b><small>${sizeOf(files.reduce((s, f) => s + f.size, 0))} in Google Drive</small></div><div class="stat"><span>Cards on board</span><b>${nodes.length}</b><small>Manually placed by you</small></div><div class="stat"><span>Relationships</span><b>${state.edges.filter((e) => ids.has(e.from) && ids.has(e.to)).length}</b><small>Connections you have drawn</small></div><div class="stat"><span>Gallery photos</span><b>${files.filter(isPhoto).length}</b><small>From Google Drive</small></div></div><div class="overview-actions"><button class="overview-action" data-view="canvas"><b>↗ Draw the relationships</b><p>Arrange your work and link projects, teams, and files.</p></button><button class="overview-action" data-view="bom"><b>☷ Open the BOM</b><p>Search components and compare project parts lists.</p></button><button class="overview-action" data-view="gallery"><b>▧ Tell the story in photos</b><p>Build a gallery of assemblies, prototypes, and progress.</p></button></div><div class="panel"><div class="panel-head"><div><h2>A workspace you can take with you.</h2><p>Open the dashboard, organize Drive files, and connect them to your project work.</p></div><button class="secondary" data-action="storage">How storage works</button></div></div>`;
 }
 function fileRows(files) {
   return files
     .map(
       (f) =>
-        `<tr><td><div class="file-title"><strong>${esc(f.name)}</strong><small>${esc(f.note || nameOf(f.project))}</small></div></td><td>${esc(nameOf(f.project))}</td><td><span class="tag ${f.team.toLowerCase()}">${esc(f.team)}</span></td><td>${sizeOf(f.size)}</td><td><button class="text-button" data-download="${f.id}">↓ Download</button> <button class="text-button danger-text" data-remove-file="${f.id}">Remove</button></td></tr>`,
+        `<tr><td><div class="file-title"><strong>${esc(f.name)}</strong><small>${esc(f.note || nameOf(f.project))}</small></div></td><td>${esc(nameOf(f.project))}</td><td><span class="tag ${f.team.toLowerCase()}">${esc(teamLabel(f.project, f.team))}</span></td><td>${sizeOf(f.size)}</td><td><button class="text-button" data-download="${f.id}">↗ Open in Drive</button> <button class="text-button danger-text" data-remove-file="${f.id}">Remove from library</button></td></tr>`,
     )
     .join("");
 }
@@ -1093,11 +1194,11 @@ const empty = (symbol, title, description, action) =>
   `<div class="empty"><div class="empty-symbol">${symbol}</div><h3>${title}</h3><p>${description}</p>${action || ""}</div>`;
 function filesHTML() {
   const files = filteredFiles();
-  return `<section class="panel"><div class="panel-head"><div><h2>Your file library</h2><p>Files added here are saved in this browser and uploaded to Google Drive.</p></div></div><div class="section-tools"><input id="file-search" aria-label="Search files" placeholder="Search files, notes, projects…" value="${esc(search)}"><select id="team-filter" aria-label="Filter by team"><option value="all">All teams</option>${teamOptions(fileTeam)}</select></div>${files.length ? `<div class="table-scroll"><table><thead><tr><th>File name</th><th>Project</th><th>Team</th><th>Size</th><th>Access</th></tr></thead><tbody>${fileRows(files)}</tbody></table></div>` : empty("▱", "Your files go here.", "Add your own drawings, spreadsheets, documents, or code.", '<button class="secondary" data-action="upload">＋ Add files</button>')}<div class="table-footer">${files.length} files · Browser storage + Google Drive</div></section>`;
+  return `<section class="panel"><div class="panel-head"><div><h2>Your file library</h2><p>Drive-backed project files organized by project and team. The dashboard stores metadata and links, not large file contents.</p></div></div><div class="section-tools"><input id="file-search" aria-label="Search files" placeholder="Search files, notes, projects…" value="${esc(search)}"><select id="team-filter" aria-label="Filter by team"><option value="all">All teams</option>${teamOptions(fileTeam)}</select></div>${files.length ? `<div class="table-scroll"><table><thead><tr><th>File name</th><th>Project</th><th>Team</th><th>Size</th><th>Access</th></tr></thead><tbody>${fileRows(files)}</tbody></table></div>` : empty("▱", "Your files go here.", "Add your own drawings, spreadsheets, documents, or code.", '<button class="secondary" data-action="upload">＋ Add files</button>')}<div class="table-footer">${files.length} Drive files · Metadata stored locally</div></section>`;
 }
 function galleryHTML() {
   const photos = state.files.filter(inScope).filter(isPhoto);
-  return `<section class="panel"><div class="panel-head"><div><h2>Project photo gallery</h2><p>Your actual photos, with their project, team, and notes.</p></div><span class="pill">${photos.length} photos</span></div>${photos.length ? `<div class="tiles">${photos.map((f) => `<article class="photo"><button class="photo-image" data-photo="${f.id}" aria-label="View ${esc(f.name)}"><img data-local-image="${f.id}" alt="${esc(f.note || f.name)}"></button><div class="photo-info"><b>${esc(f.name)}</b><p>${esc(nameOf(f.project))} · ${esc(f.team)}</p><p>${esc(f.note)}</p><button class="text-button" data-download="${f.id}">↓ Original photo</button> <button class="text-button danger-text" data-remove-file="${f.id}">Remove</button></div></article>`).join("")}</div>` : empty("▧", "Show what you are building.", "Add photos of prototypes, assemblies, and team progress.", '<button class="secondary" data-action="photos">＋ Add photos</button>')}</section>`;
+  return `<section class="panel"><div class="panel-head"><div><h2>Project photo gallery</h2><p>Photos loaded from the project Google Drive folders.</p></div><span class="pill">${photos.length} photos</span></div>${photos.length ? `<div class="tiles">${photos.map((f) => `<article class="photo"><button class="photo-image" data-photo="${f.id}" aria-label="View ${esc(f.name)}"><img data-local-image="${f.id}" alt="${esc(f.note || f.name)}"></button><div class="photo-info"><b>${esc(f.name)}</b><p>${esc(nameOf(f.project))} · ${esc(teamLabel(f.project, f.team))}</p><p>${esc(f.note)}</p><button class="text-button" data-download="${f.id}">↗ Open in Drive</button> <button class="text-button danger-text" data-remove-file="${f.id}">Remove from library</button></div></article>`).join("")}</div>` : empty("▧", "Show what you are building.", "Add photos of prototypes, assemblies, and team progress.", '<button class="secondary" data-action="photos">＋ Add photos</button>')}</section>`;
 }
 async function loadImages() {
   for (const img of $$("[data-local-image]")) {
@@ -1191,7 +1292,7 @@ async function previewBOM() {
     for (const project of projects) {
       const file = state.files.find((f) => f.id === state.bom[project.id]);
       if (!file || !/\.csv$/i.test(file.name) || file.size > 5 * 1024 * 1024) continue;
-      const blob = await getBlob(file.id);
+      const blob = (await getBlob(file.id)) || (await getDriveBlob(file));
       if (!blob) throw new Error("The source file is missing from this browser.");
       const rows = parseCSV((await blob.text()).replace(/^\uFEFF/, ""));
       const [head, ...body] = rows;
@@ -1340,7 +1441,7 @@ async function exportBackup() {
     const blobs = [];
     for (const f of state.files) {
       const blob = await getBlob(f.id);
-      if (!blob) throw new Error("Missing file: " + f.name);
+      if (!blob) continue;
       const base64 = await new Promise((resolve, reject) => {
         const r = new FileReader();
         r.onload = () => resolve(String(r.result).split(",")[1]);
@@ -1364,7 +1465,11 @@ async function exportBackup() {
       ),
       "exo-workspace-backup-" + new Date().toISOString().slice(0, 10) + ".json",
     );
-    notify("Backup exported. It includes your files and drawings.");
+    notify(
+      blobs.length === state.files.length
+        ? "Backup exported. It includes your files and drawings."
+        : "Backup exported. Drive-backed files are included as metadata and links.",
+    );
   } catch (error) {
     notify("Backup could not be completed: " + error.message);
   }
@@ -1417,7 +1522,7 @@ function validateBackup(data) {
       !teams.includes(f.team) ||
       !Number.isFinite(f.size) ||
       f.size <= 0 ||
-      f.size > 25 * 1024 * 1024
+      (f.driveId && !str(f.driveId, 200))
     )
       throw new Error("Invalid file metadata.");
   for (const n of s.nodes)
@@ -1473,11 +1578,10 @@ function validateBackup(data) {
       s.files.find((f) => f.id === id)?.project !== project
     )
       throw new Error("Invalid BOM reference.");
-  if (
-    data.blobs.length !== s.files.length ||
-    new Set(data.blobs.map((b) => b.id)).size !== data.blobs.length
-  )
-    throw new Error("The backup must include every file exactly once.");
+  if (new Set(data.blobs.map((b) => b.id)).size !== data.blobs.length)
+    throw new Error("The backup contains duplicate file data.");
+  if (data.blobs.some((b) => !files.has(b.id)))
+    throw new Error("The backup contains data for an unknown file.");
   return s;
 }
 async function importBackup(file) {
@@ -1754,7 +1858,6 @@ window.addEventListener("beforeunload", (e) => {
   }
 });
 (async () => {
-  checkUserSession();
   try {
     db = await openDB();
     state = (await record("state", "workspace")) || initial();
@@ -1766,5 +1869,6 @@ window.addEventListener("beforeunload", (e) => {
       "This browser has blocked local storage. Drawing can be explored, but files cannot be saved. Use a regular browser window with local storage enabled.",
     );
   }
+  await checkUserSession();
   render();
 })();
