@@ -147,16 +147,59 @@ async function pushFileToGitHub(file, owner, repo, folderPath, note = "") {
     .join("/");
   const fullPath = cleanFolder ? `${cleanFolder}/${file.name}` : file.name;
   const encodedPath = fullPath.split("/").map(encodeURIComponent).join("/");
-  const apiUrl = `https://api.github.com/repos/${owner}/${repo}/contents/${encodedPath}`;
+  const repoApiUrl = `https://api.github.com/repos/${owner}/${repo}`;
+  const apiUrl = `${repoApiUrl}/contents/${encodedPath}`;
+  const branchName = `exo-dashboard/${Date.now()}-${file.name
+    .replace(/[^a-zA-Z0-9._-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 60)}`;
+  const repoHeaders = {
+    Authorization: `Bearer ${githubAccessToken}`,
+    Accept: "application/vnd.github.v3+json",
+  };
+
+  const repoResponse = await fetch(repoApiUrl, { headers: repoHeaders });
+  if (!repoResponse.ok) {
+    const errorData = await repoResponse.json().catch(() => ({}));
+    throw new Error(
+      errorData.message || `Could not read repository (HTTP ${repoResponse.status})`,
+    );
+  }
+  const repository = await repoResponse.json();
+  const baseBranch = repository.default_branch;
+  const baseRefResponse = await fetch(
+    `${repoApiUrl}/git/ref/heads/${encodeURIComponent(baseBranch)}`,
+    { headers: repoHeaders },
+  );
+  if (!baseRefResponse.ok) {
+    const errorData = await baseRefResponse.json().catch(() => ({}));
+    throw new Error(
+      errorData.message ||
+        `Could not read the default branch (HTTP ${baseRefResponse.status})`,
+    );
+  }
+  const baseRef = await baseRefResponse.json();
+  const branchResponse = await fetch(`${repoApiUrl}/git/refs`, {
+    method: "POST",
+    headers: { ...repoHeaders, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      ref: `refs/heads/${branchName}`,
+      sha: baseRef.object.sha,
+    }),
+  });
+  if (!branchResponse.ok) {
+    const errorData = await branchResponse.json().catch(() => ({}));
+    throw new Error(
+      errorData.message ||
+        `Could not create upload branch (HTTP ${branchResponse.status})`,
+    );
+  }
 
   // Check if file already exists so we can pass its SHA to update it instead of failing with 422
   let existingSha = null;
   try {
-    const checkRes = await fetch(apiUrl, {
-      headers: {
-        Authorization: `Bearer ${githubAccessToken}`,
-        Accept: "application/vnd.github.v3+json",
-      },
+    const checkRes = await fetch(`${apiUrl}?ref=${encodeURIComponent(branchName)}`, {
+      headers: repoHeaders,
     });
     if (checkRes.ok) {
       const existingData = await checkRes.json();
@@ -169,16 +212,13 @@ async function pushFileToGitHub(file, owner, repo, folderPath, note = "") {
       ? `Upload ${file.name}: ${note}`
       : `Upload ${file.name} via EXO Dashboard`,
     content: base64Content,
+    branch: branchName,
   };
   if (existingSha) payload.sha = existingSha;
 
   const response = await fetch(apiUrl, {
     method: "PUT",
-    headers: {
-      Authorization: `Bearer ${githubAccessToken}`,
-      Accept: "application/vnd.github.v3+json",
-      "Content-Type": "application/json",
-    },
+    headers: { ...repoHeaders, "Content-Type": "application/json" },
     body: JSON.stringify(payload),
   });
 
@@ -186,7 +226,24 @@ async function pushFileToGitHub(file, owner, repo, folderPath, note = "") {
     const errorData = await response.json().catch(() => ({}));
     throw new Error(errorData.message || `HTTP ${response.status}`);
   }
-  return await response.json();
+  const pullRequestResponse = await fetch(`${repoApiUrl}/pulls`, {
+    method: "POST",
+    headers: { ...repoHeaders, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      title: note ? `Upload ${file.name}: ${note}` : `Upload ${file.name}`,
+      head: branchName,
+      base: baseBranch,
+      body: `Uploaded through the EXO Dashboard.${note ? `\n\n${note}` : ""}`,
+    }),
+  });
+  if (!pullRequestResponse.ok) {
+    const errorData = await pullRequestResponse.json().catch(() => ({}));
+    throw new Error(
+      errorData.message ||
+        `File uploaded, but could not open a pull request (HTTP ${pullRequestResponse.status})`,
+    );
+  }
+  return await pullRequestResponse.json();
 }
 
 // ==========================================
@@ -543,19 +600,20 @@ function showUpload(photos = false) {
             `No GitHub repository is configured for ${nameOf(proj)}/${team}.`,
           );
         }
+        const pullRequests = [];
         for (const f of files) {
-          await pushFileToGitHub(
+          pullRequests.push(await pushFileToGitHub(
             f,
             destination.owner,
             destination.repo,
             folder,
             note,
-          );
+          ));
         }
         $("#dialog").close();
         render();
         notify(
-          `Saved locally and pushed ${files.length} file(s) to ${destination.owner}/${destination.repo}/${folder}!`,
+          `Saved locally and opened ${pullRequests.length} pull request(s) for ${destination.owner}/${destination.repo}/${folder}.`,
         );
       } else {
         $("#dialog").close();
@@ -1196,15 +1254,15 @@ function githubForm() {
     const [, owner, repo] = match;
     const btn = $("[type=submit]", e.target);
     btn.disabled = true;
-    btn.textContent = "Uploading…";
+    btn.textContent = "Creating pull request…";
     try {
-      await pushFileToGitHub(file, owner, repo, folder);
+      const pullRequest = await pushFileToGitHub(file, owner, repo, folder);
       $("#dialog").close();
-      notify(`Successfully pushed ${file.name} to ${owner}/${repo}!`);
+      notify(`Pull request opened for ${file.name}: ${pullRequest.html_url}`);
     } catch (err) {
       notify("GitHub upload failed: " + err.message);
       btn.disabled = false;
-      btn.textContent = "Push to GitHub ↗";
+      btn.textContent = "Open pull request ↗";
     }
   };
 }
