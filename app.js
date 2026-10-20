@@ -376,6 +376,17 @@ const esc = (v) =>
         c
       ],
   );
+const bomLinkHTML = (value) => {
+  const link = String(value ?? "").trim();
+  if (!link) return "—";
+  try {
+    const url = new URL(link);
+    if (!["http:", "https:"].includes(url.protocol)) throw new Error();
+    return `<a href="${esc(url.href)}" target="_blank" rel="noopener noreferrer" aria-label="Open link">Link</a>`;
+  } catch {
+    return esc(link);
+  }
+};
 const uid = () =>
   globalThis.crypto?.randomUUID?.() ||
   "id-" + Date.now().toString(36) + "-" + Math.random().toString(36).slice(2);
@@ -1215,7 +1226,7 @@ function bomHTML() {
 function addBOMRow() {
   openModal(
     "Add component",
-    `<form id="bom-entry-form"><p class="hint" style="margin-bottom:18px">Add a planning row without changing the original CSV source. It will be saved in this browser and included in the BOM view.</p><div class="form-grid"><label class="field">Project<select name="project">${projectOptions(currentProject())}</select></label><label class="field">ID<input name="id" placeholder="e.g. D01" required maxlength="40"></label></div><div class="form-grid"><label class="field">Subsystem<input name="subsystem" placeholder="Controls"></label><label class="field">Component<input name="component" placeholder="Component or integration purpose" required></label></div><div class="form-grid"><label class="field">Quantity<input name="qty" type="number" min="0" step="any" value="1"></label><label class="field">Unit cost ($)<input name="unit" type="number" min="0" step="0.01" placeholder="0.00"></label></div><div class="form-grid"><label class="field">Supplier<input name="supplier" placeholder="Vendor or link"></label><label class="field">Cost basis<select name="basis"><option>Baseline</option><option>Quote</option><option>Estimate</option><option>Pending</option></select></label></div>${actions("Add component")}</form>`,
+    `<form id="bom-entry-form"><p class="hint" style="margin-bottom:18px">Add a planning row without changing the original CSV source. It will be saved in this browser and included in the BOM view.</p><div class="form-grid"><label class="field">Project<select name="project">${projectOptions(currentProject())}</select></label><label class="field">ID<input name="id" placeholder="e.g. D01" required maxlength="40"></label></div><div class="form-grid"><label class="field">Subsystem<input name="subsystem" placeholder="Controls"></label><label class="field">Component<input name="component" placeholder="Component or integration purpose" required></label></div><div class="form-grid"><label class="field">Quantity<input name="qty" type="number" min="0" step="any" value="1"></label><label class="field">Unit cost ($)<input name="unit" type="number" min="0" step="0.01" placeholder="0.00"></label></div><div class="form-grid"><label class="field">Link<input name="link" type="url" placeholder="https://…"></label><label class="field">Cost basis<select name="basis"><option>Baseline</option><option>Quote</option><option>Estimate</option><option>Pending</option></select></label></div>${actions("Add component")}</form>`,
   );
   $("#bom-entry-form").onsubmit = (e) => {
     e.preventDefault();
@@ -1230,7 +1241,7 @@ function addBOMRow() {
       qty: String(form.get("qty") || "1"),
       unit: String(form.get("unit") || ""),
       ext: "",
-      supplier: String(form.get("supplier") || ""),
+      link: String(form.get("link") || ""),
       basis: String(form.get("basis") || "Baseline"),
     });
     persist();
@@ -1285,7 +1296,7 @@ async function previewBOM() {
         qty: String(row.quantity),
         unit: row.unit_cost == null ? "" : String(row.unit_cost),
         ext: row.extended_cost == null ? "" : String(row.extended_cost),
-        supplier: row.supplier,
+        link: row.supplier,
         basis: row.stage || row.cost_basis,
         source: row.source || "Supabase shared BOM",
       }));
@@ -1308,19 +1319,25 @@ async function previewBOM() {
         qty: row[key("qty")] || row[key("quantity")] || "1",
         unit: row[key("unitcost")] || row[key("unitprice")] || row[key("price")] || "",
         ext: row[key("ext")] || row[key("total")] || "",
-        supplier: row[key("supplier")] || row[key("vendor")] || "",
+        link:
+          row[key("link")] ||
+          row[key("url")] ||
+          row[key("website")] ||
+          row[key("supplier")] ||
+          row[key("vendor")] ||
+          "",
         basis: row[key("basis")] || row[key("stage")] || "",
         source: file.name,
       }));
     }
-    records.push(...(state.bomEntries || []).filter((entry) => scope === "all" || entry.project === scope).map((entry) => ({ ...entry, purpose: entry.purpose || "", source: "Added in workspace" })));
+    records.push(...(state.bomEntries || []).filter((entry) => scope === "all" || entry.project === scope).map((entry) => ({ ...entry, link: entry.link || entry.supplier || "", purpose: entry.purpose || "", source: "Added in workspace" })));
     if (!records.length) {
       target.innerHTML = empty("☷", "No previewable BOM rows.", "CSV files up to 5 MB can be searched here. Other source types remain available to download.");
       return;
     }
     const values = (field) => [...new Set(records.map((r) => r[field]).filter(Boolean))].sort();
     const money = (value) => Number(String(value).replace(/[^0-9.-]/g, "")) || 0;
-    target.innerHTML = `<div class="section-tools bom-tools"><input id="bom-search" placeholder="Search ID, component, supplier…" aria-label="Search BOM" value="${esc(bomSearch)}"><select id="bom-team" aria-label="Filter by team"><option value="all">All teams</option>${values("team").map((v) => `<option ${bomTeam === v ? "selected" : ""}>${esc(v)}</option>`).join("")}</select><select id="bom-stage" aria-label="Filter by stage"><option value="all">All stages</option>${values("basis").map((v) => `<option ${bomStage === v ? "selected" : ""}>${esc(v)}</option>`).join("")}</select><select id="bom-price" aria-label="Filter by price"><option value="all">All pricing</option><option value="priced" ${bomPrice === "priced" ? "selected" : ""}>Priced only</option><option value="unpriced" ${bomPrice === "unpriced" ? "selected" : ""}>Needs pricing</option></select></div><div class="bom-stats" id="bom-stats"></div><div class="table-scroll"><table><thead><tr><th>ID</th><th>Project</th><th>Subsystem</th><th>Component / integration purpose</th><th>Qty</th><th>Unit $</th><th>Ext $</th><th>Supplier</th><th>Cost basis</th></tr></thead><tbody id="bom-rows"></tbody></table></div><div class="table-footer" id="bom-count"></div>`;
+    target.innerHTML = `<div class="section-tools bom-tools"><input id="bom-search" placeholder="Search ID, component, link…" aria-label="Search BOM" value="${esc(bomSearch)}"><select id="bom-team" aria-label="Filter by team"><option value="all">All teams</option>${values("team").map((v) => `<option ${bomTeam === v ? "selected" : ""}>${esc(v)}</option>`).join("")}</select><select id="bom-stage" aria-label="Filter by stage"><option value="all">All stages</option>${values("basis").map((v) => `<option ${bomStage === v ? "selected" : ""}>${esc(v)}</option>`).join("")}</select><select id="bom-price" aria-label="Filter by price"><option value="all">All pricing</option><option value="priced" ${bomPrice === "priced" ? "selected" : ""}>Priced only</option><option value="unpriced" ${bomPrice === "unpriced" ? "selected" : ""}>Needs pricing</option></select></div><div class="bom-stats" id="bom-stats"></div><div class="table-scroll"><table><thead><tr><th>ID</th><th>Project</th><th>Subsystem</th><th>Component / integration purpose</th><th>Qty</th><th>Unit $</th><th>Ext $</th><th>Link</th><th>Cost basis</th></tr></thead><tbody id="bom-rows"></tbody></table></div><div class="table-footer" id="bom-count"></div>`;
     const draw = () => {
       const query = bomSearch.toLowerCase();
       const list = records.filter((r) => {
@@ -1329,7 +1346,7 @@ async function previewBOM() {
       });
       const total = list.reduce((sum, r) => sum + money(r.ext || money(r.unit) * (Number(r.qty) || 1)), 0);
       $("#bom-stats").innerHTML = `<div class="stat"><span>Visible lines</span><b>${list.length}</b><small>of ${records.length} total rows</small></div><div class="stat"><span>Visible priced sum</span><b>$${total.toFixed(2)}</b><small>Extended cost where available</small></div><div class="stat"><span>Needs pricing</span><b>${list.filter((r) => !money(r.unit)).length}</b><small>Rows without a unit price</small></div>`;
-      $("#bom-rows").innerHTML = list.map((r) => `<tr><td><strong>${esc(r.id)}</strong></td><td>${esc(nameOf(r.project))}<small>${esc(r.source)}</small></td><td>${esc(r.subsystem)}</td><td><strong>${esc(r.component)}</strong>${r.purpose ? `<small>${esc(r.purpose)}</small>` : ""}</td><td>${esc(r.qty)}</td><td>${r.unit ? "$" + money(r.unit).toFixed(2) : "—"}</td><td>${r.ext ? "$" + money(r.ext).toFixed(2) : "—"}</td><td>${esc(r.supplier)}</td><td>${esc(r.basis || "—")}</td></tr>`).join("");
+      $("#bom-rows").innerHTML = list.map((r) => `<tr><td><strong>${esc(r.id)}</strong></td><td>${esc(nameOf(r.project))}<small>${esc(r.source)}</small></td><td>${esc(r.subsystem)}</td><td><strong>${esc(r.component)}</strong>${r.purpose ? `<small>${esc(r.purpose)}</small>` : ""}</td><td>${esc(r.qty)}</td><td>${r.unit ? "$" + money(r.unit).toFixed(2) : "—"}</td><td>${r.ext ? "$" + money(r.ext).toFixed(2) : "—"}</td><td>${bomLinkHTML(r.link)}</td><td>${esc(r.basis || "—")}</td></tr>`).join("");
       $("#bom-count").textContent = `${list.length} visible line items · ${records.length} total rows`;
     };
     draw();
