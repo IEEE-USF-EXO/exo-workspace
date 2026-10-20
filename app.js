@@ -18,7 +18,7 @@ async function signInWithGitHub() {
   await supabaseClient.auth.signInWithOAuth({
     provider: 'github',
     options: {
-      scopes: 'repo', // Required to upload files to a repository
+      scopes: 'public_repo', // Required to upload files to a repository
       redirectTo: window.location.origin + window.location.pathname
     }
   });
