@@ -1,65 +1,131 @@
 <!doctype html>
 <html lang="en">
-<head>
-<meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
-<title>EXO · Project workspace</title>
-<link rel="stylesheet" href="style.css">
-<!-- Supabase JavaScript SDK CDN -->
-<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
-</head>
-<body>
-<div class="app">
- <aside class="sidebar">
-  <div class="brand"><div class="brand-mark">↗</div><div><b>EXO</b><small>PROJECT WORKSPACE</small></div></div>
-  <div class="nav-label">WORKSPACE</div>
-  <nav id="nav" aria-label="Workspace views">
-   <button class="nav" data-view="overview"><span class="symbol">▦</span>Overview</button>
-   <button class="nav active" data-view="canvas"><span class="symbol">⌘</span>Drawing board</button>
-   <button class="nav" data-view="files"><span class="symbol">▱</span>Files</button>
-   <button class="nav" data-view="bom"><span class="symbol">☷</span>Master BOM</button>
-   <button class="nav" data-view="gallery"><span class="symbol">▧</span>Photo gallery</button>
-   <button class="nav" data-view="resources"><span class="symbol">↗</span>Resources</button>
-  </nav>
-  <div class="nav-label" style="margin-top:27px">PROJECTS</div>
-  <div id="project-list" class="project-list"></div>
-  <button class="add-project" id="new-project">＋ New project</button>
-  <div class="sidebar-bottom">
-   <div class="local-badge"><b>● Hybrid Workspace</b>Saved locally in this browser + synced to GitHub when signed in.</div>
-   <div class="sidebar-actions"><button data-action="export">Export backup</button><button data-action="import">Import backup</button></div>
-  </div>
- </aside>
- <main>
-  <header class="topbar">
-   <div class="breadcrumbs">Workspace <span>›</span><b id="crumb">All projects</b></div>
-   <div class="topbar-right">
-    <span id="save-status" class="status" role="status">Opening local storage…</span>
-    <span id="auth-status" class="pill">OFFLINE PROTOTYPE</span>
-    <button class="text-button" data-action="storage">Storage & backup</button>
-    <button id="login-btn" class="primary" type="button" data-action="login" style="padding: 6px 11px; font-size: 10px;">Sign in with GitHub</button>
-    <button id="logout-btn" class="secondary" onclick="signOut()" style="display:none; padding: 6px 11px; font-size: 10px;">Sign out</button>
-   </div>
-  </header>
-  <div class="content">
-   <div id="storage-warning" class="alert hidden" role="alert"></div>
-   <div class="heading">
-    <div>
-     <div id="eyebrow" class="eyebrow">WORKSPACE / DRAWING BOARD</div>
-     <h1 id="page-title">Your ideas. Your connections.</h1>
-     <p id="page-description">Draw freely, place cards, and connect work across teams and projects.</p>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>EXO · Project workspace</title>
+    <link rel="stylesheet" href="style.css" />
+    <!-- Supabase JavaScript SDK CDN -->
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+  </head>
+  <body>
+    <div class="app">
+      <aside class="sidebar">
+        <div class="brand">
+          <div class="brand-mark">↗</div>
+          <div><b>EXO</b><small>PROJECT WORKSPACE</small></div>
+        </div>
+        <div class="nav-label">WORKSPACE</div>
+        <nav id="nav" aria-label="Workspace views">
+          <button class="nav" data-view="overview">
+            <span class="symbol">▦</span>Overview
+          </button>
+          <button class="nav active" data-view="canvas">
+            <span class="symbol">⌘</span>Drawing board
+          </button>
+          <button class="nav" data-view="files">
+            <span class="symbol">▱</span>Files
+          </button>
+          <button class="nav" data-view="bom">
+            <span class="symbol">☷</span>Master BOM
+          </button>
+          <button class="nav" data-view="gallery">
+            <span class="symbol">▧</span>Photo gallery
+          </button>
+          <button class="nav" data-view="resources">
+            <span class="symbol">↗</span>Resources
+          </button>
+        </nav>
+        <div class="nav-label" style="margin-top: 27px">PROJECTS</div>
+        <div id="project-list" class="project-list"></div>
+        <button class="add-project" id="new-project">＋ New project</button>
+        <div class="sidebar-bottom">
+          <div class="local-badge">
+            <b>● Hybrid Workspace</b>Saved locally in this browser + synced to
+            GitHub when signed in.
+          </div>
+          <div class="sidebar-actions">
+            <button data-action="export">Export backup</button
+            ><button data-action="import">Import backup</button>
+          </div>
+        </div>
+      </aside>
+      <main>
+        <header class="topbar">
+          <div class="breadcrumbs">
+            Workspace <span>›</span><b id="crumb">All projects</b>
+          </div>
+          <div class="topbar-right">
+            <span id="save-status" class="status" role="status"
+              >Opening local storage…</span
+            >
+            <span id="auth-status" class="pill">OFFLINE PROTOTYPE</span>
+            <button class="text-button" data-action="storage">
+              Storage & backup
+            </button>
+            <button
+              id="login-btn"
+              class="primary"
+              type="button"
+              data-action="login"
+              style="padding: 6px 11px; font-size: 10px"
+            >
+              Sign in with GitHub
+            </button>
+            <button
+              id="logout-btn"
+              class="secondary"
+              onclick="signOut()"
+              style="display: none; padding: 6px 11px; font-size: 10px"
+            >
+              Sign out
+            </button>
+          </div>
+        </header>
+        <div class="content">
+          <div id="storage-warning" class="alert hidden" role="alert"></div>
+          <div class="heading">
+            <div>
+              <div id="eyebrow" class="eyebrow">WORKSPACE / DRAWING BOARD</div>
+              <h1 id="page-title">Your ideas. Your connections.</h1>
+              <p id="page-description">
+                Draw freely, place cards, and connect work across teams and
+                projects.
+              </p>
+            </div>
+            <div class="row">
+              <button class="secondary" data-action="export">↓ Export</button>
+              <button class="primary" id="page-action">＋ Add card</button>
+            </div>
+          </div>
+          <section id="view"></section>
+          <footer class="footer">
+            <span>EXO PROJECT WORKSPACE</span
+            ><span
+              >Local files · Local drawing · Direct GitHub Repo Upload</span
+            >
+          </footer>
+        </div>
+      </main>
     </div>
-    <div class="row">
-     <button class="secondary" data-action="export">↓ Export</button>
-     <button class="primary" id="page-action">＋ Add card</button>
-    </div>
-   </div>
-   <section id="view"></section>
-   <footer class="footer"><span>EXO PROJECT WORKSPACE</span><span>Local files · Local drawing · Direct GitHub Repo Upload</span></footer>
-  </div>
- </main>
-</div>
-<dialog id="dialog"><div class="modal"><div class="modal-head"><h2 id="modal-title"></h2><button class="close" id="close-dialog" aria-label="Close dialog">×</button></div><div id="modal-body"></div></div></dialog>
-<input id="backup-input" type="file" accept="application/json,.json" hidden>
-<div id="toast" class="toast" role="status" hidden></div>
-<script src="app.js"></script>
-</body>
+    <dialog id="dialog">
+      <div class="modal">
+        <div class="modal-head">
+          <h2 id="modal-title"></h2>
+          <button class="close" id="close-dialog" aria-label="Close dialog">
+            ×
+          </button>
+        </div>
+        <div id="modal-body"></div>
+      </div>
+    </dialog>
+    <input
+      id="backup-input"
+      type="file"
+      accept="application/json,.json"
+      hidden
+    />
+    <div id="toast" class="toast" role="status" hidden></div>
+    <script src="app.js"></script>
+  </body>
 </html>
