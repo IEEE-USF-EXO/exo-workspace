@@ -14,25 +14,44 @@
   <div class="nav-label">WORKSPACE</div>
   <nav id="nav" aria-label="Workspace views">
    <button class="nav" data-view="overview"><span class="symbol">▦</span>Overview</button>
-   <button class="nav active" data-view="canvas"><span class="symbol">⌘</span>Drawing board</button>
-   <button class="nav" data-view="files"><span class="symbol">▱</span>Files</button>
+   <button class="nav" data-view="canvas"><span class="symbol">⌘</span>Drawing board</button>
+   <button class="nav active" data-view="files"><span class="symbol">▱</span>Files</button>
    <button class="nav" data-view="bom"><span class="symbol">☷</span>Master BOM</button>
    <button class="nav" data-view="gallery"><span class="symbol">▧</span>Photo gallery</button>
    <button class="nav" data-view="resources"><span class="symbol">↗</span>Resources</button>
-</nav>
+  </nav>
+
+  <div class="nav-label" style="margin-top: 25px;">PROJECTS</div>
+  <div class="project-list">
+    <button class="project-button active"><div class="dot" style="background:#a5bea4;"></div>All projects</button>
+    <button class="project-button"><div class="dot" style="background:#6b9573;"></div>EXO</button>
+    <button class="project-button"><div class="dot" style="background:#8b9e7c;"></div>PID Spoon</button>
+    <button class="add-project">+ New project</button>
+  </div>
+
+  <div class="sidebar-bottom">
+    <div class="project-button" style="font-weight:600; color:#4a6540; padding-left:0;"><div class="dot" style="background:#5c8050;"></div>Local HTML prototype</div>
+  </div>
  </aside>
  <main>
   <header class="topbar">
-    <div class="breadcrumbs">Workspace <span>›</span><b id="crumb">Exo Project</b></div>
+    <div class="breadcrumbs">Workspace <span>›</span><b id="crumb">All projects</b></div>
     <div class="topbar-right">
-      <span id="save-status" class="status" role="status">Checking auth…</span>
-      <button id="login-btn" class="primary" onclick="signInWithGoogle()" style="display:none;">Sign in with Google</button>
-      <button id="logout-btn" class="secondary" onclick="signOut()" style="display:none;">Sign out</button>
-      <span class="pill">SUPABASE AUTH</span>
+      <span id="save-status" class="status" role="status">Saved in this browser</span>
+      <span class="pill">OFFLINE PROTOTYPE</span>
+      <span style="font-size:11px; color:#6b815f; margin-left:5px; cursor:pointer;">Storage & backup</span>
+      <button id="login-btn" class="primary" onclick="signInWithGitHub()" style="display:none; margin-left: 10px;">Sign in with GitHub</button>
+      <button id="logout-btn" class="secondary" onclick="signOut()" style="display:none; margin-left: 10px;">Sign out</button>
     </div>
   </header>
   <div class="content">
-   <div class="heading"><div><h1 id="page-title">Exo Collaboration Board</h1></div></div>
+   <div class="heading">
+     <div>
+       <h1 id="page-title">Project files.</h1>
+       <p id="page-subtitle">Add files once. Reference them anywhere on the drawing board.</p>
+     </div>
+     <div id="page-actions" class="row"></div>
+   </div>
    <section id="view"></section>
   </div>
  </main>
