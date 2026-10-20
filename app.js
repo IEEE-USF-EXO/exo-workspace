@@ -248,8 +248,21 @@ const nameOf = (id) =>
 const inScope = (item) => scope === "all" || item.project === scope;
 const currentProject = () => (scope === "all" ? state.projects[0].id : scope);
 const githubRepoFor = (project, team) => {
-  const repo = GITHUB_REPOSITORIES[project]?.[team];
-  return repo ? { owner: GITHUB_ORG_OR_USERNAME, repo } : null;
+  const configuredRepo = GITHUB_REPOSITORIES[project]?.[team];
+  if (configuredRepo) {
+    return { owner: GITHUB_ORG_OR_USERNAME, repo: configuredRepo };
+  }
+
+  const resource = state.resources.find(
+    (item) =>
+      item.project === project &&
+      item.team === team &&
+      item.url.startsWith("https://github.com/"),
+  );
+  const match = resource?.url.match(
+    /^https:\/\/github\.com\/([^/]+)\/([^/#?]+)/i,
+  );
+  return match ? { owner: match[1], repo: match[2] } : null;
 };
 const teamOptions = (value) =>
   teams
@@ -1049,7 +1062,7 @@ function resourcesHTML() {
 function resourceForm() {
   openModal(
     "Add a resource",
-    `<form id="resource-form"><label class="field">Title<input name="title" required maxlength="100"></label><label class="field">HTTPS address<input name="url" type="url" required placeholder="https://…" maxlength="2000"></label><div class="form-grid"><label class="field">Project<select name="project">${projectOptions(currentProject())}</select></label><label class="field">Team<select name="team">${teamOptions("Shared")}</select></label></div>${actions("Add resource")}</form>`,
+    `<form id="resource-form"><p class="hint" style="margin-bottom:14px">Add a GitHub repository here to make it the upload destination for the selected project and team.</p><label class="field">Title<input name="title" required maxlength="100"></label><label class="field">HTTPS address<input name="url" type="url" required placeholder="https://…" maxlength="2000"></label><div class="form-grid"><label class="field">Project<select name="project">${projectOptions(currentProject())}</select></label><label class="field">Team<select name="team">${teamOptions("Shared")}</select></label></div>${actions("Add resource")}</form>`,
   );
   $("#resource-form").onsubmit = (e) => {
     e.preventDefault();
@@ -1076,7 +1089,7 @@ function resourceForm() {
 
 // Upgraded githubForm: Lets users pick any repo/folder and upload a file directly via API (or open in GitHub)
 function githubForm() {
-  const repos = knownResources.filter((r) =>
+  const repos = [...knownResources, ...state.resources].filter((r) =>
     r.url.startsWith("https://github.com/"),
   );
   openModal(
