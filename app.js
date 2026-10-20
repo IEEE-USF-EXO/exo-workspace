@@ -139,7 +139,10 @@ async function uploadFileToGoogleDrive(file, folderId) {
         "X-Upload-Content-Type": file.type || "application/octet-stream",
         "X-Upload-Content-Length": String(file.size),
       },
-      body: JSON.stringify({ name: file.name, parents: [folderId] }),
+      body: JSON.stringify({
+        name: file.name,
+        ...(folderId ? { parents: [folderId] } : {}),
+      }),
     },
   );
   if (!sessionResponse.ok) {
@@ -148,6 +151,37 @@ async function uploadFileToGoogleDrive(file, folderId) {
       details.error?.message ||
         `Google Drive upload could not start (HTTP ${sessionResponse.status})`,
     );
+  }
+
+  function showDriveTestUpload() {
+    openModal(
+      "Test Google Drive upload",
+      `<form id="drive-test-upload-form"><p class="hint" style="margin-bottom:14px">Choose one file to test the Google Drive connection. It will be uploaded to the root of your Google Drive.</p><label class="field">File<input type="file" name="file" required><small>This test does not use the project folder structure.</small></label>${actions("Upload test file")}</form>`,
+    );
+    $("#drive-test-upload-form").onsubmit = async (event) => {
+      event.preventDefault();
+      const form = new FormData(event.target);
+      const file = form.get("file");
+      if (!(file instanceof File) || !file.size) {
+        notify("Choose a nonempty file.");
+        return;
+      }
+      const button = $("[type=submit]", event.target);
+      button.disabled = true;
+      button.textContent = "Uploading to Google Drive…";
+      try {
+        const driveFile = await uploadFileToGoogleDrive(file, null);
+        $("#dialog").close();
+        notify(
+          `Test upload succeeded: ${driveFile.name || file.name}. ` +
+            `Open it in Drive: ${driveFile.webViewLink || "check your Drive root."}`,
+        );
+      } catch (error) {
+        notify("Test upload failed: " + error.message);
+        button.disabled = false;
+        button.textContent = "Try again";
+      }
+    };
   }
   const uploadUrl = sessionResponse.headers.get("Location");
   if (!uploadUrl) throw new Error("Google Drive did not return an upload session.");
@@ -1946,7 +1980,7 @@ document.addEventListener("click", async (e) => {
       render();
     });
   }
-  if (action === "upload") showUpload();
+  if (action === "upload") showDriveTestUpload();
   if (action === "photos") showUpload(true);
   if (action === "storage") showStorage();
   if (action === "export") exportBackup();
@@ -1973,7 +2007,9 @@ $("#page-action").onclick = () =>
       ? showUpload(true)
       : view === "resources"
         ? resourceForm()
-        : showUpload();
+        : view === "bom"
+          ? showUpload()
+          : showDriveTestUpload();
 $("#close-dialog").onclick = () => $("#dialog").close();
 $("#dialog").onclick = (e) => {
   if (e.target === $("#dialog")) $("#dialog").close();
