@@ -32,6 +32,7 @@ const supabaseClient = window.supabase.createClient(
 
 let googleAccessToken = null;
 let sharedBOMRows = [];
+let driveFolders = [];
 
 async function signInWithGoogle() {
   if (window.location.protocol === "file:") {
@@ -45,7 +46,7 @@ async function signInWithGoogle() {
       provider: "google",
       options: {
         scopes:
-          "https://www.googleapis.com/auth/drive.file https://www.googleapis.com/auth/drive.metadata.readonly",
+          "https://www.googleapis.com/auth/drive",
         queryParams: { access_type: "offline", prompt: "consent" },
         redirectTo: window.location.origin + window.location.pathname,
       },
@@ -176,26 +177,79 @@ async function uploadFileToGoogleDrive(file, folderId) {
   }
   return result;
 }
-async function syncDriveFiles() {
-  if (!googleAccessToken) return;
-  if (driveSyncing) return;
-  driveSyncing = true;
-  const driveFiles = [];
-  for (const [project, team, folderId] of folderIds) {
-    const query = `'${folderId}' in parents and trashed = false`;
+
+async function createDriveFolder(name, parentId) {
+  const response = await fetch(
+    "https://www.googleapis.com/drive/v3/files?fields=id,name,mimeType,parents",
+    {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${googleAccessToken}`,
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        name,
+        mimeType: "application/vnd.google-apps.folder",
+        parents: [parentId],
+      }),
+    },
+  );
+  if (!response.ok) {
+    const details = await response.json().catch(() => ({}));
+    throw new Error(
+      details.error?.message ||
+        `Google Drive folder could not be created (HTTP ${response.status})`,
+    );
+  }
+  return response.json();
+}
+
+async function listDriveChildren(parentId) {
+  const children = [];
+  let pageToken = "";
+  do {
+    const params = new URLSearchParams({
+      q: `'${parentId}' in parents and trashed = false`,
+      pageSize: "1000",
+      fields:
+        "nextPageToken,files(id,name,mimeType,size,modifiedTime,webViewLink,thumbnailLink,parents)",
+    });
+    if (pageToken) params.set("pageToken", pageToken);
     const response = await fetch(
-      `https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&pageSize=1000&fields=files(id,name,mimeType,size,modifiedTime,webViewLink,thumbnailLink,parents)`,
+      `https://www.googleapis.com/drive/v3/files?${params}`,
       { headers: { Authorization: `Bearer ${googleAccessToken}` } },
     );
     if (!response.ok) {
       const details = await response.json().catch(() => ({}));
       throw new Error(
         details.error?.message ||
-          `Google Drive files could not be listed (HTTP ${response.status})`,
+          `Google Drive folders could not be listed (HTTP ${response.status})`,
       );
     }
     const data = await response.json();
-    for (const file of data.files || []) {
+    children.push(...(data.files || []));
+    pageToken = data.nextPageToken || "";
+  } while (pageToken);
+  return children;
+}
+
+async function syncDriveFiles() {
+  if (!googleAccessToken) return;
+  if (driveSyncing) return;
+  driveSyncing = true;
+  const driveFiles = [];
+  const folders = [];
+  const visited = new Set();
+  for (const [project, team, folderId] of folderIds) {
+    const walk = async (parentId, path) => {
+      if (visited.has(parentId)) return;
+      visited.add(parentId);
+      folders.push({ id: parentId, project, team, path });
+      for (const file of await listDriveChildren(parentId)) {
+        if (file.mimeType === "application/vnd.google-apps.folder") {
+          await walk(file.id, `${path}/${file.name}`);
+          continue;
+        }
       driveFiles.push({
         id: `drive-${file.id}`,
         driveId: file.id,
@@ -210,11 +264,16 @@ async function syncDriveFiles() {
         size: Number(file.size || 0),
         project,
         team,
+        folderId: parentId,
+        folderPath: path,
         note: "",
         created: file.modifiedTime || new Date().toISOString(),
       });
-    }
+      }
+    };
+    await walk(folderId, "");
   }
+  driveFolders = folders;
   const localOnly = state.files.filter(
     (file) => !file.driveId && !driveFiles.some((drive) => drive.name === file.name),
   );
@@ -457,6 +516,25 @@ const teamLabel = (project, team) =>
 const driveFolderFor = (project, team) =>
   folderIds.find(([folderProject, folderTeam]) =>
     folderProject === project && folderTeam === team)?.[2] || null;
+const driveFoldersFor = (project, team) =>
+  driveFolders.filter(
+    (folder) => folder.project === project && folder.team === team,
+  );
+const driveFolderOptions = (project, team, selectedId = "") => {
+  const folders = driveFoldersFor(project, team);
+  return (folders.length
+    ? folders
+    : [{ id: driveFolderFor(project, team), path: "" }]
+  )
+    .map((folder) => {
+      const rootName = teamLabel(project, team) + " folder";
+      const label = folder.path
+        ? `${rootName} / ${folder.path.slice(1)}`
+        : rootName;
+      return `<option value="${esc(folder.id)}" ${folder.id === selectedId ? "selected" : ""}>${esc(label)}</option>`;
+    })
+    .join("");
+};
 const knownResources = [
   ...Object.entries(GITHUB_REPOSITORIES).flatMap(([project, repos]) =>
     Object.entries(repos).map(([team, repo]) => ({
@@ -732,23 +810,46 @@ function showUpload(photos = false) {
   const initialProject = currentProject();
   const initialTeam =
     folderIds.find(([project]) => project === initialProject)?.[1] || "";
+  const initialFolder = driveFoldersFor(initialProject, initialTeam)[0]?.id ||
+    driveFolderFor(initialProject, initialTeam);
+  const accept = photos
+    ? 'accept="image/png,image/jpeg,image/webp,image/gif,image/avif"'
+    : "";
   openModal(
     photos ? "Add project photos" : "Add project files",
-    `<form id="upload-form"><p class="hint" style="margin-bottom:14px">Files are uploaded to the selected Google Drive team folder. The dashboard keeps only file metadata and a Drive link.</p><label class="field">${photos ? "Photos" : "Files"}<input type="file" name="files" ${photos ? 'accept="image/png,image/jpeg,image/webp,image/gif,image/avif"' : ""} multiple required><small>Large files upload directly to Drive.</small></label>${scope === "all" ? `<label class="field">Project<select name="project">${projectOptions(initialProject)}</select><small>Choose a project before uploading from All projects.</small></label>` : `<label class="field">Project<input value="${esc(nameOf(initialProject))}" readonly><input type="hidden" name="project" value="${esc(initialProject)}"></label>`}<label class="field">Destination team<select name="team">${teamOptions(initialTeam, initialProject)}</select></label><label class="field">Note or photo caption<textarea name="note" maxlength="1000" placeholder="Context, version, or what the photo shows"></textarea></label>${actions(photos ? "Add photos" : "Add files")}</form>`,
+    `<form id="upload-form"><p class="hint" style="margin-bottom:14px">Google Drive provides the folder structure below. Choose a destination, or upload a folder to recreate its subfolders there.</p>${photos ? "" : '<label class="field">Upload type<select name="upload-mode"><option value="files">Individual files</option><option value="folder">A folder and its contents</option></select></label>'}<label class="field">${photos ? "Photos" : "Files"}<input id="upload-input" type="file" name="files" ${accept} multiple required><small class="upload-help">Large files upload directly to Drive.</small></label>${scope === "all" ? `<label class="field">Project<select name="project">${projectOptions(initialProject)}</select><small>Choose a project before uploading from All projects.</small></label>` : `<label class="field">Project<input value="${esc(nameOf(initialProject))}" readonly><input type="hidden" name="project" value="${esc(initialProject)}"></label>`}<label class="field">Destination team<select name="team">${teamOptions(initialTeam, initialProject)}</select></label><label class="field">Destination folder<select name="folder">${driveFolderOptions(initialProject, initialTeam, initialFolder)}</select></label><label class="field">Note or photo caption<textarea name="note" maxlength="1000" placeholder="Context, version, or what the photo shows"></textarea></label>${actions(photos ? "Add photos" : "Add files")}</form>`,
   );
-  if (scope === "all") {
-    $("#upload-form").elements.project.onchange = (event) => {
-      const project = String(event.target.value);
-      const availableTeam = folderIds.find(
-        ([folderProject]) => folderProject === project,
-      )?.[1] || "";
-      $("#upload-form").elements.team.innerHTML = teamOptions(
-        availableTeam,
-        project,
-      );
-    };
-  }
-  $("#upload-form").onsubmit = async (e) => {
+  const formElement = $("#upload-form");
+  const refreshFolders = () => {
+    const project = String(formElement.elements.project.value);
+    const team = String(formElement.elements.team.value);
+    const folders = driveFoldersFor(project, team);
+    formElement.elements.folder.innerHTML = driveFolderOptions(
+      project,
+      team,
+      folders[0]?.id || driveFolderFor(project, team),
+    );
+  };
+  formElement.elements.team.onchange = refreshFolders;
+  if (scope === "all") formElement.elements.project.onchange = (event) => {
+    const project = String(event.target.value);
+    const availableTeam = folderIds.find(
+      ([folderProject]) => folderProject === project,
+    )?.[1] || "";
+    formElement.elements.team.innerHTML = teamOptions(availableTeam, project);
+    refreshFolders();
+  };
+  formElement.elements["upload-mode"]?.addEventListener("change", (event) => {
+    const folderMode = event.target.value === "folder";
+    const input = formElement.elements.files;
+    input.toggleAttribute("webkitdirectory", folderMode);
+    input.toggleAttribute("directory", folderMode);
+    input.multiple = true;
+    formElement.querySelector(".upload-help").textContent = folderMode
+      ? "The folder's subfolders will be created in Google Drive."
+      : "Large files upload directly to Drive.";
+  });
+  formElement.onsubmit = async (e) => {
     e.preventDefault();
     const form = new FormData(e.target),
       files = Array.from(e.target.elements.files.files);
@@ -766,7 +867,7 @@ function showUpload(photos = false) {
     const proj = String(form.get("project")),
       team = String(form.get("team")),
       note = String(form.get("note")),
-      folderId = driveFolderFor(proj, team);
+      folderId = String(form.get("folder") || "");
     if (!folderId) {
       notify("No Google Drive folder is configured for this project and team.");
       button.disabled = false;
@@ -775,8 +876,23 @@ function showUpload(photos = false) {
     }
     try {
       const additions = [];
+      const createdFolders = new Map();
       for (const file of files) {
-        const driveFile = await uploadFileToGoogleDrive(file, folderId);
+        let destination = folderId;
+        const relativePath = file.webkitRelativePath || "";
+        const pathParts = relativePath.split("/").filter(Boolean).slice(1, -1);
+        for (const part of pathParts) {
+          const key = `${destination}/${part}`;
+          if (!createdFolders.has(key)) {
+            const existing = driveFolders.find(
+              (folder) => folder.id === destination && folder.path.endsWith(`/${part}`),
+            );
+            const created = existing || await createDriveFolder(part, destination);
+            createdFolders.set(key, created.id);
+          }
+          destination = createdFolders.get(key);
+        }
+        const driveFile = await uploadFileToGoogleDrive(file, destination);
         additions.push({
           id: uid(),
           driveId: driveFile.id,
@@ -791,6 +907,8 @@ function showUpload(photos = false) {
           size: Number(driveFile.size || file.size),
           project: proj,
           team,
+          folderId: destination,
+          folderPath: relativePath,
           note,
           created: new Date().toISOString(),
         });
@@ -1191,7 +1309,7 @@ function fileRows(files) {
   return files
     .map(
       (f) =>
-        `<tr><td><div class="file-title"><strong>${esc(f.name)}</strong><small>${esc(f.note || nameOf(f.project))}</small></div></td><td>${esc(nameOf(f.project))}</td><td><span class="tag ${f.team.toLowerCase()}">${esc(teamLabel(f.project, f.team))}</span></td><td>${sizeOf(f.size)}</td><td><button class="text-button" data-download="${f.id}">↗ Open in Drive</button> <button class="text-button danger-text" data-remove-file="${f.id}">Remove from library</button></td></tr>`,
+        `<tr><td><div class="file-title"><strong>${esc(f.name)}</strong><small>${esc(f.folderPath || f.note || nameOf(f.project))}</small></div></td><td>${esc(nameOf(f.project))}</td><td><span class="tag ${f.team.toLowerCase()}">${esc(teamLabel(f.project, f.team))}</span></td><td>${sizeOf(f.size)}</td><td><button class="text-button" data-download="${f.id}">↗ Open in Drive</button> <button class="text-button danger-text" data-remove-file="${f.id}">Remove from library</button></td></tr>`,
     )
     .join("");
 }
@@ -1201,7 +1319,7 @@ function filteredFiles() {
     .filter(
       (f) =>
         (fileTeam === "all" || f.team === fileTeam) &&
-        (f.name + " " + f.note + " " + f.team + " " + nameOf(f.project))
+        (f.name + " " + f.note + " " + f.folderPath + " " + f.team + " " + nameOf(f.project))
           .toLowerCase()
           .includes(search.toLowerCase()),
     );
