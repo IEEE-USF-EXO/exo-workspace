@@ -92,6 +92,7 @@ async function checkUserSession() {
     try {
       await syncDriveFiles();
     } catch (error) {
+      driveSyncing = false;
       notify("Google Drive files could not be synchronized: " + error.message);
     }
   } else {
@@ -177,6 +178,8 @@ async function uploadFileToGoogleDrive(file, folderId) {
 }
 async function syncDriveFiles() {
   if (!googleAccessToken) return;
+  if (driveSyncing) return;
+  driveSyncing = true;
   const driveFiles = [];
   for (const [project, team, folderId] of folderIds) {
     const query = `'${folderId}' in parents and trashed = false`;
@@ -217,6 +220,7 @@ async function syncDriveFiles() {
   );
   state.files = [...localOnly, ...driveFiles];
   await persist();
+  driveSyncing = false;
   if (view === "files" || view === "gallery" || view === "bom") render();
 }
 
@@ -438,7 +442,8 @@ let state = initial(),
   saving = Promise.resolve(),
   urls = new Map(),
   gesture = null,
-  toastTimer;
+  toastTimer,
+  driveSyncing = false;
 const folderIds = [
   ["exo", "Controls", "1Pdx0N6EHctdZKqb7P29tVHuNVr8v8yrN"],
   ["exo", "Electrical", "1WLCSZ5bMisg1GjJH-oVJhsXjM938elaR"],
@@ -1205,7 +1210,7 @@ const empty = (symbol, title, description, action) =>
   `<div class="empty"><div class="empty-symbol">${symbol}</div><h3>${title}</h3><p>${description}</p>${action || ""}</div>`;
 function filesHTML() {
   const files = filteredFiles();
-  return `<section class="panel"><div class="panel-head"><div><h2>Your file library</h2><p>Drive-backed project files organized by project and team. The dashboard stores metadata and links, not large file contents.</p></div></div><div class="section-tools"><input id="file-search" aria-label="Search files" placeholder="Search files, notes, projects…" value="${esc(search)}"><select id="team-filter" aria-label="Filter by team"><option value="all">All teams</option>${teamOptions(fileTeam)}</select></div>${files.length ? `<div class="table-scroll"><table><thead><tr><th>File name</th><th>Project</th><th>Team</th><th>Size</th><th>Access</th></tr></thead><tbody>${fileRows(files)}</tbody></table></div>` : empty("▱", "Your files go here.", "Add your own drawings, spreadsheets, documents, or code.", '<button class="secondary" data-action="upload">＋ Add files</button>')}<div class="table-footer">${files.length} Drive files · Metadata stored locally</div></section>`;
+  return `<section class="panel"><div class="panel-head"><div><h2>Your file library</h2><p>Drive-backed project files organized by project and team. The dashboard stores metadata and links, not large file contents.</p><p class="hint">${googleAccessToken ? (driveSyncing ? "Loading files from Google Drive…" : "Files are loaded from the configured Google Drive project folders.") : "Sign in with Google to load files from the project Drive folders."}</p></div><div class="row"><button class="secondary" data-action="refresh-drive" ${driveSyncing || !googleAccessToken ? "disabled" : ""}>↻ Refresh Drive</button><button class="primary" data-action="upload">＋ Add files</button></div></div><div class="section-tools"><input id="file-search" aria-label="Search files" placeholder="Search files, notes, projects…" value="${esc(search)}"><select id="team-filter" aria-label="Filter by team"><option value="all">All teams</option>${teamOptions(fileTeam)}</select></div>${files.length ? `<div class="table-scroll"><table><thead><tr><th>File name</th><th>Project</th><th>Team</th><th>Size</th><th>Access</th></tr></thead><tbody>${fileRows(files)}</tbody></table></div>` : empty("▱", "Your files go here.", googleAccessToken ? "No files were found in the configured Google Drive project folders." : "Sign in with Google to load your project files.", '<button class="secondary" data-action="upload">＋ Add files</button>')}<div class="table-footer">${files.length} Drive files · Metadata stored locally</div></section>`;
 }
 function galleryHTML() {
   const photos = state.files.filter(inScope).filter(isPhoto);
@@ -1759,6 +1764,13 @@ document.addEventListener("click", async (e) => {
     view = el.dataset.view;
     selected = null;
     render();
+    if (view === "files") {
+      syncDriveFiles().catch((error) => {
+        driveSyncing = false;
+        notify("Google Drive files could not be synchronized: " + error.message);
+        render();
+      });
+    }
   }
   if (el.dataset.project) {
     scope = el.dataset.project;
@@ -1809,6 +1821,13 @@ document.addEventListener("click", async (e) => {
   if (el.hasAttribute("data-close")) $("#dialog").close();
   const action = el.dataset.action;
   if (action === "login") signInWithGoogle();
+  if (action === "refresh-drive") {
+    syncDriveFiles().catch((error) => {
+      driveSyncing = false;
+      notify("Google Drive files could not be synchronized: " + error.message);
+      render();
+    });
+  }
   if (action === "upload") showUpload();
   if (action === "photos") showUpload(true);
   if (action === "storage") showStorage();
