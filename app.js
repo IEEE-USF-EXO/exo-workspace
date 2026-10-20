@@ -149,10 +149,6 @@ async function pushFileToGitHub(file, owner, repo, folderPath, note = "") {
   const encodedPath = fullPath.split("/").map(encodeURIComponent).join("/");
   const repoApiUrl = `https://api.github.com/repos/${owner}/${repo}`;
   const apiUrl = `${repoApiUrl}/contents/${encodedPath}`;
-  const branchName = `exo-dashboard/${Date.now()}-${file.name
-    .replace(/[^a-zA-Z0-9._-]+/g, "-")
-    .replace(/^-+|-+$/g, "")
-    .slice(0, 60)}`;
   const repoHeaders = {
     Authorization: `Bearer ${githubAccessToken}`,
     Accept: "application/vnd.github.v3+json",
@@ -164,6 +160,28 @@ async function pushFileToGitHub(file, owner, repo, folderPath, note = "") {
   }
   const repository = await repoResponse.json();
   const baseBranch = repository.default_branch;
+  const uploadKey = `exo-dashboard-upload:${owner}/${repo}:${cleanFolder}`;
+  let branchName = localStorage.getItem(uploadKey);
+  let pullRequest = null;
+  if (branchName) {
+    const openPullRequestsResponse = await fetch(
+      `${repoApiUrl}/pulls?state=open&head=${encodeURIComponent(`${owner}:${branchName}`)}&base=${encodeURIComponent(baseBranch)}`,
+      { headers: repoHeaders },
+    );
+    if (openPullRequestsResponse.ok) {
+      const openPullRequests = await openPullRequestsResponse.json();
+      pullRequest = openPullRequests[0] || null;
+    }
+    if (!pullRequest) {
+      localStorage.removeItem(uploadKey);
+      branchName = null;
+    }
+  }
+  if (!branchName) {
+    branchName = `exo-dashboard/${Date.now()}-${cleanFolder
+      .replace(/[^a-zA-Z0-9._-]+/g, "-")
+      .replace(/^-+|-+$/g, "")
+      .slice(0, 60) || "uploads"}`;
   const baseRefResponse = await fetch(
     `${repoApiUrl}/git/ref/heads/${encodeURIComponent(baseBranch)}`,
     { headers: repoHeaders },
@@ -185,11 +203,14 @@ async function pushFileToGitHub(file, owner, repo, folderPath, note = "") {
     const errorData = await branchResponse.json().catch(() => ({}));
     throw new Error(errorData.message || `Could not create upload branch (HTTP ${branchResponse.status})`);
   }
+  }
 
   // Check if file already exists so we can pass its SHA to update it instead of failing with 422
   let existingSha = null;
   try {
-    const checkRes = await fetch(apiUrl, {
+    const checkRes = await fetch(
+      `${apiUrl}?ref=${encodeURIComponent(branchName)}`,
+      {
       headers: {
         Authorization: `Bearer ${githubAccessToken}`,
         Accept: "application/vnd.github.v3+json",
@@ -224,6 +245,7 @@ async function pushFileToGitHub(file, owner, repo, folderPath, note = "") {
     const errorData = await response.json().catch(() => ({}));
     throw new Error(errorData.message || `HTTP ${response.status}`);
   }
+  if (!pullRequest) {
   const pullRequestResponse = await fetch(`${repoApiUrl}/pulls`, {
     method: "POST",
     headers: { ...repoHeaders, "Content-Type": "application/json" },
@@ -241,7 +263,10 @@ async function pushFileToGitHub(file, owner, repo, folderPath, note = "") {
         `File uploaded, but could not open a pull request (HTTP ${pullRequestResponse.status})`,
     );
   }
-  return await pullRequestResponse.json();
+  pullRequest = await pullRequestResponse.json();
+  localStorage.setItem(uploadKey, branchName);
+  }
+  return pullRequest;
 }
 
 // ==========================================
