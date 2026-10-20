@@ -1,8 +1,8 @@
 'use strict';
 
 // Repository Configuration
-const GITHUB_ORG_OR_USERNAME = 'cristobairl'; 
-const GITHUB_REPO_NAME = 'folder_upload';
+const GITHUB_ORG_OR_USERNAME = 'YOUR_ORG_OR_USERNAME'; 
+const GITHUB_REPO_NAME = 'YOUR_REPO_NAME';
 
 // Initialize Supabase Client
 const SUPABASE_URL = 'https://tnupwlucufewosslvcaz.supabase.co';
@@ -11,22 +11,20 @@ const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_
   auth: { persistSession: true, storage: window.localStorage, autoRefreshToken: true }
 });
 
-let githubAccessToken = localStorage.getItem('gh_provider_token') || null;
+let githubAccessToken = null;
 
 // GitHub Authentication Flow
 async function signInWithGitHub() {
   await supabaseClient.auth.signInWithOAuth({
     provider: 'github',
     options: {
-      scopes: 'public_repo', // Use 'repo' if cristobairl/folder_upload is Private
+      scopes: 'repo', // Required to upload files to a repository
       redirectTo: window.location.origin + window.location.pathname
     }
   });
 }
 
 async function signOut() {
-  localStorage.removeItem('gh_provider_token');
-  githubAccessToken = null;
   await supabaseClient.auth.signOut();
   window.location.reload();
 }
@@ -39,16 +37,12 @@ async function checkUserSession() {
 
   if (session) {
     // Extract the GitHub provider token to use for file uploads
-    if (session.provider_token) {
-      githubAccessToken = session.provider_token;
-      localStorage.setItem('gh_provider_token', session.provider_token);
-    }
+    githubAccessToken = session.provider_token;
     
     statusEl.textContent = `Logged in: ${session.user.email || 'GitHub User'}`;
     if(loginBtn) loginBtn.style.display = 'none';
     if(logoutBtn) logoutBtn.style.display = 'inline-flex';
   } else {
-    localStorage.removeItem('gh_provider_token');
     githubAccessToken = null;
     statusEl.textContent = 'Saved in this browser';
     if(loginBtn) loginBtn.style.display = 'inline-flex';
@@ -58,15 +52,14 @@ async function checkUserSession() {
 
 supabaseClient.auth.onAuthStateChange((event, session) => { 
   if (session && session.provider_token) {
-    githubAccessToken = session.provider_token;
-    localStorage.setItem('gh_provider_token', session.provider_token);
+    githubAccessToken = session.provider_token; //
   }
   checkUserSession(); 
 });
 window.addEventListener('DOMContentLoaded', () => { checkUserSession(); });
 
 // DOM Selectors
-const $= (s, root = document) => root.querySelector(s); const$$ = (s, root = document) => Array.from(root.querySelectorAll(s));
+const $ = (s, root = document) => root.querySelector(s); const $$ = (s, root = document) => Array.from(root.querySelectorAll(s));
 
 let view = 'files'; 
 
@@ -179,8 +172,7 @@ async function uploadDirectToGitHub(file, owner, repo, targetPath, githubToken) 
             content: base64Content
         };
 
-        const cleanPath = targetPath ? `${targetPath}/${file.name}` : file.name;
-        const apiUrl = `https://api.github.com/repos/${owner}/${repo}/contents/${cleanPath}`;
+        const apiUrl = `https://api.github.com/repos/${owner}/${repo}/contents/${targetPath}/${file.name}`;
         
         try {
             const response = await fetch(apiUrl, {
