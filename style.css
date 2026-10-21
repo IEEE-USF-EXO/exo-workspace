@@ -80,33 +80,6 @@ button {
   white-space: nowrap;
 }
 
-.tldraw-remote-laser {
-  position: absolute;
-  inset: 0;
-  pointer-events: none;
-  transition: opacity 80ms linear;
-}
-
-.tldraw-remote-laser polyline {
-  fill: none;
-  stroke: #ff1f1f;
-  stroke-linecap: round;
-  stroke-linejoin: round;
-  stroke-width: 5;
-  filter: drop-shadow(0 0 5px #ff1f1fcc);
-}
-
-.tldraw-remote-laser-name {
-  position: absolute;
-  padding: 3px 7px;
-  color: #fff;
-  background: #d71920;
-  border-radius: 2px;
-  font: 12px/1.2 Arial, sans-serif;
-  transform: translate(8px, -24px);
-  white-space: nowrap;
-}
-
 button:disabled {
   opacity: 0.4;
   cursor: default;
