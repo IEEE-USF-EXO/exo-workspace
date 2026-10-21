@@ -77,7 +77,12 @@ async function checkUserSession() {
 
   if (session) {
     const metadata = session.user?.user_metadata || {};
-    
+    tldrawPointerName = firstName(
+      metadata.full_name ||
+        metadata.name ||
+        metadata.user_name ||
+        session.user?.email,
+    );
     googleAccessToken = session.provider_token || sessionStorage.getItem("google_provider_token");
     if (session.provider_token) {
       sessionStorage.setItem("google_provider_token", session.provider_token);
@@ -465,13 +470,227 @@ let tldrawRoot = null;
 let tldrawImportPromise = null;
 let tldrawRenderToken = 0;
 let tldrawEditor = null;
+let tldrawUnlisten = null;
+let workspaceChannel = null;
 let applyingTldrawSnapshot = false;
+let tldrawPersistTimer = null;
+let remoteTldrawPointers = new Map();
+let pointerBroadcastFrame = null;
+let localPointer = null;
+let tldrawPointerName = "Collaborator";
+const tldrawClientId =
+  globalThis.crypto?.randomUUID?.() ||
+  `client-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+const tldrawPointerColors = [
+  "#e45756",
+  "#3a86ff",
+  "#8338ec",
+  "#fb8500",
+  "#2a9d8f",
+  "#d63384",
+  "#6f42c1",
+  "#198754",
+];
+const tldrawPointerColor =
+  tldrawPointerColors[
+    Math.floor(Math.random() * tldrawPointerColors.length)
+  ];
+const tldrawPointerHue = Math.floor(Math.random() * 360);
 
-function loadTldrawSnapshot(snapshot) {
-  if (!tldrawEditor || !snapshot?.store) return;
+function firstName(value) {
+  return String(value || "Collaborator").trim().split(/\s+/)[0] || "Collaborator";
+}
+
+const tldrawInstanceRecordTypes = new Set([
+  "camera",
+  "instance",
+  "instance_page_state",
+  "pointer",
+]);
+
+function scheduleTldrawPersist() {
+  clearTimeout(tldrawPersistTimer);
+  tldrawPersistTimer = setTimeout(() => {
+    tldrawPersistTimer = null;
+    persist();
+  }, 1000);
+}
+
+function documentRecords(records) {
+  return Object.fromEntries(
+    Object.entries(records || {}).filter(
+      ([, record]) => !tldrawInstanceRecordTypes.has(record.typeName),
+    ),
+  );
+}
+
+function documentUpdates(updates) {
+  return Object.fromEntries(
+    Object.entries(updates || {}).filter(
+      ([, change]) =>
+        !tldrawInstanceRecordTypes.has(change[1]?.typeName),
+    ),
+  );
+}
+
+function broadcastTldrawPointer(point, active) {
+  if (!workspaceChannel) return;
+  const message = workspaceChannel.send({
+    type: "broadcast",
+    event: "tldraw-pointer",
+    payload: {
+      projectId: scope,
+      clientId: tldrawClientId,
+      point,
+      active,
+      color: tldrawPointerColor,
+      hue: tldrawPointerHue,
+      name: tldrawPointerName,
+    },
+  });
+  message?.catch((error) =>
+    notify("Live pointer update failed: " + error.message),
+  );
+}
+
+function renderRemoteTldrawPointers() {
+  const overlay = $("#tldraw-pointer-overlay");
+  if (!overlay || !tldrawEditor) return;
+  overlay.innerHTML = "";
+  for (const pointer of remoteTldrawPointers.values()) {
+    if (!pointer.point || pointer.projectId !== scope) continue;
+    const screenPoint = tldrawEditor.pageToScreen(pointer.point);
+    const dot = document.createElement("div");
+    dot.className = "tldraw-remote-pointer";
+    dot.style.left = `${screenPoint.x}px`;
+    dot.style.top = `${screenPoint.y}px`;
+    dot.style.setProperty("--pointer-color", pointer.color);
+    dot.title = pointer.name || "Collaborator";
+    const icon = document.createElement("img");
+    icon.className = "tldraw-remote-pointer-icon";
+    icon.src = "content/collab-cursor.png";
+    icon.alt = "";
+    icon.draggable = false;
+    icon.style.filter = `hue-rotate(${Number(pointer.hue) || 0}deg) drop-shadow(1px 1px 0 #fff) drop-shadow(0 1px 2px #0008)`;
+    dot.append(icon);
+    const label = document.createElement("span");
+    label.className = "tldraw-remote-pointer-name";
+    label.textContent = pointer.name || "Collaborator";
+    dot.append(label);
+    overlay.append(dot);
+  }
+}
+
+function scheduleRemotePointerRender() {
+  if (pointerBroadcastFrame !== null) return;
+  pointerBroadcastFrame = requestAnimationFrame(() => {
+    pointerBroadcastFrame = null;
+    renderRemoteTldrawPointers();
+  });
+}
+
+function handleTldrawPointer(payload) {
+  if (
+    !payload ||
+    payload.clientId === tldrawClientId ||
+    payload.projectId !== scope
+  )
+    return;
+  if (payload.active === false || !payload.point) {
+    remoteTldrawPointers.delete(payload.clientId);
+  } else {
+    remoteTldrawPointers.set(payload.clientId, payload);
+  }
+  scheduleRemotePointerRender();
+}
+
+function bindTldrawPointerPresence(container, editor, projectId) {
+  const sendPointer = (event, active = true) => {
+    if (scope !== projectId || tldrawEditor !== editor) return;
+    const bounds = container.getBoundingClientRect();
+    const point = editor.screenToPage({
+      x: event.clientX - bounds.left,
+      y: event.clientY - bounds.top,
+    });
+    localPointer = point;
+    if (active) broadcastTldrawPointer(point, true);
+  };
+  container.addEventListener("pointermove", sendPointer);
+  container.addEventListener("pointerenter", sendPointer);
+  container.addEventListener("pointerleave", () => {
+    if (scope !== projectId || tldrawEditor !== editor || !localPointer) return;
+    broadcastTldrawPointer(null, false);
+    localPointer = null;
+  });
+  return () => {
+    container.removeEventListener("pointermove", sendPointer);
+    container.removeEventListener("pointerenter", sendPointer);
+    if (localPointer) broadcastTldrawPointer(null, false);
+    localPointer = null;
+  };
+}
+
+function applyTldrawChanges(payload) {
+  if (!tldrawEditor || !payload || payload.projectId !== scope) return;
+  const added = documentRecords(payload.added);
+  const updated = documentUpdates(payload.updated);
   applyingTldrawSnapshot = true;
   try {
-    tldrawEditor.store.loadSnapshot(snapshot);
+    tldrawEditor.store.mergeRemoteChanges(() => {
+      tldrawEditor.store.put(Object.values(added));
+      tldrawEditor.store.put(Object.values(updated).map((change) => change[1]));
+      tldrawEditor.store.remove(Object.keys(payload.removed || {}));
+    });
+    state = {
+      ...state,
+      projectDrawings: {
+        ...state.projectDrawings,
+        [scope]: tldrawEditor.store.getSnapshot(),
+      },
+    };
+  } finally {
+    applyingTldrawSnapshot = false;
+  }
+}
+
+function saveActiveTldrawSnapshot() {
+  if (!tldrawEditor) return;
+  state = {
+    ...state,
+    projectDrawings: {
+      ...state.projectDrawings,
+      [scope]: tldrawEditor.store.getSnapshot(),
+    },
+  };
+}
+
+function loadProjectTldrawSnapshot(snapshot) {
+  if (!tldrawEditor) return;
+  const records = Object.values(snapshot?.store || {}).filter(
+    (record) => !tldrawInstanceRecordTypes.has(record.typeName),
+  );
+  applyingTldrawSnapshot = true;
+  try {
+    tldrawEditor.store.mergeRemoteChanges(() => {
+      tldrawEditor.store.put(records);
+    });
+    const pages = tldrawEditor.getPages();
+    if (!records.length && pages.length === 1 && pages[0].name === "Page 1") {
+      tldrawEditor.renamePage(pages[0].id, "Main Architecture");
+      tldrawEditor.createPage({ name: "Controls Breakout Room" });
+      tldrawEditor.createPage({ name: "Electrical Breakout Room" });
+      tldrawEditor.setCurrentPage(pages[0].id);
+    } else if (pages.length) {
+      const incomingIds = new Set(records.map((record) => record.id));
+      const currentPage = pages.find((page) => incomingIds.has(page.id));
+      if (currentPage) {
+        tldrawEditor.setCurrentPage(currentPage.id);
+        const staleRecords = pages.filter(
+          (page) => !incomingIds.has(page.id),
+        );
+        tldrawEditor.store.remove(staleRecords.map((page) => page.id));
+      }
+    }
   } finally {
     applyingTldrawSnapshot = false;
   }
@@ -521,18 +740,24 @@ async function initTldrawBoard() {
     tldrawRoot.render(
       React.createElement(Tldraw, {
         onMount: (editor) => {
-          tldrawEditor = editor;
-          const pages = editor.getPages();
-          if (pages.length === 1 && pages[0].name === "Page 1") {
-            editor.renamePage(pages[0].id, "Main Architecture");
-            editor.createPage({ name: "Controls Breakout Room" });
-            editor.createPage({ name: "Electrical Breakout Room" });
-            editor.setCurrentPage(pages[0].id);
+          if (renderToken !== tldrawRenderToken || view !== "canvas") {
+            return;
           }
-          loadTldrawSnapshot(state.tldrawSnapshot);
-          editor.store.listen(
-            () => {
-              if (applyingTldrawSnapshot) return;
+          tldrawEditor = editor;
+          loadProjectTldrawSnapshot(state.projectDrawings[projectId]);
+          const unbindPointerPresence = bindTldrawPointerPresence(
+            container,
+            editor,
+            projectId,
+          );
+          tldrawUnlisten = editor.store.listen(
+            (update) => {
+              if (
+                applyingTldrawSnapshot ||
+                tldrawEditor !== editor ||
+                scope !== projectId
+              )
+                return;
               state = {
                 ...state,
                 projectDrawings: {
@@ -540,7 +765,24 @@ async function initTldrawBoard() {
                   [projectId]: editor.store.getSnapshot(),
                 },
               };
-              persist();
+              if (update.source !== "user") return;
+              const added = documentRecords(update.changes.added);
+              const updated = documentUpdates(update.changes.updated);
+              const removed = Object.fromEntries(
+                Object.entries(update.changes.removed || {}).filter(
+                  ([, record]) =>
+                    !tldrawInstanceRecordTypes.has(record.typeName),
+                ),
+              );
+              const broadcast = workspaceChannel?.send({
+                type: "broadcast",
+                event: "tldraw-changes",
+                payload: { projectId, added, updated, removed },
+              });
+              broadcast?.catch((error) =>
+                notify("Live drawing update failed: " + error.message),
+              );
+              scheduleTldrawPersist();
             },
             { scope: "document" },
           );
@@ -1225,21 +1467,10 @@ function bindBoard() {
   };
 }
 function deleteSelection() {
-  if (!selected) return;
-  checkpoint();
-  if (selected.kind === "node") {
-    state.nodes = state.nodes.filter((n) => n.id !== selected.id);
-    state.edges = state.edges.filter(
-      (e) => e.from !== selected.id && e.to !== selected.id,
-    );
-  }
-  if (selected.kind === "edge")
-    state.edges = state.edges.filter((e) => e.id !== selected.id);
-  if (selected.kind === "stroke")
-    state.strokes = state.strokes.filter((s) => s.id !== selected.id);
-  selected = null;
-  persist();
-  renderBoardPreservingScroll();
+  if (!tldrawEditor) return;
+  const shapeIds = tldrawEditor.getSelectedShapeIds();
+  if (!shapeIds.length) return;
+  tldrawEditor.deleteShapes(shapeIds);
 }
 function overviewHTML() {
   const files = state.files.filter(inScope),
@@ -1857,17 +2088,6 @@ document.addEventListener("click", async (e) => {
     await removeLocalFile(el.dataset.removeFile);
     return;
   }
-  if (el.dataset.selectEdge) {
-    selected = { kind: "edge", id: el.dataset.selectEdge };
-    renderBoardPreservingScroll();
-  }
-  if (el.dataset.unlink && selected?.kind === "node") {
-    checkpoint();
-    const n = state.nodes.find((n) => n.id === selected.id);
-    n.files = n.files.filter((id) => id !== el.dataset.unlink);
-    persist();
-    renderBoardPreservingScroll();
-  }
   if (el.dataset.photo) {
     const f = state.files.find((f) => f.id === el.dataset.photo),
       url = await fileURL(f.id);
@@ -1937,20 +2157,9 @@ document.addEventListener("click", async (e) => {
   if (action === "storage") showStorage();
   if (action === "export") exportBackup();
   if (action === "import") $("#backup-input").click();
-  if (action === "undo") undo();
   if (action === "delete-selection") deleteSelection();
   if (action === "choose-bom") chooseBOM();
   if (action === "add-bom-row") addBOMRow();
-  if (action === "zoom-in" || action === "zoom-out") {
-    zoom = Math.max(
-      0.4,
-      Math.min(
-        1.6,
-        Math.round((zoom + (action === "zoom-in" ? 0.1 : -0.1)) * 10) / 10,
-      ),
-    );
-    renderBoardPreservingScroll();
-  }
 });
 $("#close-dialog").onclick = () => $("#dialog").close();
 $("#dialog").onclick = (e) => {
@@ -1972,8 +2181,14 @@ $("#backup-input").onchange = (e) => {
     state = normalizeWorkspaceState(data?.data);
     storageAvailable = true;
     // Listen for live updates from other team members
-    supabaseClient
+    workspaceChannel = supabaseClient
       .channel("workspace-updates")
+      .on("broadcast", { event: "tldraw-changes" }, ({ payload }) => {
+        applyTldrawChanges(payload);
+      })
+      .on("broadcast", { event: "tldraw-pointer" }, ({ payload }) => {
+        handleTldrawPointer(payload);
+      })
       .on(
         "postgres_changes",
         {
@@ -1984,12 +2199,9 @@ $("#backup-input").onchange = (e) => {
         },
         (payload) => {
           if (payload.new && payload.new.data) {
-            state = payload.new.data;
-            loadTldrawSnapshot(state.tldrawSnapshot);
+            state = normalizeWorkspaceState(payload.new.data);
 
-            // Redraw the screen to show the new changes,
-            // but skip the re-render if the user is actively dragging/drawing
-            if (!gesture) {
+            if (view !== "canvas") {
               render();
             }
           }
