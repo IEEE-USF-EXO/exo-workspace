@@ -77,12 +77,7 @@ async function checkUserSession() {
 
   if (session) {
     const metadata = session.user?.user_metadata || {};
-    tldrawPointerName = firstName(
-      metadata.full_name ||
-        metadata.name ||
-        metadata.user_name ||
-        session.user?.email,
-    );
+    
     googleAccessToken = session.provider_token || sessionStorage.getItem("google_provider_token");
     if (session.provider_token) {
       sessionStorage.setItem("google_provider_token", session.provider_token);
