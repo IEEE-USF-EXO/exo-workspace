@@ -25,6 +25,42 @@ let googleAccessToken = sessionStorage.getItem("google_provider_token");
 let sharedBOMRows = [];
 let driveFolders = [];
 let driveTokenExpired = false;
+let tldrawRoot = null;
+let tldrawImportPromise = null;
+let tldrawRenderToken = 0;
+let tldrawEditor = null;
+let tldrawUnlisten = null;
+let workspaceChannel = null;
+let applyingTldrawSnapshot = false;
+let tldrawPersistTimer = null;
+let remoteTldrawPointers = new Map();
+let pointerBroadcastFrame = null;
+let localPointer = null;
+let tldrawPointerName = "Collaborator";
+const tldrawClientId =
+  globalThis.crypto?.randomUUID?.() ||
+  `client-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+const tldrawPointerColors = [
+  "#e45756",
+  "#3a86ff",
+  "#8338ec",
+  "#fb8500",
+  "#2a9d8f",
+  "#d63384",
+  "#6f42c1",
+  "#198754",
+];
+const tldrawPointerColor =
+  tldrawPointerColors[
+    Math.floor(Math.random() * tldrawPointerColors.length)
+  ];
+const tldrawPointerHue = Math.floor(Math.random() * 360);
+const tldrawInstanceRecordTypes = new Set([
+  "camera",
+  "instance",
+  "instance_page_state",
+  "pointer",
+]);
 
 async function signInWithGoogle() {
   if (window.location.protocol === "file:") {
@@ -358,9 +394,12 @@ async function syncDriveFiles() {
 // ==========================================
 const $ = (s, root = document) => root.querySelector(s),
   $$ = (s, root = document) => Array.from(root.querySelectorAll(s));
-$("#close-startup-overlay").onclick = () => {
-  $("#startup-overlay").hidden = true;
-};
+const startupOverlayClose = $("#close-startup-overlay");
+if (startupOverlayClose) {
+  startupOverlayClose.onclick = () => {
+    $("#startup-overlay").hidden = true;
+  };
+}
 const esc = (v) =>
   String(v ?? "").replace(
     /[&<>"']/g,
@@ -466,47 +505,9 @@ let state = initial(),
   driveExplorerSearch = "",
   driveExplorerSort = "name",
   driveExplorerView = "list";
-let tldrawRoot = null;
-let tldrawImportPromise = null;
-let tldrawRenderToken = 0;
-let tldrawEditor = null;
-let tldrawUnlisten = null;
-let workspaceChannel = null;
-let applyingTldrawSnapshot = false;
-let tldrawPersistTimer = null;
-let remoteTldrawPointers = new Map();
-let pointerBroadcastFrame = null;
-let localPointer = null;
-let tldrawPointerName = "Collaborator";
-const tldrawClientId =
-  globalThis.crypto?.randomUUID?.() ||
-  `client-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
-const tldrawPointerColors = [
-  "#e45756",
-  "#3a86ff",
-  "#8338ec",
-  "#fb8500",
-  "#2a9d8f",
-  "#d63384",
-  "#6f42c1",
-  "#198754",
-];
-const tldrawPointerColor =
-  tldrawPointerColors[
-    Math.floor(Math.random() * tldrawPointerColors.length)
-  ];
-const tldrawPointerHue = Math.floor(Math.random() * 360);
-
 function firstName(value) {
   return String(value || "Collaborator").trim().split(/\s+/)[0] || "Collaborator";
 }
-
-const tldrawInstanceRecordTypes = new Set([
-  "camera",
-  "instance",
-  "instance_page_state",
-  "pointer",
-]);
 
 function scheduleTldrawPersist() {
   clearTimeout(tldrawPersistTimer);
