@@ -535,6 +535,24 @@ nav {
   overscroll-behavior: contain;
   touch-action: none;
 }
+.tldraw-stage {
+  position: relative;
+  width: 100%;
+  height: 75vh;
+  border-radius: 8px;
+  overflow: hidden;
+  border: 1px solid var(--line);
+}
+.tldraw-stage > #tldraw-container {
+  width: 100%;
+  height: 100%;
+}
+.tldraw-stage > #tldraw-pointer-overlay {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  z-index: 20;
+}
 .world-space {
   position: relative;
 }
@@ -1442,6 +1460,186 @@ dialog::backdrop {
   .app {
     display: block;
   }
+}
+@media (max-width: 768px) {
+    body {
+      overflow-x: hidden;
+    }
+    .app {
+      display: block;
+      min-height: 100dvh;
+    }
+    .sidebar {
+      position: fixed;
+      top: auto;
+      z-index: 1000;
+      right: 0;
+      bottom: 0;
+      left: 0;
+      width: 100%;
+      height: auto;
+      min-height: 62px;
+      padding: 4px 8px env(safe-area-inset-bottom);
+      border: 0;
+      border-top: 1px solid var(--line);
+      background: rgb(255 255 255 / 94%);
+      box-shadow: 0 -4px 18px rgb(34 62 50 / 8%);
+      backdrop-filter: blur(12px);
+    }
+    .sidebar .brand,
+    .sidebar .nav-label,
+    .sidebar .project-list,
+    .sidebar .sidebar-bottom,
+    .sidebar .add-project {
+      display: none;
+    }
+    .sidebar nav {
+      display: grid;
+      grid-template-columns: repeat(6, minmax(0, 1fr));
+      gap: 2px;
+      width: 100%;
+      overflow: visible;
+    }
+    .nav {
+      width: 100%;
+      min-height: 56px;
+      padding: 5px 2px;
+      border-radius: 7px;
+      display: flex;
+      flex-direction: column;
+      justify-content: center;
+      gap: 2px;
+      text-align: center;
+      font-size: 9px;
+      line-height: 1.1;
+      white-space: normal;
+    }
+    .nav .symbol {
+      width: auto;
+      font-size: 19px;
+      line-height: 1;
+    }
+    .nav[data-view="canvas"] {
+      font-size: 0;
+    }
+    .nav[data-view="canvas"]::after {
+      content: "Board";
+      font-size: 9px;
+    }
+    .nav[data-view="gallery"] {
+      font-size: 0;
+    }
+    .nav[data-view="gallery"]::after {
+      content: "Photos";
+      font-size: 9px;
+    }
+    .nav[data-view="resources"] {
+      font-size: 0;
+    }
+    .nav[data-view="resources"]::after {
+      content: "Links";
+      font-size: 9px;
+    }
+    main {
+      min-width: 0;
+    }
+    .topbar {
+      height: 58px;
+      padding: 0 12px;
+      gap: 8px;
+    }
+    .breadcrumbs {
+      min-width: 0;
+      gap: 6px;
+    }
+    .breadcrumbs > span,
+    .breadcrumbs > b {
+      display: none;
+    }
+    .project-context {
+      display: none;
+    }
+    #project-context {
+      min-height: 40px;
+      max-width: 130px;
+      padding: 6px 8px;
+    }
+    .topbar-right {
+      min-width: 0;
+      margin-left: auto;
+      gap: 6px;
+    }
+    .status {
+      width: 9px;
+      height: 9px;
+      flex: 0 0 9px;
+      overflow: hidden;
+      border-radius: 50%;
+      background: #6b9573;
+      font-size: 0;
+    }
+    .text-button,
+    .primary,
+    .secondary {
+      min-height: 40px;
+    }
+    .text-button {
+      padding: 5px;
+      font-size: 10px;
+    }
+    #login-btn,
+    #logout-btn {
+      padding: 6px 8px !important;
+      font-size: 10px !important;
+    }
+    #login-btn {
+      font-size: 0 !important;
+    }
+    #login-btn::after {
+      content: "Sign in";
+      font-size: 10px;
+    }
+    .content {
+      padding: 20px 14px 72px;
+    }
+    .stats {
+      grid-template-columns: repeat(2, minmax(0, 1fr));
+      gap: 10px;
+    }
+    .stat {
+      padding: 14px;
+    }
+    .overview-actions {
+      grid-template-columns: 1fr;
+    }
+    .table-scroll,
+    .drive-table-wrap {
+      overflow-x: auto;
+      -webkit-overflow-scrolling: touch;
+    }
+    .footer {
+      display: none;
+    }
+    .app[data-view="canvas"] .heading {
+      display: none;
+    }
+    .app[data-view="canvas"] .content {
+      padding: 0 0 62px;
+    }
+    .app[data-view="canvas"] .tldraw-stage {
+      height: calc(100dvh - 58px - 62px - env(safe-area-inset-bottom));
+      min-height: 0;
+      border: 0;
+      border-radius: 0;
+      touch-action: none;
+      overscroll-behavior: none;
+    }
+    .app[data-view="canvas"] .tldraw-stage > #tldraw-container {
+      touch-action: none;
+      overscroll-behavior: none;
+    }
+}
+@media (min-width: 769px) and (max-width: 850px) {
   .sidebar {
     height: auto;
     position: static;
@@ -1963,6 +2161,87 @@ dialog::backdrop {
   border: 0;
   border-radius: 6px;
   background: #f5f7f5;
+}
+@media (max-width: 768px) {
+  html,
+  body,
+  *,
+  .app,
+  .content,
+  .sidebar,
+  .drive-file-list,
+  .table-scroll,
+  .drive-table-wrap {
+    scrollbar-width: none;
+  }
+  html::-webkit-scrollbar,
+  body::-webkit-scrollbar,
+  *::-webkit-scrollbar,
+  .app::-webkit-scrollbar,
+  .content::-webkit-scrollbar,
+  .sidebar::-webkit-scrollbar,
+  .drive-file-list::-webkit-scrollbar,
+  .table-scroll::-webkit-scrollbar,
+  .drive-table-wrap::-webkit-scrollbar {
+    display: none;
+  }
+  dialog.drive-preview-modal {
+    position: fixed;
+    inset: 0;
+    width: 100vw;
+    max-width: none;
+    max-height: none;
+    height: 100dvh;
+    margin: auto;
+    border-radius: 0;
+    overflow: hidden;
+  }
+  .drive-preview-modal .modal {
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+    max-height: none;
+    padding: 16px;
+    padding-bottom: 0;
+    overflow: hidden;
+  }
+  .drive-preview-modal #modal-body {
+    display: flex;
+    flex: 1 1 auto;
+    flex-direction: column;
+    height: 0;
+    min-height: 0;
+    overflow: hidden;
+  }
+  .drive-preview-modal .modal-head {
+    flex: 0 0 auto;
+    margin-bottom: 14px;
+  }
+  .drive-preview-modal .modal-head h2 {
+    max-width: calc(100% - 42px);
+    overflow-wrap: anywhere;
+    font-size: 18px;
+    line-height: 1.25;
+  }
+  .drive-preview-modal .drive-modal-actions {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    flex: 0 0 auto;
+    gap: 8px;
+    margin: 0 0 12px;
+  }
+  .drive-preview-modal .drive-modal-actions a {
+    min-height: 42px;
+    padding: 10px 8px;
+    text-align: center;
+  }
+  .drive-preview-modal .drive-modal-preview {
+    flex: 1 1 auto;
+    min-height: 0;
+    width: 100%;
+    height: 100%;
+    border-radius: 0;
+  }
 }
 .sr-only {
   position: absolute;

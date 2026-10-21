@@ -27,6 +27,7 @@ let driveFolders = [];
 let driveTokenExpired = false;
 let tldrawRoot = null;
 let tldrawImportPromise = null;
+let tldrawGetSnapshot = null;
 let tldrawRenderToken = 0;
 let tldrawEditor = null;
 let tldrawUnlisten = null;
@@ -533,6 +534,9 @@ function documentUpdates(updates) {
     ),
   );
 }
+function snapshotTldrawStore(store) {
+  return tldrawGetSnapshot ? tldrawGetSnapshot(store) : store.getSnapshot();
+}
 
 function broadcastTldrawPointer(point, active) {
   if (!workspaceChannel) return;
@@ -646,7 +650,7 @@ function applyTldrawChanges(payload) {
       ...state,
       projectDrawings: {
         ...state.projectDrawings,
-        [scope]: tldrawEditor.store.getSnapshot(),
+        [scope]: snapshotTldrawStore(tldrawEditor.store),
       },
     };
   } finally {
@@ -660,7 +664,7 @@ function saveActiveTldrawSnapshot() {
     ...state,
     projectDrawings: {
       ...state.projectDrawings,
-      [scope]: tldrawEditor.store.getSnapshot(),
+      [scope]: snapshotTldrawStore(tldrawEditor.store),
     },
   };
 }
@@ -729,8 +733,9 @@ async function initTldrawBoard() {
         import("https://esm.sh/tldraw@3?external=react,react-dom"),
       ]);
     }
-    const [{ createRoot }, { default: React }, { Tldraw }] =
+    const [{ createRoot }, { default: React }, { getSnapshot, Tldraw }] =
       await tldrawImportPromise;
+    tldrawGetSnapshot = getSnapshot;
     if (
       renderToken !== tldrawRenderToken ||
       view !== "canvas" ||
@@ -763,7 +768,7 @@ async function initTldrawBoard() {
                 ...state,
                 projectDrawings: {
                   ...state.projectDrawings,
-                  [projectId]: editor.store.getSnapshot(),
+                  [projectId]: snapshotTldrawStore(editor.store),
                 },
               };
               if (update.source !== "user") return;
@@ -985,6 +990,7 @@ function openModal(title, html) {
   $("#modal-title").textContent = title;
   $("#modal-body").innerHTML = html;
   $("#dialog").classList.remove("lightbox");
+  $("#dialog").classList.remove("drive-preview-modal");
   $("#dialog").showModal();
 }
 const actions = (label) =>
@@ -1188,7 +1194,7 @@ function toolHint() {
         : "Drag cards to arrange them. Select a connection to label it.";
 }
 function boardHTML() {
-  return '<div id="tldraw-stage" style="position: relative; width: 100%; height: 75vh; border-radius: 8px; overflow: hidden; border: 1px solid var(--line);"><div id="tldraw-container" style="width: 100%; height: 100%;"></div><div id="tldraw-pointer-overlay" style="position: absolute; inset: 0; pointer-events: none; z-index: 20;"></div></div>';
+  return '<div id="tldraw-stage" class="tldraw-stage"><div id="tldraw-container"></div><div id="tldraw-pointer-overlay"></div></div>';
 }
 function edgeSVG(edge) {
   const a = state.nodes.find((n) => n.id === edge.from),
@@ -1477,7 +1483,7 @@ function overviewHTML() {
   const files = state.files.filter(inScope),
     records = Object.values(state.projectDrawings[scope]?.store || {}),
     shapes = records.filter((record) => record.typeName === "shape");
-  return `<div class="stats"><div class="stat"><span>Files</span><b>${files.length}</b><small>${sizeOf(files.reduce((s, f) => s + f.size, 0))} in Google Drive</small></div><div class="stat"><span>Drawing shapes</span><b>${shapes.length}</b><small>Stored in the shared Tldraw board</small></div><div class="stat"><span>Drawing records</span><b>${records.length}</b><small>Shapes, assets, bindings, and pages</small></div><div class="stat"><span>Gallery photos</span><b>${files.filter(isPhoto).length}</b><small>From Google Drive</small></div></div><div class="overview-actions"><button class="overview-action" data-view="canvas"><b>â†— Open the drawing board</b><p>Draw, arrange, and connect ideas with Tldraw.</p></button><button class="overview-action" data-view="bom"><b>â˜· Open the BOM</b><p>Search components and compare project parts lists.</p></button><button class="overview-action" data-view="gallery"><b>â–§ Tell the story in photos</b><p>Build a gallery of assemblies, prototypes, and progress.</p></button></div><div class="panel"><div class="panel-head"><div><h2>A workspace you can take with you.</h2><p>Open the dashboard, organize Drive files, and connect them to your project work.</p></div><button class="secondary" data-action="storage">How storage works</button></div></div>`;
+  return `<div class="stats"><div class="stat"><span>Files</span><b>${files.length}</b><small>${sizeOf(files.reduce((s, f) => s + f.size, 0))} in Google Drive</small></div><div class="stat"><span>Drawing shapes</span><b>${shapes.length}</b><small>Stored in the shared Tldraw board</small></div><div class="stat"><span>Drawing records</span><b>${records.length}</b><small>Shapes, assets, bindings, and pages</small></div><div class="stat"><span>Gallery photos</span><b>${files.filter(isPhoto).length}</b><small>From Google Drive</small></div></div><div class="overview-actions"><button class="overview-action" data-view="canvas"><b>&#8599; Open the drawing board</b><p>Draw, arrange, and connect ideas with Tldraw.</p></button><button class="overview-action" data-view="bom"><b>&#9783; Open the BOM</b><p>Search components and compare project parts lists.</p></button><button class="overview-action" data-view="gallery"><b>&#9639; Tell the story in photos</b><p>Build a gallery of assemblies, prototypes, and progress.</p></button></div><div class="panel"><div class="panel-head"><div><h2>A workspace you can take with you.</h2><p>Open the dashboard, organize Drive files, and connect them to your project work.</p></div><button class="secondary" data-action="storage">How storage works</button></div></div>`;
 }
 function fileRows(files) {
   return files
@@ -1536,6 +1542,7 @@ function openDrivePreview(file) {
     file.name,
     `<div class="drive-modal-actions"><a class="secondary" href="${esc(file.webContentLink || "#")}" ${file.webContentLink ? "download" : "aria-disabled=\"true\" tabindex=\"-1\""}>Download</a><a class="primary" href="${esc(file.webViewLink || `https://drive.google.com/file/d/${encodeURIComponent(file.id)}/view`)}" target="_blank" rel="noopener noreferrer">Open in Drive</a></div><iframe class="drive-modal-preview" src="https://drive.google.com/file/d/${encodeURIComponent(file.id)}/preview" title="Preview of ${esc(file.name)}" allow="autoplay"></iframe>`,
   );
+  $("#dialog").classList.add("drive-preview-modal");
 }
 function driveExplorerHTML() {
   const reconnect = !googleAccessToken;
@@ -1924,6 +1931,7 @@ async function importBackup(file) {
 }
 function render() {
   disposeTldrawBoard();
+  $(".app").dataset.view = view;
   const labels = {
     overview: [
       "The whole project, at a glance.",
