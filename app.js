@@ -398,6 +398,7 @@ const initial = () => ({
   nodes: [],
   edges: [],
   strokes: [],
+  tldrawSnapshot: null,
   resources: [],
   bom: {},
   bomEntries: [],
@@ -453,9 +454,22 @@ let state = initial(),
 let tldrawRoot = null;
 let tldrawImportPromise = null;
 let tldrawRenderToken = 0;
+let tldrawEditor = null;
+let applyingTldrawSnapshot = false;
+
+function loadTldrawSnapshot(snapshot) {
+  if (!tldrawEditor || !snapshot?.store) return;
+  applyingTldrawSnapshot = true;
+  try {
+    tldrawEditor.store.loadSnapshot(snapshot);
+  } finally {
+    applyingTldrawSnapshot = false;
+  }
+}
 
 function disposeTldrawBoard() {
   tldrawRenderToken += 1;
+  tldrawEditor = null;
   if (!tldrawRoot) return;
   try {
     tldrawRoot.unmount();
@@ -492,13 +506,26 @@ async function initTldrawBoard() {
       React.createElement(Tldraw, {
         persistenceKey: `exo-board-${scope}`,
         onMount: (editor) => {
+          tldrawEditor = editor;
           const pages = editor.getPages();
-          if (pages.length !== 1 || pages[0].name !== "Page 1") return;
-
-          editor.renamePage(pages[0].id, "Main Architecture");
-          editor.createPage({ name: "Controls Breakout Room" });
-          editor.createPage({ name: "Electrical Breakout Room" });
-          editor.setCurrentPage(pages[0].id);
+          if (pages.length === 1 && pages[0].name === "Page 1") {
+            editor.renamePage(pages[0].id, "Main Architecture");
+            editor.createPage({ name: "Controls Breakout Room" });
+            editor.createPage({ name: "Electrical Breakout Room" });
+            editor.setCurrentPage(pages[0].id);
+          }
+          loadTldrawSnapshot(state.tldrawSnapshot);
+          editor.store.listen(
+            () => {
+              if (applyingTldrawSnapshot) return;
+              state = {
+                ...state,
+                tldrawSnapshot: editor.store.getSnapshot(),
+              };
+              persist();
+            },
+            { scope: "document" },
+          );
         },
       }),
     );
@@ -2011,6 +2038,7 @@ window.addEventListener("beforeunload", (e) => {
         (payload) => {
           if (payload.new && payload.new.data) {
             state = payload.new.data;
+            loadTldrawSnapshot(state.tldrawSnapshot);
 
             // Redraw the screen to show the new changes,
             // but skip the re-render if the user is actively dragging/drawing
