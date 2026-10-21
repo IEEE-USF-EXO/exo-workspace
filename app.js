@@ -390,7 +390,9 @@ let state = initial(),
   driveExplorerFolder = ROOT_DRIVE_FOLDER_ID,
   driveExplorerBreadcrumbs = [{ id: ROOT_DRIVE_FOLDER_ID, name: "EXO Root" }],
   driveExplorerFiles = [],
-  driveExplorerSelected = null;
+  driveExplorerSelected = null,
+  driveExplorerLoading = false,
+  driveExplorerError = "";
 const folderIds = [
   ["exo", "Controls", "1Pdx0N6EHctdZKqb7P29tVHuNVr8v8yrN"],
   ["exo", "Electrical", "1WLCSZ5bMisg1GjJH-oVJhsXjM938elaR"],
@@ -1191,12 +1193,22 @@ async function loadDriveExplorer(folderId = ROOT_DRIVE_FOLDER_ID, breadcrumb = [
   driveExplorerFolder = folderId;
   driveExplorerBreadcrumbs = breadcrumb;
   driveExplorerSelected = null;
-  if (!googleAccessToken) { driveExplorerFiles = []; if (view === "files") render(); return; }
+  driveExplorerError = "";
+  if (!googleAccessToken) {
+    driveExplorerFiles = [];
+    if (view === "files") render();
+    return;
+  }
+  driveExplorerLoading = true;
+  if (view === "files") render();
   try {
     driveExplorerFiles = await listDriveFiles(folderId);
-    if (view === "files") render();
   } catch (error) {
-    notify(error.message);
+    driveExplorerFiles = [];
+    driveExplorerError = error instanceof Error ? error.message : "Google Drive could not be loaded.";
+    notify(driveExplorerError);
+  } finally {
+    driveExplorerLoading = false;
     if (view === "files") render();
   }
 }
@@ -1204,7 +1216,17 @@ function driveExplorerHTML() {
   const reconnect = !googleAccessToken;
   const files = driveExplorerFiles;
   const selected = driveExplorerSelected;
-  return `<section class="panel drive-explorer"><div class="drive-toolbar"><div class="drive-breadcrumbs">${driveExplorerBreadcrumbs.map((crumb, index) => `<button class="text-button" data-drive-folder="${esc(crumb.id)}" data-drive-breadcrumb-index="${index}">${esc(crumb.name)}</button>${index < driveExplorerBreadcrumbs.length - 1 ? "<span> / </span>" : ""}`).join("")}</div><div class="row"><button class="secondary" data-action="new-drive-folder" ${reconnect ? "disabled" : ""}>＋ New Folder</button><button class="primary" data-action="upload-drive-files" ${reconnect ? "disabled" : ""}>↑ Upload File(s)</button><input id="drive-upload-input" type="file" multiple hidden><div class="drive-drop-zone" id="drive-drop-zone">Drop files here to upload</div></div></div>${reconnect ? `<div class="drive-reconnect"><p>${sessionStorage.getItem("google_provider_token") ? "Your Google Drive connection needs to be refreshed." : "Sign in with Google to browse the shared Drive folder."}</p><button class="primary" data-action="login">Reconnect Google Drive</button></div>` : `<div class="drive-split"><div class="drive-file-list" id="drive-file-list">${files.length ? files.map((file) => { const folder = file.mimeType === GOOGLE_DRIVE_FOLDER_MIME; return `<button class="drive-file" data-drive-item="${esc(file.id)}" data-drive-is-folder="${folder}" data-drive-name="${esc(file.name)}"><span class="drive-file-icon">${folder ? "▰" : "▱"}</span><span class="drive-file-main"><b>${esc(file.name)}</b><small>${folder ? "Folder" : `${file.size ? sizeOf(Number(file.size)) : "Google file"} · ${file.modifiedTime ? new Date(file.modifiedTime).toLocaleDateString() : ""}`}</small></span></button>`; }).join("") : empty("▱", "This folder is empty.", "Upload a file or create a subfolder to get started.")}</div><div class="drive-preview">${selected ? `<div class="drive-preview-head"><strong>${esc(selected.name)}</strong><span class="row"><a href="${esc(selected.webContentLink || "#")}" ${selected.webContentLink ? "download" : "aria-disabled=\"true\""}>Download</a><a class="secondary" href="${esc(selected.webViewLink || `https://drive.google.com/file/d/${selected.id}/view`)}" target="_blank" rel="noopener noreferrer">Open in Drive</a></span></div><iframe src="https://drive.google.com/file/d/${encodeURIComponent(selected.id)}/preview" title="Preview of ${esc(selected.name)}" allow="autoplay"></iframe>` : `<div class="empty"><div class="empty-symbol">▣</div><h3>Select a file to preview</h3><p>PDFs, documents, sheets, photos, videos, and other Drive files stay in this dashboard.</p></div>`}</div></div>`}</section>`;
+  const listContent = driveExplorerLoading
+    ? `<div class="empty"><p>Loading Drive contents…</p></div>`
+    : driveExplorerError
+      ? `<div class="empty"><h3>Unable to load this folder</h3><p>${esc(driveExplorerError)}</p><button class="secondary" data-action="refresh-drive-folder">Try again</button></div>`
+      : files.length
+        ? files.map((file) => {
+            const folder = file.mimeType === GOOGLE_DRIVE_FOLDER_MIME;
+            return `<button class="drive-file ${selected?.id === file.id ? "selected" : ""}" data-drive-item="${esc(file.id)}" aria-label="${folder ? "Open folder" : "Preview file"}: ${esc(file.name)}"><span class="drive-file-icon" aria-hidden="true">${folder ? "▰" : "▱"}</span><span class="drive-file-main"><b>${esc(file.name)}</b><small>${folder ? "Folder" : `${file.size ? sizeOf(Number(file.size)) : "Google file"} · ${file.modifiedTime ? new Date(file.modifiedTime).toLocaleDateString() : ""}`}</small></span></button>`;
+          }).join("")
+        : empty("▱", "This folder is empty.", "Upload a file or create a subfolder to get started.");
+  return `<section class="panel drive-explorer"><div class="drive-toolbar"><div class="drive-breadcrumbs" aria-label="Drive folder path">${driveExplorerBreadcrumbs.map((crumb, index) => `<button class="text-button" data-drive-folder="${esc(crumb.id)}" data-drive-breadcrumb-index="${index}">${esc(crumb.name)}</button>${index < driveExplorerBreadcrumbs.length - 1 ? "<span aria-hidden=\"true\"> / </span>" : ""}`).join("")}</div><div class="row"><button class="secondary" data-action="new-drive-folder" ${reconnect ? "disabled" : ""}>＋ New Folder</button><button class="primary" data-action="upload-drive-files" ${reconnect ? "disabled" : ""}>↑ Upload File(s)</button><input id="drive-upload-input" type="file" multiple hidden><div class="drive-drop-zone" id="drive-drop-zone">Drop files here to upload</div></div></div>${reconnect ? `<div class="drive-reconnect"><p>${sessionStorage.getItem("google_provider_token") ? "Your Google Drive connection needs to be refreshed." : "Sign in with Google to browse the shared Drive folder."}</p><button class="primary" data-action="login">Reconnect Google Drive</button></div>` : `<div class="drive-split"><div class="drive-file-list" id="drive-file-list">${listContent}</div><div class="drive-preview">${selected ? `<div class="drive-preview-head"><strong>${esc(selected.name)}</strong><span class="row"><a class="secondary ${selected.webContentLink ? "" : "disabled"}" href="${esc(selected.webContentLink || "#")}" ${selected.webContentLink ? "download" : "aria-disabled=\"true\" tabindex=\"-1\""}>Download</a><a class="primary" href="${esc(selected.webViewLink || `https://drive.google.com/file/d/${encodeURIComponent(selected.id)}/view`)}" target="_blank" rel="noopener noreferrer">Open in Drive</a></span></div><iframe src="https://drive.google.com/file/d/${encodeURIComponent(selected.id)}/preview" width="100%" height="500px" title="Preview of ${esc(selected.name)}" style="border: none; border-radius: 6px;" allow="autoplay"></iframe>` : `<div class="empty"><div class="empty-symbol">▣</div><h3>Select a file to preview</h3><p>PDFs, documents, sheets, photos, videos, and other Drive files stay in this dashboard.</p></div>`}</div></div>`}</section>`;
 }
 function filesHTML() {
   return driveExplorerHTML();
@@ -1807,6 +1829,9 @@ document.addEventListener("click", async (e) => {
   if (el.hasAttribute("data-close")) $("#dialog").close();
   const action = el.dataset.action;
   if (action === "login") signInWithGoogle();
+  if (action === "refresh-drive-folder") {
+    loadDriveExplorer(driveExplorerFolder, driveExplorerBreadcrumbs);
+  }
   if (action === "refresh-drive") {
     syncDriveFiles().catch((error) => {
       driveSyncing = false;

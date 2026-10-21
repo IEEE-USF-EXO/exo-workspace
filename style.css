@@ -1113,26 +1113,35 @@ dialog::backdrop {
   overflow: hidden;
 }
 .drive-file-list {
-  padding: 8px;
+  padding: 4px;
   overflow: auto;
   border-right: 1px solid var(--line);
-  background: #fbfdf9;
+  background: #fff;
 }
 .drive-file {
   display: flex;
   align-items: center;
   gap: 11px;
   width: 100%;
-  padding: 11px;
+  min-height: 48px;
+  padding: 8px 10px;
   border-radius: 6px;
   text-align: left;
 }
 .drive-file:hover {
-  background: var(--soft);
+  background: #f8f9fa;
+}
+.drive-file.selected {
+  background: #e8f0fe;
+}
+.drive-file.selected:hover {
+  background: #e8f0fe;
 }
 .drive-file-icon {
+  width: 22px;
   color: var(--gold);
   font-size: 18px;
+  text-align: center;
 }
 .drive-file-main {
   display: grid;
@@ -1172,6 +1181,7 @@ dialog::backdrop {
   width: 100%;
   min-height: 500px;
   border: 0;
+  border-radius: 6px;
 }
 @media (min-width: 1600px) {
   .content {
