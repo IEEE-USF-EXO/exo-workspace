@@ -395,17 +395,19 @@ const initial = () => ({
     },
   ],
   files: [],
-  nodes: [],
-  edges: [],
-  strokes: [],
   tldrawSnapshot: null,
   resources: [],
   bom: {},
   bomEntries: [],
 });
-let penColor = "#346d4b";
+function normalizeWorkspaceState(data) {
+  const next = { ...initial(), ...(data || {}) };
+  delete next.nodes;
+  delete next.edges;
+  delete next.strokes;
+  return next;
+}
 document.addEventListener("input", (event) => {
-  if (event.target.id === "pen-color") penColor = event.target.value;
   if (event.target.id === "drive-search") {
     driveExplorerSearch = event.target.value;
     render();
@@ -425,10 +427,6 @@ document.addEventListener("change", (event) => {
 let state = initial(),
   view = "overview",
   scope = "exo",
-  tool = "select",
-  selected = null,
-  connectFrom = null,
-  zoom = 1,
   search = "",
   fileTeam = "all",
   bomSearch = "",
@@ -436,10 +434,8 @@ let state = initial(),
   bomStage = "all",
   bomPrice = "all",
   storageAvailable = false,
-  history = [],
   saving = Promise.resolve(),
   urls = new Map(),
-  gesture = null,
   toastTimer,
   driveSyncing = false,
   driveExplorerFolder = ROOT_DRIVE_FOLDER_ID,
@@ -709,25 +705,6 @@ function persist() {
     });
   return saving;
 }
-function checkpoint() {
-  history.push(
-    JSON.stringify({
-      nodes: state.nodes,
-      edges: state.edges,
-      strokes: state.strokes,
-    }),
-  );
-  if (history.length > 35) history.shift();
-}
-function undo() {
-  if (!history.length) return;
-  const previous = JSON.parse(history.pop());
-  Object.assign(state, previous);
-  selected = null;
-  connectFrom = null;
-  persist();
-  render();
-}
 function download(blob, name) {
   const url = URL.createObjectURL(blob),
     a = document.createElement("a");
@@ -783,9 +760,6 @@ async function removeLocalFile(id) {
     return;
   }
   state.files = state.files.filter((item) => item.id !== id);
-  for (const node of state.nodes) {
-    node.files = (node.files || []).filter((fileId) => fileId !== id);
-  }
   for (const project of state.projects) {
     if (state.bom[project.id] === id) delete state.bom[project.id];
   }
@@ -934,7 +908,7 @@ function showUpload(photos = false) {
       }
       await saving;
       const next = { ...state, files: [...state.files, ...additions] };
-      state = next;
+      state = normalizeWorkspaceState(next);
       await persist();
       $("#dialog").close();
       render();
@@ -1292,9 +1266,9 @@ function deleteSelection() {
 }
 function overviewHTML() {
   const files = state.files.filter(inScope),
-    nodes = state.nodes.filter(inScope),
-    ids = new Set(nodes.map((n) => n.id));
-  return `<div class="stats"><div class="stat"><span>Files</span><b>${files.length}</b><small>${sizeOf(files.reduce((s, f) => s + f.size, 0))} in Google Drive</small></div><div class="stat"><span>Cards on board</span><b>${nodes.length}</b><small>Manually placed by you</small></div><div class="stat"><span>Relationships</span><b>${state.edges.filter((e) => ids.has(e.from) && ids.has(e.to)).length}</b><small>Connections you have drawn</small></div><div class="stat"><span>Gallery photos</span><b>${files.filter(isPhoto).length}</b><small>From Google Drive</small></div></div><div class="overview-actions"><button class="overview-action" data-view="canvas"><b>â†— Draw the relationships</b><p>Arrange your work and link projects, teams, and files.</p></button><button class="overview-action" data-view="bom"><b>â˜· Open the BOM</b><p>Search components and compare project parts lists.</p></button><button class="overview-action" data-view="gallery"><b>â–§ Tell the story in photos</b><p>Build a gallery of assemblies, prototypes, and progress.</p></button></div><div class="panel"><div class="panel-head"><div><h2>A workspace you can take with you.</h2><p>Open the dashboard, organize Drive files, and connect them to your project work.</p></div><button class="secondary" data-action="storage">How storage works</button></div></div>`;
+    records = Object.values(state.tldrawSnapshot?.store || {}),
+    shapes = records.filter((record) => record.typeName === "shape");
+  return `<div class="stats"><div class="stat"><span>Files</span><b>${files.length}</b><small>${sizeOf(files.reduce((s, f) => s + f.size, 0))} in Google Drive</small></div><div class="stat"><span>Drawing shapes</span><b>${shapes.length}</b><small>Stored in the shared Tldraw board</small></div><div class="stat"><span>Drawing records</span><b>${records.length}</b><small>Shapes, assets, bindings, and pages</small></div><div class="stat"><span>Gallery photos</span><b>${files.filter(isPhoto).length}</b><small>From Google Drive</small></div></div><div class="overview-actions"><button class="overview-action" data-view="canvas"><b>â†— Open the drawing board</b><p>Draw, arrange, and connect ideas with Tldraw.</p></button><button class="overview-action" data-view="bom"><b>â˜· Open the BOM</b><p>Search components and compare project parts lists.</p></button><button class="overview-action" data-view="gallery"><b>â–§ Tell the story in photos</b><p>Build a gallery of assemblies, prototypes, and progress.</p></button></div><div class="panel"><div class="panel-head"><div><h2>A workspace you can take with you.</h2><p>Open the dashboard, organize Drive files, and connect them to your project work.</p></div><button class="secondary" data-action="storage">How storage works</button></div></div>`;
 }
 function fileRows(files) {
   return files
@@ -1636,32 +1610,26 @@ function validateBackup(data) {
     throw new Error("Not an EXO HTML backup.");
   const s = data.state;
   if (
-    !["projects", "files", "nodes", "edges", "strokes", "resources"].every(
+    !["projects", "files", "resources"].every(
       (k) => Array.isArray(s[k]),
     ) ||
     !s.projects.length ||
     !s.bom ||
-    typeof s.bom !== "object"
+    typeof s.bom !== "object" ||
+    (s.tldrawSnapshot !== null &&
+      (typeof s.tldrawSnapshot !== "object" || !s.tldrawSnapshot.store))
   )
     throw new Error("Backup structure is incomplete.");
   const str = (v, max = 2000) => typeof v === "string" && v.length <= max;
   const validId = (v) => str(v, 100) && /^[a-zA-Z0-9_-]+$/.test(v);
-  for (const group of [
-    "projects",
-    "files",
-    "nodes",
-    "edges",
-    "strokes",
-    "resources",
-  ])
+  for (const group of ["projects", "files", "resources"])
     if (
       new Set(s[group].map((x) => x.id)).size !== s[group].length ||
       s[group].some((x) => !validId(x.id))
     )
       throw new Error("Invalid or duplicate record identifiers.");
   const projects = new Set(s.projects.map((x) => x.id)),
-    files = new Set(s.files.map((x) => x.id)),
-    nodes = new Set(s.nodes.map((x) => x.id));
+    files = new Set(s.files.map((x) => x.id));
   for (const p of s.projects)
     if (!str(p.name, 80) || !str(p.description, 500))
       throw new Error("Invalid project.");
@@ -1677,43 +1645,6 @@ function validateBackup(data) {
       (f.driveId && !str(f.driveId, 200))
     )
       throw new Error("Invalid file metadata.");
-  for (const n of s.nodes)
-    if (
-      !projects.has(n.project) ||
-      !str(n.title, 120) ||
-      !str(n.owner, 100) ||
-      !str(n.note) ||
-      !teams.includes(n.team) ||
-      !["Not started", "In progress", "Blocked", "Complete"].includes(
-        n.status,
-      ) ||
-      ![n.x, n.y].every((v) => Number.isFinite(v) && v >= 0 && v <= 2400) ||
-      !Array.isArray(n.files) ||
-      n.files.some((id) => !files.has(id))
-    )
-      throw new Error("Invalid drawing card.");
-  for (const e of s.edges)
-    if (
-      !nodes.has(e.from) ||
-      !nodes.has(e.to) ||
-      !str(e.label, 100) ||
-      !str(e.note, 1500)
-    )
-      throw new Error("Invalid relationship.");
-  for (const p of s.strokes)
-    if (
-      !projects.has(p.project) ||
-      !/^#[0-9a-f]{6}$/i.test(p.color) ||
-      !Array.isArray(p.points) ||
-      p.points.length > 12000 ||
-      p.points.some(
-        (v) =>
-          !Array.isArray(v) ||
-          v.length !== 2 ||
-          !v.every((x) => Number.isFinite(x) && Math.abs(x) < 10000),
-      )
-    )
-      throw new Error("Invalid pen stroke.");
   for (const r of s.resources)
     if (
       !projects.has(r.project) ||
@@ -1766,11 +1697,8 @@ async function importBackup(file) {
     for (const [key, url] of urls)
       if (!key.startsWith("blob-")) URL.revokeObjectURL(url);
     urls.clear();
-    state = next;
+    state = normalizeWorkspaceState(next);
     scope = next.projects[0]?.id;
-    selected = null;
-    connectFrom = null;
-    history = [];
     await persist();
     render();
     notify("Backup imported into the cloud workspace.");
@@ -1840,8 +1768,6 @@ function render() {
       return;
     }
     scope = e.target.value;
-    selected = null;
-    connectFrom = null;
     search = "";
     fileTeam = "all";
     bomSearch = "";
@@ -1906,7 +1832,7 @@ document.addEventListener("click", async (e) => {
   if (!el) return;
   if (el.dataset.view) {
     view = el.dataset.view;
-    selected = null;
+
     render();
     if (view === "files") {
       syncDriveFiles().catch((error) => {
@@ -1920,8 +1846,6 @@ document.addEventListener("click", async (e) => {
   }
   if (el.dataset.project) {
     scope = el.dataset.project;
-    selected = null;
-    connectFrom = null;
     search = "";
     fileTeam = "all";
     bomSearch = "";
@@ -1929,11 +1853,6 @@ document.addEventListener("click", async (e) => {
     bomStage = "all";
     bomPrice = "all";
     render();
-  }
-  if (el.dataset.tool) {
-    tool = el.dataset.tool;
-    connectFrom = null;
-    renderBoardPreservingScroll();
   }
   if (el.dataset.download) {
     e.preventDefault();
@@ -2050,12 +1969,6 @@ $("#backup-input").onchange = (e) => {
   importBackup(e.target.files[0]);
   e.target.value = "";
 };
-window.addEventListener("beforeunload", (e) => {
-  if (gesture) {
-    e.preventDefault();
-    e.returnValue = "";
-  }
-});
 (async () => {
   try {
     const { data, error } = await supabaseClient
@@ -2065,7 +1978,7 @@ window.addEventListener("beforeunload", (e) => {
       .single();
 
     if (error && error.code !== "PGRST116") throw error;
-    state = data ? data.data : initial();
+    state = normalizeWorkspaceState(data?.data);
     storageAvailable = true;
     // Listen for live updates from other team members
     workspaceChannel = supabaseClient
@@ -2083,11 +1996,9 @@ window.addEventListener("beforeunload", (e) => {
         },
         (payload) => {
           if (payload.new && payload.new.data) {
-            state = payload.new.data;
+            state = normalizeWorkspaceState(payload.new.data);
 
-            // Redraw the screen to show the new changes,
-            // but skip the re-render if the user is actively dragging/drawing
-            if (view !== "canvas" && !gesture) {
+            if (view !== "canvas") {
               render();
             }
           }
