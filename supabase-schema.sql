@@ -79,6 +79,20 @@ create table if not exists public.bom_audit_log (
   details jsonb not null default '{}'::jsonb
 );
 
+create table if not exists public.workspace_state (
+  id integer primary key check (id = 1),
+  data jsonb not null default jsonb_build_object(
+    'version', 1,
+    'projects', jsonb_build_array(),
+    'files', jsonb_build_array(),
+    'projectDrawings', jsonb_build_object(),
+    'resources', jsonb_build_array(),
+    'bom', jsonb_build_object(),
+    'bomEntries', jsonb_build_array()
+  ),
+  updated_at timestamptz not null default now()
+);
+
 alter table public.bom_items add column if not exists purpose text not null default '';
 alter table public.bom_items add column if not exists stage text not null default 'Baseline';
 
@@ -105,10 +119,23 @@ alter table public.global_admins enable row level security;
 alter table public.bom_items enable row level security;
 alter table public.bom_change_requests enable row level security;
 alter table public.bom_audit_log enable row level security;
+alter table public.workspace_state enable row level security;
 
 drop policy if exists "Authenticated users can read projects" on public.projects;
 create policy "Authenticated users can read projects"
   on public.projects for select to authenticated using (true);
+
+drop policy if exists "Authenticated users can read workspace state" on public.workspace_state;
+create policy "Authenticated users can read workspace state"
+  on public.workspace_state for select to authenticated using (true);
+
+drop policy if exists "Authenticated users can create workspace state" on public.workspace_state;
+create policy "Authenticated users can create workspace state"
+  on public.workspace_state for insert to authenticated with check (true);
+
+drop policy if exists "Authenticated users can update workspace state" on public.workspace_state;
+create policy "Authenticated users can update workspace state"
+  on public.workspace_state for update to authenticated using (true) with check (true);
 
 drop policy if exists "Members can read the group roster" on public.members;
 create policy "Members can read the group roster"
@@ -185,3 +212,21 @@ values
   ('pid-spoon', 'PID Spoon', 'Stabilized assistive utensil')
 on conflict (id) do update
 set name = excluded.name, description = excluded.description;
+
+insert into public.workspace_state (id, data)
+values (
+  1,
+  jsonb_build_object(
+    'version', 1,
+    'projects', jsonb_build_array(
+      jsonb_build_object('id', 'exo', 'name', 'EXO', 'description', 'Lower-limb exoskeleton'),
+      jsonb_build_object('id', 'pid-spoon', 'name', 'PID Spoon', 'description', 'Stabilized assistive utensil')
+    ),
+    'files', jsonb_build_array(),
+    'projectDrawings', jsonb_build_object(),
+    'resources', jsonb_build_array(),
+    'bom', jsonb_build_object(),
+    'bomEntries', jsonb_build_array()
+  )
+)
+on conflict (id) do nothing;

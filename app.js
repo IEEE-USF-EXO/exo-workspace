@@ -76,6 +76,13 @@ async function checkUserSession() {
   const logoutBtn = document.getElementById("logout-btn");
 
   if (session) {
+    const metadata = session.user?.user_metadata || {};
+    tldrawPointerName = firstName(
+      metadata.full_name ||
+        metadata.name ||
+        metadata.user_name ||
+        session.user?.email,
+    );
     googleAccessToken = session.provider_token || sessionStorage.getItem("google_provider_token");
     if (session.provider_token) {
       sessionStorage.setItem("google_provider_token", session.provider_token);
@@ -94,6 +101,7 @@ async function checkUserSession() {
       }
     }
   } else {
+    tldrawPointerName = "Collaborator";
     googleAccessToken = null;
     sessionStorage.removeItem("google_provider_token");
     driveTokenExpired = false;
@@ -395,16 +403,30 @@ const initial = () => ({
     },
   ],
   files: [],
-  nodes: [],
-  edges: [],
-  strokes: [],
+  projectDrawings: {},
   resources: [],
   bom: {},
   bomEntries: [],
 });
-let penColor = "#346d4b";
+function normalizeWorkspaceState(data) {
+  const next = { ...initial(), ...(data || {}) };
+  delete next.nodes;
+  delete next.edges;
+  delete next.strokes;
+  if (
+    !next.projectDrawings ||
+    typeof next.projectDrawings !== "object" ||
+    Array.isArray(next.projectDrawings)
+  ) {
+    next.projectDrawings = {};
+  }
+  if (next.tldrawSnapshot && !next.projectDrawings.exo) {
+    next.projectDrawings.exo = next.tldrawSnapshot;
+  }
+  delete next.tldrawSnapshot;
+  return next;
+}
 document.addEventListener("input", (event) => {
-  if (event.target.id === "pen-color") penColor = event.target.value;
   if (event.target.id === "drive-search") {
     driveExplorerSearch = event.target.value;
     render();
@@ -422,13 +444,8 @@ document.addEventListener("change", (event) => {
   }
 });
 let state = initial(),
-  db = null,
   view = "overview",
   scope = "exo",
-  tool = "select",
-  selected = null,
-  connectFrom = null,
-  zoom = 1,
   search = "",
   fileTeam = "all",
   bomSearch = "",
@@ -436,10 +453,8 @@ let state = initial(),
   bomStage = "all",
   bomPrice = "all",
   storageAvailable = false,
-  history = [],
   saving = Promise.resolve(),
   urls = new Map(),
-  gesture = null,
   toastTimer,
   driveSyncing = false,
   driveExplorerFolder = ROOT_DRIVE_FOLDER_ID,
@@ -454,9 +469,27 @@ let state = initial(),
 let tldrawRoot = null;
 let tldrawImportPromise = null;
 let tldrawRenderToken = 0;
+let tldrawEditor = null;
+let applyingTldrawSnapshot = false;
+
+function loadTldrawSnapshot(snapshot) {
+  if (!tldrawEditor || !snapshot?.store) return;
+  applyingTldrawSnapshot = true;
+  try {
+    tldrawEditor.store.loadSnapshot(snapshot);
+  } finally {
+    applyingTldrawSnapshot = false;
+  }
+}
 
 function disposeTldrawBoard() {
   tldrawRenderToken += 1;
+  saveActiveTldrawSnapshot();
+  tldrawUnlisten?.();
+  tldrawUnlisten = null;
+  remoteTldrawPointers.clear();
+  $("#tldraw-pointer-overlay")?.replaceChildren();
+  tldrawEditor = null;
   if (!tldrawRoot) return;
   try {
     tldrawRoot.unmount();
@@ -472,6 +505,7 @@ async function initTldrawBoard() {
   const container = $("#tldraw-container");
   if (!container) return;
   const renderToken = ++tldrawRenderToken;
+  const projectId = scope;
   try {
     if (!tldrawImportPromise) {
       tldrawImportPromise = Promise.all([
@@ -491,15 +525,36 @@ async function initTldrawBoard() {
     tldrawRoot = createRoot(container);
     tldrawRoot.render(
       React.createElement(Tldraw, {
-        persistenceKey: `exo-board-${scope}`,
         onMount: (editor) => {
+          tldrawEditor = editor;
           const pages = editor.getPages();
-          if (pages.length !== 1 || pages[0].name !== "Page 1") return;
-
-          editor.renamePage(pages[0].id, "Main Architecture");
-          editor.createPage({ name: "Controls Breakout Room" });
-          editor.createPage({ name: "Electrical Breakout Room" });
-          editor.setCurrentPage(pages[0].id);
+          if (pages.length === 1 && pages[0].name === "Page 1") {
+            editor.renamePage(pages[0].id, "Main Architecture");
+            editor.createPage({ name: "Controls Breakout Room" });
+            editor.createPage({ name: "Electrical Breakout Room" });
+            editor.setCurrentPage(pages[0].id);
+          }
+          loadTldrawSnapshot(state.tldrawSnapshot);
+          editor.store.listen(
+            () => {
+              if (applyingTldrawSnapshot) return;
+              state = {
+                ...state,
+                projectDrawings: {
+                  ...state.projectDrawings,
+                  [projectId]: editor.store.getSnapshot(),
+                },
+              };
+              persist();
+            },
+            { scope: "document" },
+          );
+          const previousUnlisten = tldrawUnlisten;
+          tldrawUnlisten = () => {
+            previousUnlisten();
+            unbindPointerPresence();
+          };
+          renderRemoteTldrawPointers();
         },
       }),
     );
@@ -554,6 +609,20 @@ const nameOf = (id) =>
   state.projects.find((p) => p.id === id)?.name || "Unknown project";
 const inScope = (item) => item.project === scope;
 const currentProject = () => scope;
+function switchProject(projectId) {
+  if (!projectId || projectId === scope) return;
+  saveActiveTldrawSnapshot();
+  tldrawEditor = null;
+  persist();
+  scope = projectId;
+  search = "";
+  fileTeam = "all";
+  bomSearch = "";
+  bomTeam = "all";
+  bomStage = "all";
+  bomPrice = "all";
+  render();
+}
 const teamOptions = (value, project = null) =>
   (project
     ? folderIds
@@ -590,87 +659,22 @@ function warn(message) {
   $("#storage-warning").textContent = message;
   $("#storage-warning").classList.remove("hidden");
 }
-function openDB() {
-  return new Promise((resolve, reject) => {
-    const request = indexedDB.open("exo-html-workspace-v1", 1);
-    request.onupgradeneeded = () => {
-      request.result.createObjectStore("state");
-      request.result.createObjectStore("blobs");
-    };
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error);
-  });
-}
-function record(store, key) {
-  return new Promise((resolve, reject) => {
-    const request = db.transaction(store).objectStore(store).get(key);
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error);
-  });
-}
-function writeStores(nextState, blobs = [], replace = false) {
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(["state", "blobs"], "readwrite");
-    tx.objectStore("state").put(nextState, "workspace");
-    if (replace) tx.objectStore("blobs").clear();
-    for (const item of blobs) tx.objectStore("blobs").put(item.blob, item.id);
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
-    tx.onabort = () =>
-      reject(tx.error || new Error("Storage write interrupted"));
-  });
-}
-function removeBlob(id) {
-  return new Promise((resolve, reject) => {
-    if (!db) {
-      resolve();
-      return;
-    }
-    const tx = db.transaction("blobs", "readwrite");
-    tx.objectStore("blobs").delete(id);
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
-    tx.onabort = () =>
-      reject(tx.error || new Error("Storage deletion interrupted"));
-  });
-}
 function persist() {
-  const snapshot = structuredClone(state);
-  $("#save-status").textContent = "Savingâ€¦";
-  saving = saving
-    .catch(() => {})
-    .then(async () => {
-      if (!db) throw new Error("Browser storage unavailable");
-      await writeStores(snapshot);
-      $("#save-status").textContent = "Saved in this browser";
+  if (!googleAccessToken) return Promise.resolve();
+  $("#save-status").textContent = "Saving to cloud…";
+  saving = saving.catch(() => {}).then(async () => {
+      const { error } = await supabaseClient
+        .from("workspace_state")
+        .update({ data: state, updated_at: new Date().toISOString() })
+        .eq("id", 1);
+      if (error) throw error;
+      $("#save-status").textContent = "Saved to cloud";
     })
     .catch((error) => {
       $("#save-status").textContent = "Not saved";
-      warn(
-        "Your browser could not save this change. Keep this tab open and export a backup. " +
-          error.message,
-      );
+      warn("Cloud save failed: " + error.message);
     });
   return saving;
-}
-function checkpoint() {
-  history.push(
-    JSON.stringify({
-      nodes: state.nodes,
-      edges: state.edges,
-      strokes: state.strokes,
-    }),
-  );
-  if (history.length > 35) history.shift();
-}
-function undo() {
-  if (!history.length) return;
-  const previous = JSON.parse(history.pop());
-  Object.assign(state, previous);
-  selected = null;
-  connectFrom = null;
-  persist();
-  render();
 }
 function download(blob, name) {
   const url = URL.createObjectURL(blob),
@@ -681,11 +685,7 @@ function download(blob, name) {
   setTimeout(() => URL.revokeObjectURL(url), 5000);
 }
 async function getBlob(id) {
-  return urls.has("blob-" + id)
-    ? urls.get("blob-" + id)
-    : db
-      ? await record("blobs", id)
-      : null;
+  return urls.get("blob-" + id) || null;
 }
 async function getDriveBlob(file) {
   if (!file?.driveId || !googleAccessToken) return null;
@@ -731,9 +731,6 @@ async function removeLocalFile(id) {
     return;
   }
   state.files = state.files.filter((item) => item.id !== id);
-  for (const node of state.nodes) {
-    node.files = (node.files || []).filter((fileId) => fileId !== id);
-  }
   for (const project of state.projects) {
     if (state.bom[project.id] === id) delete state.bom[project.id];
   }
@@ -742,14 +739,9 @@ async function removeLocalFile(id) {
     URL.revokeObjectURL(url);
     urls.delete(id);
   }
-  try {
-    await removeBlob(id);
-    await persist();
-    render();
-    notify(`Removed ${file.name} from this browser.`);
-  } catch (error) {
-    notify("Could not remove the local file: " + error.message);
-  }
+  await persist();
+  render();
+  notify(`Removed ${file.name} from this workspace.`);
 }
 function openModal(title, html) {
   $("#modal-title").textContent = title;
@@ -887,9 +879,8 @@ function showUpload(photos = false) {
       }
       await saving;
       const next = { ...state, files: [...state.files, ...additions] };
-      await writeStores(next);
-      state = next;
-      $("#save-status").textContent = "Saved in this browser";
+      state = normalizeWorkspaceState(next);
+      await persist();
       $("#dialog").close();
       render();
       notify(
@@ -944,7 +935,7 @@ function centerCard() {
 function showStorage() {
   openModal(
     "Your workspace storage",
-    `<p class="hint">This workspace stores drawing state and Drive file metadata locally in your browser. File contents are uploaded to Google Drive.</p><ul class="storage-list"><li><b>Google Drive</b>Large files are uploaded directly to the selected project/team folder using resumable uploads.</li><li><b>Browser storage</b>Projects, drawings, relationships, BOM selections, and Drive file links are stored locally in this browser profile.</li><li><b>Share or back up</b>Export a JSON backup containing workspace data and Drive-backed file metadata. The backup does not duplicate large Drive files.</li></ul><div class="row"><button class="primary" data-action="export">â†“ Export workspace backup</button><button class="secondary" data-action="import">â†‘ Import backup</button></div>`,
+    `<p class="hint">This workspace stores drawing state and Drive file metadata in the cloud. File contents are uploaded to Google Drive.</p><ul class="storage-list"><li><b>Google Drive</b>Large files are uploaded directly to the selected project/team folder using resumable uploads.</li><li><b>Cloud workspace</b>Projects, drawings, relationships, BOM selections, and Drive file links are stored in Supabase.</li><li><b>Share or back up</b>Export a JSON backup containing workspace data and Drive-backed file metadata. The backup does not duplicate large Drive files.</li></ul><div class="row"><button class="primary" data-action="export">â†“ Export workspace backup</button><button class="secondary" data-action="import">â†‘ Import backup</button></div>`,
   );
 }
 function toolHint() {
@@ -959,7 +950,7 @@ function toolHint() {
         : "Drag cards to arrange them. Select a connection to label it.";
 }
 function boardHTML() {
-  return '<div id="tldraw-container" style="width: 100%; height: 75vh; border-radius: 8px; overflow: hidden; border: 1px solid var(--line);"></div>';
+  return '<div id="tldraw-stage" style="position: relative; width: 100%; height: 75vh; border-radius: 8px; overflow: hidden; border: 1px solid var(--line);"><div id="tldraw-container" style="width: 100%; height: 100%;"></div><div id="tldraw-pointer-overlay" style="position: absolute; inset: 0; pointer-events: none; z-index: 20;"></div></div>';
 }
 function edgeSVG(edge) {
   const a = state.nodes.find((n) => n.id === edge.from),
@@ -1257,9 +1248,9 @@ function deleteSelection() {
 }
 function overviewHTML() {
   const files = state.files.filter(inScope),
-    nodes = state.nodes.filter(inScope),
-    ids = new Set(nodes.map((n) => n.id));
-  return `<div class="stats"><div class="stat"><span>Files</span><b>${files.length}</b><small>${sizeOf(files.reduce((s, f) => s + f.size, 0))} in Google Drive</small></div><div class="stat"><span>Cards on board</span><b>${nodes.length}</b><small>Manually placed by you</small></div><div class="stat"><span>Relationships</span><b>${state.edges.filter((e) => ids.has(e.from) && ids.has(e.to)).length}</b><small>Connections you have drawn</small></div><div class="stat"><span>Gallery photos</span><b>${files.filter(isPhoto).length}</b><small>From Google Drive</small></div></div><div class="overview-actions"><button class="overview-action" data-view="canvas"><b>â†— Draw the relationships</b><p>Arrange your work and link projects, teams, and files.</p></button><button class="overview-action" data-view="bom"><b>â˜· Open the BOM</b><p>Search components and compare project parts lists.</p></button><button class="overview-action" data-view="gallery"><b>â–§ Tell the story in photos</b><p>Build a gallery of assemblies, prototypes, and progress.</p></button></div><div class="panel"><div class="panel-head"><div><h2>A workspace you can take with you.</h2><p>Open the dashboard, organize Drive files, and connect them to your project work.</p></div><button class="secondary" data-action="storage">How storage works</button></div></div>`;
+    records = Object.values(state.projectDrawings[scope]?.store || {}),
+    shapes = records.filter((record) => record.typeName === "shape");
+  return `<div class="stats"><div class="stat"><span>Files</span><b>${files.length}</b><small>${sizeOf(files.reduce((s, f) => s + f.size, 0))} in Google Drive</small></div><div class="stat"><span>Drawing shapes</span><b>${shapes.length}</b><small>Stored in the shared Tldraw board</small></div><div class="stat"><span>Drawing records</span><b>${records.length}</b><small>Shapes, assets, bindings, and pages</small></div><div class="stat"><span>Gallery photos</span><b>${files.filter(isPhoto).length}</b><small>From Google Drive</small></div></div><div class="overview-actions"><button class="overview-action" data-view="canvas"><b>â†— Open the drawing board</b><p>Draw, arrange, and connect ideas with Tldraw.</p></button><button class="overview-action" data-view="bom"><b>â˜· Open the BOM</b><p>Search components and compare project parts lists.</p></button><button class="overview-action" data-view="gallery"><b>â–§ Tell the story in photos</b><p>Build a gallery of assemblies, prototypes, and progress.</p></button></div><div class="panel"><div class="panel-head"><div><h2>A workspace you can take with you.</h2><p>Open the dashboard, organize Drive files, and connect them to your project work.</p></div><button class="secondary" data-action="storage">How storage works</button></div></div>`;
 }
 function fileRows(files) {
   return files
@@ -1601,32 +1592,32 @@ function validateBackup(data) {
     throw new Error("Not an EXO HTML backup.");
   const s = data.state;
   if (
-    !["projects", "files", "nodes", "edges", "strokes", "resources"].every(
+    !["projects", "files", "resources"].every(
       (k) => Array.isArray(s[k]),
     ) ||
     !s.projects.length ||
     !s.bom ||
-    typeof s.bom !== "object"
+    typeof s.bom !== "object" ||
+    (!s.projectDrawings ||
+      typeof s.projectDrawings !== "object" ||
+      Array.isArray(s.projectDrawings) ||
+      Object.values(s.projectDrawings).some(
+        (snapshot) =>
+          snapshot !== null &&
+          (typeof snapshot !== "object" || !snapshot.store),
+      ))
   )
     throw new Error("Backup structure is incomplete.");
   const str = (v, max = 2000) => typeof v === "string" && v.length <= max;
   const validId = (v) => str(v, 100) && /^[a-zA-Z0-9_-]+$/.test(v);
-  for (const group of [
-    "projects",
-    "files",
-    "nodes",
-    "edges",
-    "strokes",
-    "resources",
-  ])
+  for (const group of ["projects", "files", "resources"])
     if (
       new Set(s[group].map((x) => x.id)).size !== s[group].length ||
       s[group].some((x) => !validId(x.id))
     )
       throw new Error("Invalid or duplicate record identifiers.");
   const projects = new Set(s.projects.map((x) => x.id)),
-    files = new Set(s.files.map((x) => x.id)),
-    nodes = new Set(s.nodes.map((x) => x.id));
+    files = new Set(s.files.map((x) => x.id));
   for (const p of s.projects)
     if (!str(p.name, 80) || !str(p.description, 500))
       throw new Error("Invalid project.");
@@ -1642,43 +1633,6 @@ function validateBackup(data) {
       (f.driveId && !str(f.driveId, 200))
     )
       throw new Error("Invalid file metadata.");
-  for (const n of s.nodes)
-    if (
-      !projects.has(n.project) ||
-      !str(n.title, 120) ||
-      !str(n.owner, 100) ||
-      !str(n.note) ||
-      !teams.includes(n.team) ||
-      !["Not started", "In progress", "Blocked", "Complete"].includes(
-        n.status,
-      ) ||
-      ![n.x, n.y].every((v) => Number.isFinite(v) && v >= 0 && v <= 2400) ||
-      !Array.isArray(n.files) ||
-      n.files.some((id) => !files.has(id))
-    )
-      throw new Error("Invalid drawing card.");
-  for (const e of s.edges)
-    if (
-      !nodes.has(e.from) ||
-      !nodes.has(e.to) ||
-      !str(e.label, 100) ||
-      !str(e.note, 1500)
-    )
-      throw new Error("Invalid relationship.");
-  for (const p of s.strokes)
-    if (
-      !projects.has(p.project) ||
-      !/^#[0-9a-f]{6}$/i.test(p.color) ||
-      !Array.isArray(p.points) ||
-      p.points.length > 12000 ||
-      p.points.some(
-        (v) =>
-          !Array.isArray(v) ||
-          v.length !== 2 ||
-          !v.every((x) => Number.isFinite(x) && Math.abs(x) < 10000),
-      )
-    )
-      throw new Error("Invalid pen stroke.");
   for (const r of s.resources)
     if (
       !projects.has(r.project) ||
@@ -1723,23 +1677,19 @@ async function importBackup(file) {
     }
     if (
       !confirm(
-        "Replace the current local workspace with this backup? Export your current work first if you want to keep it.",
+        "Replace the current cloud workspace with this backup? Export your current work first if you want to keep it.",
       )
     )
       return;
-    if (!db) throw new Error("Local browser storage is unavailable.");
     await saving;
-    await writeStores(next, blobs, true);
     for (const [key, url] of urls)
       if (!key.startsWith("blob-")) URL.revokeObjectURL(url);
     urls.clear();
-    state = next;
+    state = normalizeWorkspaceState(next);
     scope = next.projects[0]?.id;
-    selected = null;
-    connectFrom = null;
-    history = [];
+    await persist();
     render();
-    notify("Backup imported, including files and drawings.");
+    notify("Backup imported into the cloud workspace.");
     $("#dialog").close();
   } catch (error) {
     notify("Import failed: " + error.message);
@@ -1805,16 +1755,7 @@ function render() {
       projectForm();
       return;
     }
-    scope = e.target.value;
-    selected = null;
-    connectFrom = null;
-    search = "";
-    fileTeam = "all";
-    bomSearch = "";
-    bomTeam = "all";
-    bomStage = "all";
-    bomPrice = "all";
-    render();
+    switchProject(e.target.value);
   };
   $$("#nav .nav").forEach((b) =>
     b.classList.toggle("active", b.dataset.view === view),
@@ -1872,7 +1813,7 @@ document.addEventListener("click", async (e) => {
   if (!el) return;
   if (el.dataset.view) {
     view = el.dataset.view;
-    selected = null;
+
     render();
     if (view === "files") {
       syncDriveFiles().catch((error) => {
@@ -1885,21 +1826,7 @@ document.addEventListener("click", async (e) => {
     }
   }
   if (el.dataset.project) {
-    scope = el.dataset.project;
-    selected = null;
-    connectFrom = null;
-    search = "";
-    fileTeam = "all";
-    bomSearch = "";
-    bomTeam = "all";
-    bomStage = "all";
-    bomPrice = "all";
-    render();
-  }
-  if (el.dataset.tool) {
-    tool = el.dataset.tool;
-    connectFrom = null;
-    renderBoardPreservingScroll();
+    switchProject(el.dataset.project);
   }
   if (el.dataset.download) {
     e.preventDefault();
@@ -2038,23 +1965,47 @@ $("#backup-input").onchange = (e) => {
   importBackup(e.target.files[0]);
   e.target.value = "";
 };
-window.addEventListener("beforeunload", (e) => {
-  if (gesture) {
-    e.preventDefault();
-    e.returnValue = "";
-  }
-});
 (async () => {
   try {
-    db = await openDB();
-    state = (await record("state", "workspace")) || initial();
+    const { data, error } = await supabaseClient
+      .from("workspace_state")
+      .select("data")
+      .eq("id", 1)
+      .single();
+
+    if (error && error.code !== "PGRST116") throw error;
+    state = normalizeWorkspaceState(data?.data);
     storageAvailable = true;
-    $("#save-status").textContent = "Saved in this browser";
+    // Listen for live updates from other team members
+    supabaseClient
+      .channel("workspace-updates")
+      .on(
+        "postgres_changes",
+        {
+          event: "UPDATE",
+          schema: "public",
+          table: "workspace_state",
+          filter: "id=eq.1",
+        },
+        (payload) => {
+          if (payload.new && payload.new.data) {
+            state = payload.new.data;
+            loadTldrawSnapshot(state.tldrawSnapshot);
+
+            // Redraw the screen to show the new changes,
+            // but skip the re-render if the user is actively dragging/drawing
+            if (!gesture) {
+              render();
+            }
+          }
+        },
+      )
+      .subscribe();
+    $("#save-status").textContent = "Workspace synced";
   } catch (error) {
-    $("#save-status").textContent = "Storage unavailable";
-    warn(
-      "This browser has blocked local storage. Drawing can be explored, but files cannot be saved. Use a regular browser window with local storage enabled.",
-    );
+    $("#save-status").textContent = "Sync failed";
+    warn("Could not load the live workspace. " + error.message);
+    state = initial();
   }
   await checkUserSession();
   render();

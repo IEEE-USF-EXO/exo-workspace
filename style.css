@@ -39,6 +39,47 @@ button {
   border: 0;
   background: none;
 }
+
+.tldraw-remote-pointer {
+  position: absolute;
+  width: 46px;
+  height: 46px;
+  transform: translate(-4px, -4px);
+}
+
+.tldraw-remote-pointer-icon {
+  display: block;
+  width: 46px;
+  height: 46px;
+  object-fit: contain;
+  pointer-events: none;
+  animation: tldraw-collab-cursor-pulse 1.6s ease-in-out infinite;
+  transform-origin: 50% 55%;
+}
+
+@keyframes tldraw-collab-cursor-pulse {
+  0%,
+  100% {
+    transform: scale(1);
+  }
+  50% {
+    transform: scale(1.08);
+  }
+}
+
+.tldraw-remote-pointer-name {
+  position: absolute;
+  top: 38px;
+  left: 30px;
+  padding: 3px 7px;
+  color: #fff;
+  background: var(--pointer-color);
+  border-radius: 2px;
+  box-shadow: 0 2px 5px #0003;
+  font: 12px/1.2 Arial, sans-serif;
+  white-space: nowrap;
+}
+
 button:disabled {
   opacity: 0.4;
   cursor: default;
