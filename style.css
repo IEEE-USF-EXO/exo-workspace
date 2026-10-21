@@ -1065,6 +1065,9 @@ dialog::backdrop {
   display: none !important;
 }
 .drive-toolbar {
+  position: sticky;
+  top: 0;
+  z-index: 2;
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -1072,6 +1075,7 @@ dialog::backdrop {
   flex-wrap: wrap;
   padding-bottom: 16px;
   border-bottom: 1px solid var(--line);
+  background: #fff;
 }
 .drive-breadcrumbs {
   display: flex;
@@ -1103,24 +1107,92 @@ dialog::backdrop {
   text-align: center;
   color: var(--muted);
 }
-.drive-split {
+.drive-folder-section,
+.drive-content-split {
+  margin-top: 16px;
+}
+.drive-section-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 2px 8px;
+  color: #536158;
+  font-size: 11px;
+}
+.drive-section-head span {
+  color: var(--muted);
+  font-size: 10px;
+}
+.drive-folder-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
+  gap: 10px;
+}
+.drive-folder-card {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  min-height: 74px;
+  padding: 13px;
+  border: 1px solid var(--line);
+  border-radius: 9px;
+  background: #f8fafc;
+  text-align: left;
+}
+.drive-folder-card:hover,
+.drive-folder-card:focus-visible {
+  background: #f1f5fb;
+  border-color: #b9cbe8;
+}
+.drive-folder-card > span:nth-child(2) {
+  display: grid;
+  gap: 3px;
+  min-width: 0;
+}
+.drive-folder-card b {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.drive-folder-card small {
+  color: var(--muted);
+  font-size: 10px;
+}
+.drive-folder-icon {
+  color: #64748b;
+  font-size: 27px;
+}
+.drive-folder-more {
+  margin-left: auto;
+  color: var(--muted);
+  font-size: 17px;
+}
+.drive-section-empty {
+  padding: 18px 6px;
+  color: var(--muted);
+  font-size: 11px;
+}
+.drive-content-split {
   display: grid;
   grid-template-columns: minmax(240px, 0.8fr) minmax(0, 1.4fr);
-  min-height: 520px;
-  margin-top: 16px;
+  min-height: 500px;
   border: 1px solid var(--line);
   border-radius: 8px;
   overflow: hidden;
 }
 .drive-file-list {
-  padding: 4px;
+  padding: 0 4px 4px;
   overflow: auto;
   border-right: 1px solid var(--line);
   background: #fff;
 }
+.drive-file-list .drive-section-head {
+  padding: 12px 10px 8px;
+}
 .drive-file {
-  display: flex;
   align-items: center;
+  display: flex;
   gap: 11px;
   width: 100%;
   min-height: 48px;
@@ -1215,7 +1287,7 @@ dialog::backdrop {
   .topbar {
     padding-inline: 23px;
   }
-  .drive-split {
+  .drive-content-split {
     grid-template-columns: 1fr;
   }
   .drive-file-list {
