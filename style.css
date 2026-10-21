@@ -116,6 +116,33 @@ h3 {
   grid-template-columns: 218px minmax(0, 1fr);
   min-height: 100vh;
 }
+.app.sidebar-collapsed {
+  grid-template-columns: 58px minmax(0, 1fr);
+}
+.app.sidebar-collapsed .sidebar {
+  padding: 14px 8px;
+}
+.app.sidebar-collapsed .brand {
+  padding: 0 0 18px;
+  justify-content: center;
+}
+.app.sidebar-collapsed .brand > div:nth-child(2),
+.app.sidebar-collapsed .nav-label,
+.app.sidebar-collapsed .sidebar-bottom {
+  display: none;
+}
+.app.sidebar-collapsed .brand-mark {
+  width: 36px;
+  height: 36px;
+}
+.app.sidebar-collapsed .nav {
+  justify-content: center;
+  padding: 11px 0;
+  font-size: 0;
+}
+.app.sidebar-collapsed .nav .symbol {
+  margin: 0;
+}
 .sidebar {
   position: sticky;
   top: 0;
@@ -141,6 +168,27 @@ h3 {
   border-radius: 11px;
   overflow: hidden;
   background: #f5f5f5;
+}
+.brand-mark.sidebar-toggle {
+  position: relative;
+  padding: 0;
+  border: 0;
+}
+.sidebar-toggle-icon {
+  position: absolute;
+  inset: 0;
+  display: grid;
+  place-items: center;
+  background: rgba(34, 62, 50, 0.58);
+  color: #fff;
+  font-size: 17px;
+  font-weight: 700;
+  opacity: 0;
+  transition: opacity 120ms ease;
+}
+.sidebar-toggle:hover .sidebar-toggle-icon,
+.sidebar-toggle:focus-visible .sidebar-toggle-icon {
+  opacity: 1;
 }
 .brand-mark img {
   display: block;
@@ -265,6 +313,11 @@ nav {
   justify-content: space-between;
   padding: 0 30px;
   gap: 12px;
+}
+.sidebar-toggle {
+  display: grid;
+  place-items: center;
+  flex: 0 0 auto;
 }
 .breadcrumbs {
   font-size: 11px;
@@ -1027,6 +1080,7 @@ dialog::backdrop {
   padding-top: 18px;
   margin-top: 23px;
 }
+/* Shared modal surface used by file previews and workspace actions. */
 .hint {
   font-size: 11px;
   color: #839674;
@@ -1035,6 +1089,7 @@ dialog::backdrop {
 .lightbox {
   width: 1000px;
 }
+/* Image previews preserve the source aspect ratio within the modal. */
 .lightbox img {
   width: 100%;
   max-height: 68vh;
@@ -1723,6 +1778,7 @@ dialog::backdrop {
 .drive-files-section {
   padding-bottom: 20px;
 }
+/* Keep the embedded Drive preview contained within its file-preview panel. */
 .drive-table-wrap {
   overflow-x: auto;
   border-top: 1px solid var(--line);
@@ -1858,6 +1914,7 @@ dialog::backdrop {
   gap: 8px;
   margin: -8px 0 14px;
 }
+/* Google Drive supplies the document viewer inside this fixed-height frame. */
 .drive-modal-preview {
   display: block;
   width: 100%;

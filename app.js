@@ -144,6 +144,19 @@ function isDriveAuthorizationError(error) {
   return error instanceof DriveAuthorizationError;
 }
 
+function setSidebarCollapsed(collapsed) {
+  const app = $(".app");
+  const toggle = $("#sidebar-toggle");
+  if (!app || !toggle) return;
+  app.classList.toggle("sidebar-collapsed", collapsed);
+  toggle.setAttribute("aria-expanded", String(!collapsed));
+  toggle.setAttribute(
+    "aria-label",
+    collapsed ? "Show navigation" : "Hide navigation",
+  );
+  toggle.title = "Click to toggle navigation";
+}
+
 async function fetchDriveAPI(url, options = {}) {
   googleAccessToken = sessionStorage.getItem("google_provider_token");
   if (!googleAccessToken) throw new DriveAuthorizationError("Reconnect Google Drive to continue.");
@@ -436,6 +449,65 @@ let state = initial(),
   driveExplorerSearch = "",
   driveExplorerSort = "name",
   driveExplorerView = "list";
+let tldrawRoot = null;
+let tldrawImportPromise = null;
+let tldrawRenderToken = 0;
+
+function disposeTldrawBoard() {
+  tldrawRenderToken += 1;
+  if (!tldrawRoot) return;
+  try {
+    tldrawRoot.unmount();
+  } catch (error) {
+    tldrawRoot = null;
+    notify("The drawing board could not be closed cleanly: " + error.message);
+    return;
+  }
+  tldrawRoot = null;
+}
+
+async function initTldrawBoard() {
+  const container = $("#tldraw-container");
+  if (!container) return;
+  const renderToken = ++tldrawRenderToken;
+  try {
+    if (!tldrawImportPromise) {
+      tldrawImportPromise = Promise.all([
+        import("https://esm.sh/react-dom@18/client"),
+        import("https://esm.sh/react@18"),
+        import("https://esm.sh/tldraw@3?external=react,react-dom"),
+      ]);
+    }
+    const [{ createRoot }, { default: React }, { Tldraw }] =
+      await tldrawImportPromise;
+    if (
+      renderToken !== tldrawRenderToken ||
+      view !== "canvas" ||
+      !container.isConnected
+    )
+      return;
+    tldrawRoot = createRoot(container);
+    tldrawRoot.render(
+      React.createElement(Tldraw, {
+        persistenceKey: `exo-board-${scope}`,
+        onMount: (editor) => {
+          const pages = editor.getPages();
+          if (pages.length !== 1 || pages[0].name !== "Page 1") return;
+
+          editor.renamePage(pages[0].id, "Main Architecture");
+          editor.createPage({ name: "Controls Breakout Room" });
+          editor.createPage({ name: "Electrical Breakout Room" });
+          editor.setCurrentPage(pages[0].id);
+        },
+      }),
+    );
+  } catch (error) {
+    if (renderToken === tldrawRenderToken) {
+      notify("The drawing board could not be loaded: " + error.message);
+    }
+  }
+}
+
 const folderIds = [
   ["exo", "Controls", "1Pdx0N6EHctdZKqb7P29tVHuNVr8v8yrN"],
   ["exo", "Electrical", "1WLCSZ5bMisg1GjJH-oVJhsXjM938elaR"],
@@ -893,23 +965,7 @@ function toolHint() {
         : "Drag cards to arrange them. Select a connection to label it.";
 }
 function boardHTML() {
-  const nodes = state.nodes.filter(inScope),
-    nodeIds = new Set(nodes.map((n) => n.id)),
-    edges = state.edges.filter((e) => nodeIds.has(e.from) && nodeIds.has(e.to)),
-    strokes = state.strokes.filter(inScope);
-  return `<section class="panel"><div class="canvas-top"><div class="tools" aria-label="Drawing tools">${[
-    ["select", "â†– Select"],
-    ["pen", "âœŽ Draw"],
-    ["connect", "â†— Connect"],
-    ["hand", "âœ‹ Pan"],
-  ]
-    .map(
-      ([id, label]) =>
-        `<button class="tool ${tool === id ? "active" : ""}" data-tool="${id}" aria-pressed="${tool === id}">${label}</button>`,
-    )
-    .join(
-      "",
-    )}</div><div class="row"><input id="pen-color" type="color" value="#346d4b" title="Pen color" aria-label="Pen color" style="padding:2px;width:27px;height:27px"><button class="text-button" data-action="undo" ${history.length ? "" : "disabled"}>â†¶ Undo</button><button class="secondary" data-action="zoom-out" aria-label="Zoom out">âˆ’</button><span id="zoom-label" class="small muted">${Math.round(zoom * 100)}%</span><button class="secondary" data-action="zoom-in" aria-label="Zoom in">ï¼‹</button></div></div><div class="canvas-layout"><div class="canvas-viewport" tabindex="0" aria-label="Drawing board. Use Add card for cards, Draw for freehand marks, and Connect for relationships."><div class="world-space" style="width:${2400 * zoom}px;height:${1600 * zoom}px"><div class="world ${tool === "pen" ? "draw" : tool}" style="transform:scale(${zoom})"><svg width="2400" height="1600" aria-hidden="true"><defs><marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0 0L8 4L0 8" fill="#9caf90"/></marker></defs>${edges.map(edgeSVG).join("")}${strokes.map((s) => `<polyline class="stroke" data-stroke="${s.id}" points="${s.points.map((p) => p.join(",")).join(" ")}" fill="none" stroke="${s.color}" stroke-width="${selected?.id === s.id ? 4 : 2.5}" stroke-linecap="round" stroke-linejoin="round"/>`).join("")}</svg>${nodes.map(cardHTML).join("")}</div></div>${!nodes.length && !strokes.length ? `<div class="canvas-note"><strong>A blank board. Yours to shape.</strong><p>Add your own cards or choose Draw and start sketching. Nothing is generated for you.</p></div>` : ""}</div><aside class="inspector" id="inspector"></aside></div><div class="canvas-footer"><span id="tool-hint">${toolHint()}</span><span>${nodes.length} cards Â· ${edges.length} connections Â· ${scope === "all" ? "All projects" : esc(nameOf(scope))}</span></div></section>`;
+  return '<div id="tldraw-container" style="width: 100%; height: 75vh; border-radius: 8px; overflow: hidden; border: 1px solid var(--line);"></div>';
 }
 function edgeSVG(edge) {
   const a = state.nodes.find((n) => n.id === edge.from),
@@ -1696,6 +1752,7 @@ async function importBackup(file) {
   }
 }
 function render() {
+  disposeTldrawBoard();
   const labels = {
     overview: [
       "The whole project, at a glance.",
@@ -1782,8 +1839,7 @@ function render() {
               ? bomHTML()
               : resourcesHTML();
   if (view === "canvas") {
-    bindBoard();
-    renderInspector();
+    initTldrawBoard();
   }
   if (view === "gallery") loadImages();
   if (view === "bom") previewBOM();
@@ -1909,6 +1965,9 @@ document.addEventListener("click", async (e) => {
   if (el.hasAttribute("data-close")) $("#dialog").close();
   const action = el.dataset.action;
   if (action === "login") signInWithGoogle();
+  if (action === "toggle-sidebar") {
+    setSidebarCollapsed(!$(".app").classList.contains("sidebar-collapsed"));
+  }
   if (action === "refresh-drive-folder") {
     loadDriveExplorer(driveExplorerFolder, driveExplorerBreadcrumbs);
   }
@@ -1986,29 +2045,6 @@ $("#backup-input").onchange = (e) => {
   importBackup(e.target.files[0]);
   e.target.value = "";
 };
-document.addEventListener("keydown", (e) => {
-  if (/INPUT|TEXTAREA|SELECT/.test(e.target.tagName) || $("#dialog").open)
-    return;
-  if (view !== "canvas") return;
-  if ((e.ctrlKey || e.metaKey) && e.key.toLowerCase() === "z") {
-    e.preventDefault();
-    undo();
-  } else if (e.key === "Delete" || e.key === "Backspace") {
-    e.preventDefault();
-    deleteSelection();
-  } else if (e.key === "Escape") {
-    selected = null;
-    connectFrom = null;
-    renderBoardPreservingScroll();
-  } else {
-    const map = { v: "select", p: "pen", c: "connect", h: "hand" };
-    if (map[e.key.toLowerCase()]) {
-      tool = map[e.key.toLowerCase()];
-      connectFrom = null;
-      renderBoardPreservingScroll();
-    }
-  }
-});
 window.addEventListener("beforeunload", (e) => {
   if (gesture) {
     e.preventDefault();

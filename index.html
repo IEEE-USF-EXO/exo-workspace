@@ -6,16 +6,38 @@
     <title>EXO · Project workspace</title>
     <link rel="icon" type="image/png" href="content/project-icon.png?v=content-images" />
     <link rel="stylesheet" href="style.css?v=work-overlay" />
+    <link rel="stylesheet" href="https://unpkg.com/tldraw@3/tldraw.css" />
+    <script type="importmap">
+      {
+        "imports": {
+          "react": "https://esm.sh/react@18",
+          "react/jsx-runtime": "https://esm.sh/react@18/jsx-runtime",
+          "react/jsx-dev-runtime": "https://esm.sh/react@18/jsx-dev-runtime",
+          "react-dom": "https://esm.sh/react-dom@18",
+          "react-dom/client": "https://esm.sh/react-dom@18/client"
+        }
+      }
+    </script>
     <!-- Supabase JavaScript SDK CDN -->
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
   </head>
   <body>
     <div class="app">
-      <aside class="sidebar">
+      <aside id="sidebar" class="sidebar">
         <div class="brand">
-          <div class="brand-mark">
+          <button
+            id="sidebar-toggle"
+            class="brand-mark sidebar-toggle"
+            type="button"
+            data-action="toggle-sidebar"
+            aria-controls="sidebar"
+            aria-expanded="true"
+            aria-label="Hide navigation"
+            title="Click to toggle navigation"
+          >
             <img src="content/project-icon.png?v=content-images" alt="EXO project icon" />
-          </div>
+            <span class="sidebar-toggle-icon" aria-hidden="true">↔</span>
+          </button>
           <div><b>EXO</b><small>PROJECT WORKSPACE</small></div>
         </div>
         <div class="nav-label">WORKSPACE</div>
