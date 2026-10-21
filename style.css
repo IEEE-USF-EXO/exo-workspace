@@ -1080,12 +1080,34 @@ dialog::backdrop {
 .drive-breadcrumbs {
   display: flex;
   align-items: center;
-  gap: 5px;
+  gap: 7px;
   flex-wrap: wrap;
   font-size: 12px;
 }
+.drive-toolbar-location {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
+}
+.drive-breadcrumb-label {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 600;
+  letter-spacing: 0.05em;
+  text-transform: uppercase;
+}
+.drive-version {
+  color: #78906f;
+  font-size: 9px;
+  letter-spacing: 0.04em;
+  text-transform: uppercase;
+}
 .drive-breadcrumbs .text-button {
   color: var(--green);
+}
+.drive-breadcrumbs [aria-current="page"] {
+  color: #355b32;
+  font-weight: 700;
 }
 .drive-drop-zone {
   padding: 8px 11px;
@@ -1109,15 +1131,24 @@ dialog::backdrop {
 }
 .drive-folder-section,
 .drive-content-split {
-  margin-top: 16px;
+  margin-top: 22px;
 }
 .drive-section-head {
   display: flex;
   align-items: center;
   justify-content: space-between;
-  padding: 0 2px 8px;
+  padding: 0 2px 10px;
   color: #536158;
   font-size: 11px;
+}
+.drive-section-head > div {
+  display: grid;
+  gap: 3px;
+}
+.drive-section-head small {
+  color: var(--muted);
+  font-size: 10px;
+  font-weight: 400;
 }
 .drive-section-head span {
   color: var(--muted);
@@ -1125,16 +1156,16 @@ dialog::backdrop {
 }
 .drive-folder-grid {
   display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(190px, 1fr));
-  gap: 10px;
+  grid-template-columns: repeat(auto-fill, minmax(180px, 1fr));
+  gap: 12px;
 }
 .drive-folder-card {
   display: flex;
   align-items: center;
   gap: 10px;
   min-width: 0;
-  min-height: 74px;
-  padding: 13px;
+  min-height: 78px;
+  padding: 13px 14px;
   border: 1px solid var(--line);
   border-radius: 9px;
   background: #f8fafc;
@@ -1151,9 +1182,11 @@ dialog::backdrop {
   min-width: 0;
 }
 .drive-folder-card b {
+  display: -webkit-box;
   overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  line-height: 1.3;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 2;
 }
 .drive-folder-card small {
   color: var(--muted);
@@ -1175,8 +1208,8 @@ dialog::backdrop {
 }
 .drive-content-split {
   display: grid;
-  grid-template-columns: minmax(240px, 0.8fr) minmax(0, 1.4fr);
-  min-height: 500px;
+  grid-template-columns: minmax(280px, 0.67fr) minmax(0, 1fr);
+  min-height: 420px;
   border: 1px solid var(--line);
   border-radius: 8px;
   overflow: hidden;
@@ -1195,8 +1228,8 @@ dialog::backdrop {
   display: flex;
   gap: 11px;
   width: 100%;
-  min-height: 48px;
-  padding: 8px 10px;
+  min-height: 60px;
+  padding: 9px 12px;
   border-radius: 6px;
   text-align: left;
 }
@@ -1205,6 +1238,7 @@ dialog::backdrop {
 }
 .drive-file.selected {
   background: #e8f0fe;
+  box-shadow: inset 3px 0 0 var(--green);
 }
 .drive-file.selected:hover {
   background: #e8f0fe;
@@ -1221,6 +1255,8 @@ dialog::backdrop {
   min-width: 0;
 }
 .drive-file-main b {
+  color: #304830;
+  font-size: 12px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1251,9 +1287,16 @@ dialog::backdrop {
 .drive-preview iframe {
   flex: 1;
   width: 100%;
-  min-height: 500px;
+  min-height: 420px;
   border: 0;
   border-radius: 6px;
+}
+.drive-preview-empty {
+  display: grid;
+  place-items: center;
+  align-content: center;
+  min-height: 360px;
+  padding: 28px;
 }
 @media (min-width: 1600px) {
   .content {
@@ -1431,6 +1474,18 @@ dialog::backdrop {
   .footer {
     font-size: 8px;
   }
+  .drive-toolbar {
+    align-items: stretch;
+  }
+  .drive-toolbar > .row {
+    justify-content: flex-start;
+  }
+  .drive-content-split {
+    min-height: 0;
+  }
+  .drive-preview-empty {
+    min-height: 260px;
+  }
 }
 @media (max-width: 480px) {
   .tiles {
@@ -1456,6 +1511,17 @@ dialog::backdrop {
   }
   .breadcrumbs {
     gap: 7px;
+  }
+  .drive-toolbar > .row,
+  .drive-toolbar > .row .primary {
+    width: 100%;
+  }
+  .drive-preview-head {
+    align-items: flex-start;
+    flex-direction: column;
+  }
+  .drive-preview-head .row {
+    flex-wrap: wrap;
   }
   .heading > .row .secondary {
     display: none;
