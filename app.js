@@ -550,8 +550,8 @@ const knownResources = folderIds.map(([project, team, id]) => ({
   }));
 const nameOf = (id) =>
   state.projects.find((p) => p.id === id)?.name || "Unknown project";
-const inScope = (item) => scope === "all" || item.project === scope;
-const currentProject = () => (scope === "all" ? state.projects[0].id : scope);
+const inScope = (item) => item.project === scope;
+const currentProject = () => scope;
 const teamOptions = (value, project = null) =>
   (project
     ? folderIds
@@ -795,7 +795,7 @@ function showUpload(photos = false) {
     : "";
   openModal(
     photos ? "Add project photos" : "Add project files",
-    `<form id="upload-form"><p class="hint" style="margin-bottom:14px">Google Drive provides the folder structure below. Choose a destination, or upload a folder to recreate its subfolders there.</p>${photos ? "" : '<label class="field">Upload type<select name="upload-mode"><option value="files">Individual files</option><option value="folder">A folder and its contents</option></select></label>'}<label class="field">${photos ? "Photos" : "Files"}<input id="upload-input" type="file" name="files" ${accept} multiple required><small class="upload-help">Large files upload directly to Drive.</small></label>${scope === "all" ? `<label class="field">Project<select name="project">${projectOptions(initialProject)}</select><small>Choose a project before uploading from All projects.</small></label>` : `<label class="field">Project<input value="${esc(nameOf(initialProject))}" readonly><input type="hidden" name="project" value="${esc(initialProject)}"></label>`}<label class="field">Destination team<select name="team">${teamOptions(initialTeam, initialProject)}</select></label><label class="field">Destination folder<select name="folder">${driveFolderOptions(initialProject, initialTeam, initialFolder)}</select></label><label class="field">Note or photo caption<textarea name="note" maxlength="1000" placeholder="Context, version, or what the photo shows"></textarea></label>${actions(photos ? "Add photos" : "Add files")}</form>`,
+    `<form id="upload-form"><p class="hint" style="margin-bottom:14px">Google Drive provides the folder structure below. Choose a destination, or upload a folder to recreate its subfolders there.</p>${photos ? "" : '<label class="field">Upload type<select name="upload-mode"><option value="files">Individual files</option><option value="folder">A folder and its contents</option></select></label>'}<label class="field">${photos ? "Photos" : "Files"}<input id="upload-input" type="file" name="files" ${accept} multiple required><small class="upload-help">Large files upload directly to Drive.</small></label><label class="field">Project<input value="${esc(nameOf(initialProject))}" readonly><input type="hidden" name="project" value="${esc(initialProject)}"></label><label class="field">Destination team<select name="team">${teamOptions(initialTeam, initialProject)}</select></label><label class="field">Destination folder<select name="folder">${driveFolderOptions(initialProject, initialTeam, initialFolder)}</select></label><label class="field">Note or photo caption<textarea name="note" maxlength="1000" placeholder="Context, version, or what the photo shows"></textarea></label>${actions(photos ? "Add photos" : "Add files")}</form>`,
   );
   const formElement = $("#upload-form");
   const refreshFolders = () => {
@@ -809,14 +809,6 @@ function showUpload(photos = false) {
     );
   };
   formElement.elements.team.onchange = refreshFolders;
-  if (scope === "all") formElement.elements.project.onchange = (event) => {
-    const project = String(event.target.value);
-    const availableTeam = folderIds.find(
-      ([folderProject]) => folderProject === project,
-    )?.[1] || "";
-    formElement.elements.team.innerHTML = teamOptions(availableTeam, project);
-    refreshFolders();
-  };
   formElement.elements["upload-mode"]?.addEventListener("change", (event) => {
     const folderMode = event.target.value === "folder";
     const input = formElement.elements.files;
@@ -989,7 +981,7 @@ function renderInspector() {
   const root = $("#inspector");
   if (!root) return;
   if (!selected) {
-    root.innerHTML = `<div class="eyebrow">DETAILS & RELATIONSHIPS</div><h3>Give the work context.</h3><p>Select a card to assign its project and team, add notes, or reference a file.</p><div class="related"><h3>Cross-team references</h3><p>Use Connect to draw an arrow between cards. Select that arrow and describe the relationship in your own words.</p><p style="margin-top:12px">Choose All projects in the sidebar to connect cards belonging to different projects.</p></div>`;
+    root.innerHTML = `<div class="eyebrow">DETAILS & RELATIONSHIPS</div><h3>Give the work context.</h3><p>Select a card to assign its project and team, add notes, or reference a file.</p><div class="related"><h3>Cross-team references</h3><p>Use Connect to draw an arrow between cards. Select that arrow and describe the relationship in your own words.</p><p style="margin-top:12px">Switch projects above to review another project's cards and references.</p></div>`;
     return;
   }
   if (selected.kind === "node") {
@@ -1361,10 +1353,10 @@ async function loadImages() {
   }
 }
 function bomHTML() {
-  const projects = scope === "all" ? state.projects : state.projects.filter((p) => p.id === scope);
+  const projects = state.projects.filter((p) => p.id === scope);
   const files = projects.map((p) => state.files.find((f) => f.id === state.bom[p.id])).filter(Boolean);
-  const hasSharedRows = sharedBOMRows.some((row) => scope === "all" || row.project_id === scope);
-  return `<section class="panel"><div class="panel-head"><div><h2>Bill of materials</h2><p>${scope === "all" ? "Showing BOM rows across every project. Use the project selector above to narrow the workspace." : "Showing the selected project's components and source file."}</p></div><button class="secondary" data-action="add-bom-row">ï¼‹ Add component</button></div><div class="bom-bar"><div><strong>${hasSharedRows ? "Shared Supabase BOM connected" : files.length ? `${files.length} source file${files.length === 1 ? "" : "s"} connected` : "No BOM source selected"}</strong><small>${hasSharedRows ? "Approved rows are shared with authenticated workspace users." : files.length ? files.map((f) => `${esc(nameOf(f.project))} Â· ${esc(f.name)}`).join("  /  ") : "Choose a CSV source in Files to preview its rows here."}</small></div><div class="row">${files.map((f) => `<button class="text-button" data-download="${f.id}">â†“ ${esc(nameOf(f.project))}</button>`).join("")}<button class="secondary" data-action="choose-bom">${files.length ? "Manage sources" : "Choose BOM file"}</button></div></div><div id="bom-preview">${files.length || hasSharedRows ? '<div class="empty"><p>Opening BOMâ€¦</p></div>' : empty("â˜·", "Keep the source easy to find.", "Add a BOM in Files, then choose it here. CSV files display as a searchable table.")}</div></section>`;
+  const hasSharedRows = sharedBOMRows.some((row) => row.project_id === scope);
+  return `<section class="panel"><div class="panel-head"><div><h2>Bill of materials</h2><p>Showing the selected project's components and source file.</p></div><button class="secondary" data-action="add-bom-row">ï¼‹ Add component</button></div><div class="bom-bar"><div><strong>${hasSharedRows ? "Shared Supabase BOM connected" : files.length ? `${files.length} source file${files.length === 1 ? "" : "s"} connected` : "No BOM source selected"}</strong><small>${hasSharedRows ? "Approved rows are shared with authenticated workspace users." : files.length ? files.map((f) => `${esc(nameOf(f.project))} Â· ${esc(f.name)}`).join("  /  ") : "Choose a CSV source in Files to preview its rows here."}</small></div><div class="row">${files.map((f) => `<button class="text-button" data-download="${f.id}">â†“ ${esc(nameOf(f.project))}</button>`).join("")}<button class="secondary" data-action="choose-bom">${files.length ? "Manage sources" : "Choose BOM file"}</button></div></div><div id="bom-preview">${files.length || hasSharedRows ? '<div class="empty"><p>Opening BOMâ€¦</p></div>' : empty("â˜·", "Keep the source easy to find.", "Add a BOM in Files, then choose it here. CSV files display as a searchable table.")}</div></section>`;
 }
 function addBOMRow() {
   openModal(
@@ -1426,9 +1418,9 @@ async function previewBOM() {
   const target = $("#bom-preview");
   if (!target) return;
   try {
-    const projects = scope === "all" ? state.projects : state.projects.filter((p) => p.id === scope);
+    const projects = state.projects.filter((p) => p.id === scope);
     const records = sharedBOMRows
-      .filter((row) => scope === "all" || row.project_id === scope)
+      .filter((row) => row.project_id === scope)
       .map((row) => ({
         project: row.project_id,
         team: "Shared",
@@ -1473,7 +1465,7 @@ async function previewBOM() {
         source: file.name,
       }));
     }
-    records.push(...(state.bomEntries || []).filter((entry) => scope === "all" || entry.project === scope).map((entry) => ({ ...entry, link: entry.link || entry.supplier || "", purpose: entry.purpose || "", source: "Added in workspace" })));
+    records.push(...(state.bomEntries || []).filter((entry) => entry.project === scope).map((entry) => ({ ...entry, link: entry.link || entry.supplier || "", purpose: entry.purpose || "", source: "Added in workspace" })));
     if (!records.length) {
       target.innerHTML = empty("â˜·", "No previewable BOM rows.", "CSV files up to 5 MB can be searched here. Other source types remain available to download.");
       return;
@@ -1740,7 +1732,7 @@ async function importBackup(file) {
       if (!key.startsWith("blob-")) URL.revokeObjectURL(url);
     urls.clear();
     state = next;
-    scope = "all";
+    scope = next.projects[0]?.id;
     selected = null;
     connectFrom = null;
     history = [];
@@ -1788,7 +1780,7 @@ function render() {
   $("#page-title").textContent = labels[view][0];
   $("#page-description").textContent = labels[view][1];
   $("#eyebrow").textContent =
-    (scope === "all" ? "ALL PROJECTS" : nameOf(scope).toUpperCase()) +
+    nameOf(scope).toUpperCase() +
     " / " +
     (view === "canvas"
       ? "DRAWING BOARD"
@@ -1796,9 +1788,8 @@ function render() {
         ? "REPOSITORIES & LINKS"
         : view.toUpperCase());
   $("#crumb").textContent =
-    scope === "all" ? "All projects" : `${nameOf(scope)} / ${view}`;
+    `${nameOf(scope)} / ${view}`;
   $("#project-context").innerHTML =
-    `<option value="all" ${scope === "all" ? "selected" : ""}>All projects</option>` +
     state.projects
       .map(
         (p) =>
