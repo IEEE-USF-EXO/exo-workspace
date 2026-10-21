@@ -365,6 +365,21 @@ const initial = () => ({
 let penColor = "#346d4b";
 document.addEventListener("input", (event) => {
   if (event.target.id === "pen-color") penColor = event.target.value;
+  if (event.target.id === "drive-search") {
+    driveExplorerSearch = event.target.value;
+    render();
+    const input = $("#drive-search");
+    if (input) {
+      input.focus();
+      input.setSelectionRange(input.value.length, input.value.length);
+    }
+  }
+});
+document.addEventListener("change", (event) => {
+  if (event.target.id === "drive-sort") {
+    driveExplorerSort = event.target.value;
+    render();
+  }
 });
 let state = initial(),
   db = null,
@@ -392,7 +407,10 @@ let state = initial(),
   driveExplorerFiles = [],
   driveExplorerSelected = null,
   driveExplorerLoading = false,
-  driveExplorerError = "";
+  driveExplorerError = "",
+  driveExplorerSearch = "",
+  driveExplorerSort = "name",
+  driveExplorerView = "list";
 const folderIds = [
   ["exo", "Controls", "1Pdx0N6EHctdZKqb7P29tVHuNVr8v8yrN"],
   ["exo", "Electrical", "1WLCSZ5bMisg1GjJH-oVJhsXjM938elaR"],
@@ -1212,23 +1230,42 @@ async function loadDriveExplorer(folderId = ROOT_DRIVE_FOLDER_ID, breadcrumb = [
     if (view === "files") render();
   }
 }
+function driveFileIcon(file) {
+  if (file.mimeType?.includes("pdf")) return "PDF";
+  if (file.mimeType?.startsWith("image/")) return "IMG";
+  if (file.mimeType?.includes("spreadsheet")) return "XLS";
+  if (file.mimeType?.includes("document")) return "DOC";
+  return "FILE";
+}
+function openDrivePreview(file) {
+  driveExplorerSelected = file;
+  openModal(
+    file.name,
+    `<div class="drive-modal-actions"><a class="secondary" href="${esc(file.webContentLink || "#")}" ${file.webContentLink ? "download" : "aria-disabled=\"true\" tabindex=\"-1\""}>Download</a><a class="primary" href="${esc(file.webViewLink || `https://drive.google.com/file/d/${encodeURIComponent(file.id)}/view`)}" target="_blank" rel="noopener noreferrer">Open in Drive</a></div><iframe class="drive-modal-preview" src="https://drive.google.com/file/d/${encodeURIComponent(file.id)}/preview" title="Preview of ${esc(file.name)}" allow="autoplay"></iframe>`,
+  );
+}
 function driveExplorerHTML() {
-  const fileExplorerVersion = "v0.2 · UI test";
   const reconnect = !googleAccessToken;
-  const folders = driveExplorerFiles.filter((file) => file.mimeType === GOOGLE_DRIVE_FOLDER_MIME);
-  const files = driveExplorerFiles.filter((file) => file.mimeType !== GOOGLE_DRIVE_FOLDER_MIME);
-  const selected = driveExplorerSelected;
-  const folderContent = driveExplorerLoading
-    ? `<div class="empty"><p>Loading Drive contents…</p></div>`
-    : driveExplorerError
-      ? `<div class="empty"><h3>Unable to load this folder</h3><p>${esc(driveExplorerError)}</p><button class="secondary" data-action="refresh-drive-folder">Try again</button></div>`
-      : folders.length
-        ? folders.map((folder) => `<button class="drive-folder-card" data-drive-item="${esc(folder.id)}" aria-label="Open folder: ${esc(folder.name)}"><span class="drive-folder-icon" aria-hidden="true">▱</span><span><b>${esc(folder.name)}</b><small>Folder</small></span><span class="drive-folder-more" aria-hidden="true">⋮</span></button>`).join("")
-        : `<p class="drive-section-empty">No subfolders in this folder.</p>`;
-  const fileContent = files.length
-    ? files.map((file) => `<button class="drive-file ${selected?.id === file.id ? "selected" : ""}" data-drive-item="${esc(file.id)}" aria-label="Preview file: ${esc(file.name)}"><span class="drive-file-icon" aria-hidden="true">▱</span><span class="drive-file-main"><b>${esc(file.name)}</b><small>${file.size ? sizeOf(Number(file.size)) : "Google file"} · ${file.modifiedTime ? new Date(file.modifiedTime).toLocaleDateString() : ""}</small></span></button>`).join("")
-    : `<div class="drive-section-empty">No files in this folder yet. Use Upload files to add one here.</div>`;
-  return `<section class="panel drive-explorer"><div class="drive-toolbar"><div class="drive-toolbar-location"><div class="drive-breadcrumbs" aria-label="Drive folder path"><span class="drive-breadcrumb-label">Location</span>${driveExplorerBreadcrumbs.map((crumb, index) => `<button class="text-button" data-drive-folder="${esc(crumb.id)}" data-drive-breadcrumb-index="${index}" ${index === driveExplorerBreadcrumbs.length - 1 ? 'aria-current="page"' : ""}>${esc(crumb.name)}</button>${index < driveExplorerBreadcrumbs.length - 1 ? "<span aria-hidden=\"true\"> / </span>" : ""}`).join("")}</div><span class="drive-version">File Explorer ${fileExplorerVersion}</span></div><div class="row"><button class="primary" data-action="upload-drive-files" ${reconnect ? "disabled" : ""}>↑ Upload files</button><input id="drive-upload-input" type="file" multiple hidden></div></div>${reconnect ? `<div class="drive-reconnect"><p>${sessionStorage.getItem("google_provider_token") ? "Your Google Drive connection needs to be refreshed." : "Sign in with Google to browse the shared Drive folder."}</p><button class="primary" data-action="login">Reconnect Google Drive</button></div>` : `<div class="drive-folder-section"><div class="drive-section-head"><div><strong>Folders</strong><small>Navigate to a folder to view its files</small></div><span>${folders.length}</span></div><div class="drive-folder-grid">${folderContent}</div></div><div class="drive-content-split"><div class="drive-file-list" id="drive-file-list"><div class="drive-section-head"><div><strong>Files</strong><small>Files in this folder</small></div><span>${files.length}</span></div>${fileContent}</div><div class="drive-preview">${selected ? `<div class="drive-preview-head"><strong>${esc(selected.name)}</strong><span class="row"><a class="secondary ${selected.webContentLink ? "" : "disabled"}" href="${esc(selected.webContentLink || "#")}" ${selected.webContentLink ? "download" : "aria-disabled=\"true\" tabindex=\"-1\""}>Download</a><a class="primary" href="${esc(selected.webViewLink || `https://drive.google.com/file/d/${encodeURIComponent(selected.id)}/view`)}" target="_blank" rel="noopener noreferrer">Open in Drive</a></span></div><iframe src="https://drive.google.com/file/d/${encodeURIComponent(selected.id)}/preview" width="100%" height="420px" title="Preview of ${esc(selected.name)}" style="border: none; border-radius: 6px;" allow="autoplay"></iframe>` : `<div class="empty drive-preview-empty"><div class="empty-symbol">▣</div><h3>Select a file to preview</h3><p>Select a file from this folder to preview it here.</p></div>`}</div></div></div>`}</section>`;
+  const query = driveExplorerSearch.trim().toLowerCase();
+  const visible = driveExplorerFiles.filter((file) => !query || file.name.toLowerCase().includes(query));
+  const folders = visible.filter((file) => file.mimeType === GOOGLE_DRIVE_FOLDER_MIME);
+  const files = visible.filter((file) => file.mimeType !== GOOGLE_DRIVE_FOLDER_MIME);
+  const sortFiles = (items) => [...items].sort((a, b) => {
+    if (driveExplorerSort === "modified") return new Date(b.modifiedTime || 0) - new Date(a.modifiedTime || 0);
+    if (driveExplorerSort === "size") return Number(b.size || 0) - Number(a.size || 0);
+    return a.name.localeCompare(b.name);
+  });
+  const sortedFolders = sortFiles(folders);
+  const sortedFiles = sortFiles(files);
+  const folderContent = sortedFolders.length
+    ? sortedFolders.map((folder) => `<button class="drive-folder-card" data-drive-item="${esc(folder.id)}" aria-label="Open folder: ${esc(folder.name)}"><span class="drive-folder-icon" aria-hidden="true"></span><span><b>${esc(folder.name)}</b></span></button>`).join("")
+    : `<p class="drive-section-empty">${query ? "No folders match your search." : "No subfolders in this folder."}</p>`;
+  const fileContent = sortedFiles.length
+    ? (driveExplorerView === "grid"
+      ? `<div class="drive-file-grid">${sortedFiles.map((file) => `<button class="drive-file-card" data-drive-item="${esc(file.id)}"><span class="drive-file-icon">${driveFileIcon(file)}</span><b>${esc(file.name)}</b><small>${file.size ? sizeOf(Number(file.size)) : "Google file"} · ${file.modifiedTime ? new Date(file.modifiedTime).toLocaleDateString() : "—"}</small></button>`).join("")}</div>`
+      : `<div class="drive-table-wrap"><table class="drive-table"><thead><tr><th>Name</th><th>Owner</th><th>Last modified</th><th>File size</th><th><span class="sr-only">Actions</span></th></tr></thead><tbody>${sortedFiles.map((file) => `<tr class="${driveExplorerSelected?.id === file.id ? "selected" : ""}" data-drive-item="${esc(file.id)}"><td><div class="drive-name"><span class="drive-file-icon">${driveFileIcon(file)}</span><strong>${esc(file.name)}</strong></div></td><td class="drive-muted">—</td><td class="drive-muted">${file.modifiedTime ? new Date(file.modifiedTime).toLocaleDateString() : "—"}</td><td class="drive-muted">${file.size ? sizeOf(Number(file.size)) : "—"}</td><td class="drive-actions"><button class="icon-button" data-drive-preview="${esc(file.id)}" aria-label="Preview ${esc(file.name)}">⋮</button></td></tr>`).join("")}</tbody></table></div>`)
+    : `<div class="drive-empty"><div class="drive-empty-icon">⌁</div><h3>${query ? "No files match your search" : "This folder is empty"}</h3><p>${query ? "Try a different search term." : "Upload a file to start building this folder."}</p></div>`;
+  return `<section class="drive-explorer"><div class="drive-toolbar"><div class="drive-toolbar-location"><div class="drive-breadcrumbs" aria-label="Drive folder path"><button class="drive-home" data-drive-folder="${esc(driveExplorerBreadcrumbs[0].id)}" data-drive-breadcrumb-index="0" aria-label="Project files">⌂</button>${driveExplorerBreadcrumbs.map((crumb, index) => `<span aria-hidden="true">›</span><button class="text-button" data-drive-folder="${esc(crumb.id)}" data-drive-breadcrumb-index="${index}" ${index === driveExplorerBreadcrumbs.length - 1 ? 'aria-current="page"' : ""}>${esc(crumb.name)}</button>`).join("")}</div><span class="drive-version">${driveExplorerFiles.length} items in this folder</span></div><div class="drive-toolbar-actions"><label class="drive-search"><span aria-hidden="true">⌕</span><input id="drive-search" type="search" value="${esc(driveExplorerSearch)}" placeholder="Search in EXO" aria-label="Search in EXO"></label><button class="primary" data-action="upload-drive-files" ${reconnect ? "disabled" : ""}>＋ New</button><button class="secondary" data-action="upload-drive-files" ${reconnect ? "disabled" : ""}>↑ Upload</button><button class="secondary" data-action="new-drive-folder" ${reconnect ? "disabled" : ""}>＋ Folder</button></div></div>${reconnect ? `<div class="drive-reconnect"><p>${sessionStorage.getItem("google_provider_token") ? "Your Google Drive connection needs to be refreshed." : "Sign in with Google to browse the shared Drive folder."}</p><button class="primary" data-action="login">Reconnect Google Drive</button></div>` : `<div class="drive-control-row"><span class="drive-location-label">${esc(driveExplorerBreadcrumbs[driveExplorerBreadcrumbs.length - 1].name)}</span><div class="drive-controls"><label>Sort <select id="drive-sort"><option value="name" ${driveExplorerSort === "name" ? "selected" : ""}>Name</option><option value="modified" ${driveExplorerSort === "modified" ? "selected" : ""}>Last modified</option><option value="size" ${driveExplorerSort === "size" ? "selected" : ""}>File size</option></select></label><span class="view-toggle" aria-label="View mode"><button class="${driveExplorerView === "list" ? "active" : ""}" data-drive-view="list" aria-label="List view">☷</button><button class="${driveExplorerView === "grid" ? "active" : ""}" data-drive-view="grid" aria-label="Grid view">⊞</button></span><button class="secondary drive-export" data-action="export">↓ Export</button></div></div><section class="drive-section"><div class="drive-section-head"><div><strong>Folders</strong><small>${sortedFolders.length} folder${sortedFolders.length === 1 ? "" : "s"}</small></div></div><div class="drive-folder-grid">${folderContent}</div></section><section class="drive-section drive-files-section"><div class="drive-section-head"><div><strong>Files</strong><small>${sortedFiles.length} file${sortedFiles.length === 1 ? "" : "s"}</small></div></div>${fileContent}</section></section>`}</section>`;
 }
 function filesHTML() {
   return driveExplorerHTML();
@@ -1758,7 +1795,7 @@ function render() {
   }
 }
 document.addEventListener("click", async (e) => {
-  const el = e.target.closest("button,a");
+  const el = e.target.closest("button,a,tr");
   if (!el) return;
   if (el.dataset.view) {
     view = el.dataset.view;
@@ -1805,9 +1842,18 @@ document.addEventListener("click", async (e) => {
     if (item.mimeType === GOOGLE_DRIVE_FOLDER_MIME) {
       loadDriveExplorer(item.id, [...driveExplorerBreadcrumbs, { id: item.id, name: item.name }]);
     } else {
-      driveExplorerSelected = item;
-      render();
+      openDrivePreview(item);
     }
+  }
+  if (el.dataset.drivePreview) {
+    e.preventDefault();
+    e.stopPropagation();
+    const item = driveExplorerFiles.find((file) => file.id === el.dataset.drivePreview);
+    if (item) openDrivePreview(item);
+  }
+  if (el.dataset.driveView) {
+    driveExplorerView = el.dataset.driveView;
+    render();
   }
   if (el.dataset.removeFile) {
     e.preventDefault();
