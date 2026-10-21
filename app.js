@@ -475,8 +475,13 @@ let workspaceChannel = null;
 let applyingTldrawSnapshot = false;
 let tldrawPersistTimer = null;
 let remoteTldrawPointers = new Map();
+let remoteTldrawPointerElements = new Map();
+let remoteTldrawLasers = new Map();
+let remoteTldrawLaserElements = new Map();
 let pointerBroadcastFrame = null;
 let localPointer = null;
+let localPointerPageId = null;
+let observedTldrawPageId = null;
 let tldrawPointerName = "Collaborator";
 const tldrawClientId =
   globalThis.crypto?.randomUUID?.() ||
@@ -540,6 +545,7 @@ function broadcastTldrawPointer(point, active) {
     event: "tldraw-pointer",
     payload: {
       projectId: scope,
+      pageId: tldrawEditor?.getCurrentPageId?.(),
       clientId: tldrawClientId,
       point,
       active,
@@ -553,31 +559,128 @@ function broadcastTldrawPointer(point, active) {
   );
 }
 
+function broadcastTldrawLaser(points, active) {
+  if (!workspaceChannel) return;
+  const message = workspaceChannel.send({
+    type: "broadcast",
+    event: "tldraw-laser",
+    payload: {
+      projectId: scope,
+      pageId: tldrawEditor?.getCurrentPageId?.(),
+      clientId: tldrawClientId,
+      points,
+      active,
+      color: "#ff1f1f",
+      name: tldrawPointerName,
+    },
+  });
+  message?.catch((error) =>
+    notify("Live laser update failed: " + error.message),
+  );
+}
+
 function renderRemoteTldrawPointers() {
   const overlay = $("#tldraw-pointer-overlay");
   if (!overlay || !tldrawEditor) return;
-  overlay.innerHTML = "";
+  const currentPageId = tldrawEditor.getCurrentPageId();
+  const visibleLaserClientIds = new Set();
+  const visiblePointerClientIds = new Set();
+  const now = Date.now();
+  for (const laser of remoteTldrawLasers.values()) {
+    if (
+      !laser.points?.length ||
+      laser.projectId !== scope ||
+      laser.pageId !== currentPageId ||
+      laser.expiresAt <= now
+    )
+      continue;
+    visibleLaserClientIds.add(laser.clientId);
+    let trail = remoteTldrawLaserElements.get(laser.clientId);
+    if (!trail) {
+      trail = document.createElement("div");
+      trail.className = "tldraw-remote-laser";
+      const svg = document.createElementNS(
+        "http://www.w3.org/2000/svg",
+        "svg",
+      );
+      svg.setAttribute("width", "100%");
+      svg.setAttribute("height", "100%");
+      svg.setAttribute("overflow", "visible");
+      const path = document.createElementNS(
+        "http://www.w3.org/2000/svg",
+        "polyline",
+      );
+      const label = document.createElement("span");
+      label.className = "tldraw-remote-laser-name";
+      svg.append(path);
+      trail.append(svg, label);
+      remoteTldrawLaserElements.set(laser.clientId, trail);
+      overlay.append(trail);
+    }
+    const path = trail.querySelector("polyline");
+    path.setAttribute(
+      "points",
+      laser.points
+        .map((point) => {
+          const screenPoint = tldrawEditor.pageToScreen(point);
+          return `${screenPoint.x},${screenPoint.y}`;
+        })
+        .join(" "),
+    );
+    const lastPoint = tldrawEditor.pageToScreen(
+      laser.points[laser.points.length - 1],
+    );
+    const label = trail.querySelector(".tldraw-remote-laser-name");
+    label.style.left = `${lastPoint.x}px`;
+    label.style.top = `${lastPoint.y}px`;
+    trail.style.opacity = Math.max(0, Math.min(1, (laser.expiresAt - now) / 900));
+    label.textContent = laser.name || "Collaborator";
+  }
+  for (const [clientId, trail] of remoteTldrawLaserElements) {
+    if (!visibleLaserClientIds.has(clientId)) {
+      trail.remove();
+      remoteTldrawLaserElements.delete(clientId);
+    }
+  }
   for (const pointer of remoteTldrawPointers.values()) {
-    if (!pointer.point || pointer.projectId !== scope) continue;
+    if (
+      !pointer.point ||
+      pointer.projectId !== scope ||
+      pointer.pageId !== currentPageId
+    )
+      continue;
+    visiblePointerClientIds.add(pointer.clientId);
     const screenPoint = tldrawEditor.pageToScreen(pointer.point);
-    const dot = document.createElement("div");
-    dot.className = "tldraw-remote-pointer";
+    let dot = remoteTldrawPointerElements.get(pointer.clientId);
+    if (!dot) {
+      dot = document.createElement("div");
+      dot.className = "tldraw-remote-pointer";
+      const icon = document.createElement("img");
+      icon.className = "tldraw-remote-pointer-icon";
+      icon.src = "content/collab-cursor.png";
+      icon.alt = "";
+      icon.draggable = false;
+      dot.append(icon);
+      const label = document.createElement("span");
+      label.className = "tldraw-remote-pointer-name";
+      dot.append(label);
+      remoteTldrawPointerElements.set(pointer.clientId, dot);
+      overlay.append(dot);
+    }
     dot.style.left = `${screenPoint.x}px`;
     dot.style.top = `${screenPoint.y}px`;
     dot.style.setProperty("--pointer-color", pointer.color);
     dot.title = pointer.name || "Collaborator";
-    const icon = document.createElement("img");
-    icon.className = "tldraw-remote-pointer-icon";
-    icon.src = "content/collab-cursor.png";
-    icon.alt = "";
-    icon.draggable = false;
+    const icon = dot.querySelector(".tldraw-remote-pointer-icon");
     icon.style.filter = `hue-rotate(${Number(pointer.hue) || 0}deg) drop-shadow(1px 1px 0 #fff) drop-shadow(0 1px 2px #0008)`;
-    dot.append(icon);
-    const label = document.createElement("span");
-    label.className = "tldraw-remote-pointer-name";
+    const label = dot.querySelector(".tldraw-remote-pointer-name");
     label.textContent = pointer.name || "Collaborator";
-    dot.append(label);
-    overlay.append(dot);
+  }
+  for (const [clientId, dot] of remoteTldrawPointerElements) {
+    if (!visiblePointerClientIds.has(clientId)) {
+      dot.remove();
+      remoteTldrawPointerElements.delete(clientId);
+    }
   }
 }
 
@@ -593,7 +696,7 @@ function handleTldrawPointer(payload) {
   if (
     !payload ||
     payload.clientId === tldrawClientId ||
-    payload.projectId !== scope
+    !payload.projectId
   )
     return;
   if (payload.active === false || !payload.point) {
@@ -604,7 +707,28 @@ function handleTldrawPointer(payload) {
   scheduleRemotePointerRender();
 }
 
+function handleTldrawLaser(payload) {
+  if (
+    !payload ||
+    payload.clientId === tldrawClientId ||
+    !payload.projectId
+  )
+    return;
+  if (payload.active === false || !payload.points?.length) {
+    remoteTldrawLasers.delete(payload.clientId);
+  } else {
+    remoteTldrawLasers.set(payload.clientId, {
+      ...payload,
+      expiresAt: Date.now() + 900,
+    });
+    setTimeout(scheduleRemotePointerRender, 920);
+  }
+  scheduleRemotePointerRender();
+}
+
 function bindTldrawPointerPresence(container, editor, projectId) {
+  let laserActive = false;
+  let laserPoints = [];
   const sendPointer = (event, active = true) => {
     if (scope !== projectId || tldrawEditor !== editor) return;
     const bounds = container.getBoundingClientRect();
@@ -613,20 +737,55 @@ function bindTldrawPointerPresence(container, editor, projectId) {
       y: event.clientY - bounds.top,
     });
     localPointer = point;
-    if (active) broadcastTldrawPointer(point, true);
+    localPointerPageId = editor.getCurrentPageId();
+    if (laserActive) {
+      laserPoints = [...laserPoints.slice(-79), point];
+      broadcastTldrawLaser(laserPoints, active);
+    } else if (active) {
+      broadcastTldrawPointer(point, true);
+    }
+  };
+  const startPointer = (event) => {
+    laserActive = editor.getCurrentToolId?.() === "laser";
+    if (laserActive) {
+      laserPoints = [];
+      broadcastTldrawPointer(null, false);
+    }
+    sendPointer(event);
+  };
+  const stopPointer = () => {
+    if (!laserActive) return;
+    broadcastTldrawLaser(null, false);
+    laserActive = false;
+    laserPoints = [];
+    if (localPointer) broadcastTldrawPointer(localPointer, true);
   };
   container.addEventListener("pointermove", sendPointer);
   container.addEventListener("pointerenter", sendPointer);
+  container.addEventListener("pointerdown", startPointer);
+  container.addEventListener("pointerup", stopPointer);
+  container.addEventListener("pointercancel", stopPointer);
   container.addEventListener("pointerleave", () => {
     if (scope !== projectId || tldrawEditor !== editor || !localPointer) return;
+    if (laserActive) broadcastTldrawLaser(null, false);
     broadcastTldrawPointer(null, false);
+    laserActive = false;
+    laserPoints = [];
     localPointer = null;
+    localPointerPageId = null;
   });
   return () => {
     container.removeEventListener("pointermove", sendPointer);
     container.removeEventListener("pointerenter", sendPointer);
+    container.removeEventListener("pointerdown", startPointer);
+    container.removeEventListener("pointerup", stopPointer);
+    container.removeEventListener("pointercancel", stopPointer);
     if (localPointer) broadcastTldrawPointer(null, false);
+    if (laserActive) broadcastTldrawLaser(null, false);
+    laserActive = false;
+    laserPoints = [];
     localPointer = null;
+    localPointerPageId = null;
   };
 }
 
@@ -702,7 +861,11 @@ function disposeTldrawBoard() {
   tldrawUnlisten?.();
   tldrawUnlisten = null;
   remoteTldrawPointers.clear();
+  remoteTldrawPointerElements.clear();
+  remoteTldrawLasers.clear();
+  remoteTldrawLaserElements.clear();
   $("#tldraw-pointer-overlay")?.replaceChildren();
+  observedTldrawPageId = null;
   tldrawEditor = null;
   if (!tldrawRoot) return;
   try {
@@ -744,6 +907,7 @@ async function initTldrawBoard() {
             return;
           }
           tldrawEditor = editor;
+          observedTldrawPageId = editor.getCurrentPageId();
           loadProjectTldrawSnapshot(state.projectDrawings[projectId]);
           const unbindPointerPresence = bindTldrawPointerPresence(
             container,
@@ -758,6 +922,13 @@ async function initTldrawBoard() {
                 scope !== projectId
               )
                 return;
+              const pageId = editor.getCurrentPageId();
+              if (localPointer && localPointerPageId !== pageId) {
+                broadcastTldrawPointer(null, false);
+                localPointer = null;
+                localPointerPageId = null;
+              }
+              scheduleRemotePointerRender();
               state = {
                 ...state,
                 projectDrawings: {
@@ -786,9 +957,25 @@ async function initTldrawBoard() {
             },
             { scope: "document" },
           );
+          const unlistenPageChanges = editor.store.listen(
+            () => {
+              if (tldrawEditor !== editor || scope !== projectId) return;
+              const pageId = editor.getCurrentPageId();
+              if (pageId === observedTldrawPageId) return;
+              observedTldrawPageId = pageId;
+              remoteTldrawPointers.clear();
+              remoteTldrawLasers.clear();
+              broadcastTldrawPointer(null, false);
+              localPointer = null;
+              localPointerPageId = null;
+              renderRemoteTldrawPointers();
+            },
+            { scope: "session" },
+          );
           const previousUnlisten = tldrawUnlisten;
           tldrawUnlisten = () => {
             previousUnlisten();
+            unlistenPageChanges();
             unbindPointerPresence();
           };
           renderRemoteTldrawPointers();
@@ -849,6 +1036,8 @@ const currentProject = () => scope;
 function switchProject(projectId) {
   if (!projectId || projectId === scope) return;
   saveActiveTldrawSnapshot();
+  remoteTldrawPointers.clear();
+  remoteTldrawLasers.clear();
   tldrawEditor = null;
   persist();
   scope = projectId;
@@ -2188,6 +2377,9 @@ $("#backup-input").onchange = (e) => {
       })
       .on("broadcast", { event: "tldraw-pointer" }, ({ payload }) => {
         handleTldrawPointer(payload);
+      })
+      .on("broadcast", { event: "tldraw-laser" }, ({ payload }) => {
+        handleTldrawLaser(payload);
       })
       .on(
         "postgres_changes",
