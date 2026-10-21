@@ -1064,6 +1064,115 @@ dialog::backdrop {
 .hidden {
   display: none !important;
 }
+.drive-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+  padding-bottom: 16px;
+  border-bottom: 1px solid var(--line);
+}
+.drive-breadcrumbs {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  flex-wrap: wrap;
+  font-size: 12px;
+}
+.drive-breadcrumbs .text-button {
+  color: var(--green);
+}
+.drive-drop-zone {
+  padding: 8px 11px;
+  border: 1px dashed #b8c9b2;
+  border-radius: 6px;
+  color: var(--muted);
+  font-size: 10px;
+}
+.drive-drop-zone.dragging {
+  border-color: var(--green);
+  background: var(--soft);
+  color: var(--green);
+}
+.drive-reconnect {
+  display: grid;
+  place-items: center;
+  gap: 14px;
+  min-height: 260px;
+  text-align: center;
+  color: var(--muted);
+}
+.drive-split {
+  display: grid;
+  grid-template-columns: minmax(240px, 0.8fr) minmax(0, 1.4fr);
+  min-height: 520px;
+  margin-top: 16px;
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  overflow: hidden;
+}
+.drive-file-list {
+  padding: 8px;
+  overflow: auto;
+  border-right: 1px solid var(--line);
+  background: #fbfdf9;
+}
+.drive-file {
+  display: flex;
+  align-items: center;
+  gap: 11px;
+  width: 100%;
+  padding: 11px;
+  border-radius: 6px;
+  text-align: left;
+}
+.drive-file:hover {
+  background: var(--soft);
+}
+.drive-file-icon {
+  color: var(--gold);
+  font-size: 18px;
+}
+.drive-file-main {
+  display: grid;
+  gap: 2px;
+  min-width: 0;
+}
+.drive-file-main b {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.drive-file-main small {
+  color: var(--muted);
+  font-size: 10px;
+}
+.drive-preview {
+  display: flex;
+  flex-direction: column;
+  min-width: 0;
+  background: #f7faf6;
+}
+.drive-preview-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 11px 14px;
+  border-bottom: 1px solid var(--line);
+}
+.drive-preview-head strong {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.drive-preview iframe {
+  flex: 1;
+  width: 100%;
+  min-height: 500px;
+  border: 0;
+}
 @media (min-width: 1600px) {
   .content {
     padding: 38px;
@@ -1095,6 +1204,14 @@ dialog::backdrop {
   }
   .topbar {
     padding-inline: 23px;
+  }
+  .drive-split {
+    grid-template-columns: 1fr;
+  }
+  .drive-file-list {
+    max-height: 300px;
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
   }
   .tools .tool {
     padding: 6px 8px;

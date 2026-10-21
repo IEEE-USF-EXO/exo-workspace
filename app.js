@@ -1,19 +1,8 @@
-"use strict";
+﻿"use strict";
 
 // ==========================================
 // 1. GOOGLE & SUPABASE CONFIGURATION
 // ==========================================
-const GITHUB_ORG_OR_USERNAME = "IEEE-USF-EXO";
-const GITHUB_REPOSITORIES = {
-  exo: {},
-  "pid-spoon": {
-    Controls: "pid-spoon-controls",
-    Electrical: "pid-spoon-electrical",
-    Mechanical: "pid-spoon-mechanical",
-    Shared: "pid-spoon-interfaces",
-  },
-};
-//hello
 const SUPABASE_URL = "https://tnupwlucufewosslvcaz.supabase.co";
 const SUPABASE_ANON_KEY =
   "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRudXB3bHVjdWZld29zc2x2Y2F6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTE3NTM4MjIsImV4cCI6MjEwNzMyOTgyMn0.4TFRb6t4pE547wywotP_SWZG50NiJzlxs1_Ds51aQmM";
@@ -30,7 +19,9 @@ const supabaseClient = window.supabase.createClient(
   },
 );
 
-let googleAccessToken = null;
+const ROOT_DRIVE_FOLDER_ID = "1TEs2PCaDcNQ0nlahtM9FWJKULPTjQAWM";
+const GOOGLE_DRIVE_FOLDER_MIME = "application/vnd.google-apps.folder";
+let googleAccessToken = sessionStorage.getItem("google_provider_token");
 let sharedBOMRows = [];
 let driveFolders = [];
 
@@ -45,8 +36,7 @@ async function signInWithGoogle() {
     const { error } = await supabaseClient.auth.signInWithOAuth({
       provider: "google",
       options: {
-        scopes:
-          "https://www.googleapis.com/auth/drive",
+        scopes: "https://www.googleapis.com/auth/drive",
         queryParams: { access_type: "offline", prompt: "consent" },
         redirectTo: window.location.origin + window.location.pathname,
       },
@@ -85,19 +75,23 @@ async function checkUserSession() {
   const logoutBtn = document.getElementById("logout-btn");
 
   if (session) {
-    googleAccessToken = session.provider_token || null;
+    googleAccessToken = session.provider_token || sessionStorage.getItem("google_provider_token");
+    if (session.provider_token) {
+      sessionStorage.setItem("google_provider_token", session.provider_token);
+    }
     if (loginBtn) loginBtn.style.display = "none";
     if (logoutBtn) logoutBtn.style.display = "inline-flex";
     await ensureMemberProfile(session.user);
     await loadSharedBOM();
     try {
-      await syncDriveFiles();
+      if (googleAccessToken) await syncDriveFiles();
     } catch (error) {
       driveSyncing = false;
       notify("Google Drive files could not be synchronized: " + error.message);
     }
   } else {
     googleAccessToken = null;
+    sessionStorage.removeItem("google_provider_token");
     sharedBOMRows = [];
     if (loginBtn) loginBtn.style.display = "inline-flex";
     if (logoutBtn) logoutBtn.style.display = "none";
@@ -122,66 +116,61 @@ async function checkUserSession() {
 }
 
 supabaseClient.auth.onAuthStateChange((event, session) => {
-  checkUserSession();
+  if (event === "SIGNED_OUT") {
+    googleAccessToken = null;
+    sessionStorage.removeItem("google_provider_token");
+  } else if (session?.provider_token) {
+    googleAccessToken = session.provider_token;
+    sessionStorage.setItem("google_provider_token", session.provider_token);
+  }
+  checkUserSession().catch((error) => notify("Could not update your session: " + error.message));
 });
 
-async function uploadFileToGoogleDrive(file, folderId) {
-  if (!googleAccessToken) {
-    throw new Error("Google Drive access is unavailable. Sign in again.");
+async function driveRequest(url, options = {}) {
+  if (!googleAccessToken) throw new Error("Reconnect Google Drive to continue.");
+  const response = await fetch(url, {
+    ...options,
+    headers: { Authorization: `Bearer ${googleAccessToken}`, ...(options.headers || {}) },
+  });
+  if (response.status === 401) {
+    googleAccessToken = null;
+    sessionStorage.removeItem("google_provider_token");
+    if (view === "files") render();
+    throw new Error("Google Drive authorization expired. Reconnect Google Drive.");
   }
-  const sessionResponse = await fetch(
-    "https://www.googleapis.com/upload/drive/v3/files?uploadType=resumable&fields=id,name,mimeType,size,webViewLink,thumbnailLink",
-    {
-      method: "POST",
-      headers: {
-        Authorization: `Bearer ${googleAccessToken}`,
-        "Content-Type": "application/json; charset=UTF-8",
-        "X-Upload-Content-Type": file.type || "application/octet-stream",
-        "X-Upload-Content-Length": String(file.size),
-      },
-      body: JSON.stringify({
-        name: file.name,
-        ...(folderId ? { parents: [folderId] } : {}),
-      }),
-    },
-  );
-  if (!sessionResponse.ok) {
-    const details = await sessionResponse.json().catch(() => ({}));
-    throw new Error(
-      details.error?.message ||
-        `Google Drive upload could not start (HTTP ${sessionResponse.status})`,
-    );
+  if (!response.ok) {
+    const details = await response.json().catch(() => ({}));
+    throw new Error(details.error?.message || `Google Drive request failed (HTTP ${response.status})`);
   }
-
-  const uploadUrl = sessionResponse.headers.get("Location");
-  if (!uploadUrl) throw new Error("Google Drive did not return an upload session.");
-  const chunkSize = 8 * 1024 * 1024;
-  let offset = 0;
-  let result = null;
-  while (offset < file.size) {
-    const end = Math.min(offset + chunkSize, file.size);
-    const response = await fetch(uploadUrl, {
-      method: "PUT",
-      headers: {
-        "Content-Length": String(end - offset),
-        "Content-Range": `bytes ${offset}-${end - 1}/${file.size}`,
-        "Content-Type": file.type || "application/octet-stream",
-      },
-      body: file.slice(offset, end),
-    });
-    if (response.status !== 308 && !response.ok) {
-      const details = await response.json().catch(() => ({}));
-      throw new Error(
-        details.error?.message ||
-          `Google Drive upload failed (HTTP ${response.status})`,
-      );
-    }
-    offset = end;
-    if (response.status !== 308) result = await response.json();
-  }
-  return result;
+  return response;
 }
 
+async function listDriveFiles(folderId = ROOT_DRIVE_FOLDER_ID) {
+  const params = new URLSearchParams({
+    q: `'${folderId}' in parents and trashed=false`,
+    orderBy: "folder,name",
+    supportsAllDrives: "true",
+    includeItemsFromAllDrives: "true",
+    fields: "files(id,name,mimeType,webViewLink,webContentLink,iconLink,thumbnailLink,modifiedTime,size)",
+  });
+  return (await (await driveRequest(`https://www.googleapis.com/drive/v3/files?${params}`)).json()).files || [];
+}
+
+async function uploadFileToDrive(file, folderId) {
+  const metadata = { name: file.name, mimeType: file.type || "application/octet-stream", parents: [folderId] };
+  const body = new FormData();
+  body.append("metadata", new Blob([JSON.stringify(metadata)], { type: "application/json" }));
+  body.append("file", file);
+  return (await (await driveRequest("https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&supportsAllDrives=true&fields=id,name,mimeType,webViewLink,webContentLink,modifiedTime,size", { method: "POST", body })).json());
+}
+
+async function createSubfolder(folderName, parentFolderId) {
+  return (await (await driveRequest("https://www.googleapis.com/drive/v3/files?supportsAllDrives=true&fields=id,name,mimeType,webViewLink", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: folderName, mimeType: GOOGLE_DRIVE_FOLDER_MIME, parents: [parentFolderId] }) })).json());
+}
+
+async function uploadFileToGoogleDrive(file, folderId) {
+  return uploadFileToDrive(file, folderId || ROOT_DRIVE_FOLDER_ID);
+}
 function showDriveTestUpload() {
   openModal(
     "Test Google Drive upload",
@@ -197,7 +186,7 @@ function showDriveTestUpload() {
     }
     const button = $("[type=submit]", event.target);
     button.disabled = true;
-    button.textContent = "Uploading to Google Drive…";
+    button.textContent = "Uploading to Google Driveâ€¦";
     try {
       const driveFile = await uploadFileToGoogleDrive(file, driveTestFolderId);
       $("#dialog").close();
@@ -215,7 +204,7 @@ function showDriveTestUpload() {
 
 async function createDriveFolder(name, parentId) {
   const response = await fetch(
-    "https://www.googleapis.com/drive/v3/files?fields=id,name,mimeType,parents",
+    "https://www.googleapis.com/drive/v3/files?supportsAllDrives=true&fields=id,name,mimeType,parents",
     {
       method: "POST",
       headers: {
@@ -318,149 +307,6 @@ async function syncDriveFiles() {
   if (view === "files" || view === "gallery" || view === "bom") render();
 }
 
-// Helper to push a File object directly to GitHub REST API (supports creating & updating files)
-async function pushFileToGitHub(file, owner, repo, folderPath, note = "") {
-  if (!githubAccessToken) {
-    throw new Error(
-      "Not signed in with GitHub (or token expired). Please click Sign out and Sign in with GitHub again.",
-    );
-  }
-
-  const base64Content = await new Promise((resolve, reject) => {
-    const reader = new FileReader();
-    reader.onload = () => resolve(String(reader.result).split(",")[1]);
-    reader.onerror = () => reject(reader.error);
-    reader.readAsDataURL(file);
-  });
-
-  const cleanFolder = String(folderPath || "")
-    .split("/")
-    .filter((s) => s && s !== "." && s !== "..")
-    .join("/");
-  const fullPath = cleanFolder ? `${cleanFolder}/${file.name}` : file.name;
-  const encodedPath = fullPath.split("/").map(encodeURIComponent).join("/");
-  const repoApiUrl = `https://api.github.com/repos/${owner}/${repo}`;
-  const apiUrl = `${repoApiUrl}/contents/${encodedPath}`;
-  const repoHeaders = {
-    Authorization: `Bearer ${githubAccessToken}`,
-    Accept: "application/vnd.github.v3+json",
-  };
-  const repoResponse = await fetch(repoApiUrl, { headers: repoHeaders });
-  if (!repoResponse.ok) {
-    const errorData = await repoResponse.json().catch(() => ({}));
-    throw new Error(errorData.message || `Could not read repository (HTTP ${repoResponse.status})`);
-  }
-  const repository = await repoResponse.json();
-  const baseBranch = repository.default_branch;
-  const uploadKey = `exo-dashboard-upload:${owner}/${repo}:${cleanFolder}`;
-  let branchName = localStorage.getItem(uploadKey);
-  let pullRequest = null;
-  if (branchName) {
-    const openPullRequestsResponse = await fetch(
-      `${repoApiUrl}/pulls?state=open&head=${encodeURIComponent(`${owner}:${branchName}`)}&base=${encodeURIComponent(baseBranch)}`,
-      { headers: repoHeaders },
-    );
-    if (openPullRequestsResponse.ok) {
-      const openPullRequests = await openPullRequestsResponse.json();
-      pullRequest = openPullRequests[0] || null;
-    }
-    if (!pullRequest) {
-      localStorage.removeItem(uploadKey);
-      branchName = null;
-    }
-  }
-  if (!branchName) {
-    branchName = `exo-dashboard/${Date.now()}-${cleanFolder
-      .replace(/[^a-zA-Z0-9._-]+/g, "-")
-      .replace(/^-+|-+$/g, "")
-      .slice(0, 60) || "uploads"}`;
-  const baseRefResponse = await fetch(
-    `${repoApiUrl}/git/ref/heads/${encodeURIComponent(baseBranch)}`,
-    { headers: repoHeaders },
-  );
-  if (!baseRefResponse.ok) {
-    const errorData = await baseRefResponse.json().catch(() => ({}));
-    throw new Error(errorData.message || `Could not read the default branch (HTTP ${baseRefResponse.status})`);
-  }
-  const baseRef = await baseRefResponse.json();
-  const branchResponse = await fetch(`${repoApiUrl}/git/refs`, {
-    method: "POST",
-    headers: { ...repoHeaders, "Content-Type": "application/json" },
-    body: JSON.stringify({
-      ref: `refs/heads/${branchName}`,
-      sha: baseRef.object.sha,
-    }),
-  });
-  if (!branchResponse.ok) {
-    const errorData = await branchResponse.json().catch(() => ({}));
-    throw new Error(errorData.message || `Could not create upload branch (HTTP ${branchResponse.status})`);
-  }
-  }
-
-  // Check if file already exists so we can pass its SHA to update it instead of failing with 422
-  let existingSha = null;
-  try {
-    const checkRes = await fetch(
-      `${apiUrl}?ref=${encodeURIComponent(branchName)}`,
-      {
-      headers: {
-        Authorization: `Bearer ${githubAccessToken}`,
-        Accept: "application/vnd.github.v3+json",
-      },
-    });
-    if (checkRes.ok) {
-      const existingData = await checkRes.json();
-      existingSha = existingData.sha;
-    }
-  } catch (_) {}
-
-  const payload = {
-    message: note
-      ? `Upload ${file.name}: ${note}`
-      : `Upload ${file.name} via EXO Dashboard`,
-    content: base64Content,
-    branch: branchName,
-  };
-  if (existingSha) payload.sha = existingSha;
-
-  const response = await fetch(apiUrl, {
-    method: "PUT",
-    headers: {
-      Authorization: `Bearer ${githubAccessToken}`,
-      Accept: "application/vnd.github.v3+json",
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(payload),
-  });
-
-  if (!response.ok) {
-    const errorData = await response.json().catch(() => ({}));
-    throw new Error(errorData.message || `HTTP ${response.status}`);
-  }
-  if (!pullRequest) {
-  const pullRequestResponse = await fetch(`${repoApiUrl}/pulls`, {
-    method: "POST",
-    headers: { ...repoHeaders, "Content-Type": "application/json" },
-    body: JSON.stringify({
-      title: note ? `Upload ${file.name}: ${note}` : `Upload ${file.name}`,
-      head: branchName,
-      base: baseBranch,
-      body: `Uploaded through the EXO Dashboard.${note ? `\n\n${note}` : ""}`,
-    }),
-  });
-  if (!pullRequestResponse.ok) {
-    const errorData = await pullRequestResponse.json().catch(() => ({}));
-    throw new Error(
-      errorData.message ||
-        `File uploaded, but could not open a pull request (HTTP ${pullRequestResponse.status})`,
-    );
-  }
-  pullRequest = await pullRequestResponse.json();
-  localStorage.setItem(uploadKey, branchName);
-  }
-  return pullRequest;
-}
-
 // ==========================================
 // 2. ORIGINAL EXO-DASHBOARD APPLICATION LOGIC
 // ==========================================
@@ -479,7 +325,7 @@ const esc = (v) =>
   );
 const bomLinkHTML = (value) => {
   const link = String(value ?? "").trim();
-  if (!link) return "—";
+  if (!link) return "â€”";
   try {
     const url = new URL(link);
     if (!["http:", "https:"].includes(url.protocol)) throw new Error();
@@ -540,7 +386,11 @@ let state = initial(),
   urls = new Map(),
   gesture = null,
   toastTimer,
-  driveSyncing = false;
+  driveSyncing = false,
+  driveExplorerFolder = ROOT_DRIVE_FOLDER_ID,
+  driveExplorerBreadcrumbs = [{ id: ROOT_DRIVE_FOLDER_ID, name: "EXO Root" }],
+  driveExplorerFiles = [],
+  driveExplorerSelected = null;
 const folderIds = [
   ["exo", "Controls", "1Pdx0N6EHctdZKqb7P29tVHuNVr8v8yrN"],
   ["exo", "Electrical", "1WLCSZ5bMisg1GjJH-oVJhsXjM938elaR"],
@@ -549,7 +399,7 @@ const folderIds = [
   ["pid-spoon", "Electrical", "16DcGIMgwtcuZrYI7QaQJs6lVmQ6q1_ZE"],
   ["pid-spoon", "Mechanical", "1a1LPEQUeCjfbkV6nDJag9Hsq55-Go0J8"],
 ];
-const driveTestFolderId = "1kldWFbtd0S_Mr8zsrYBCrYiGJsc1zhl_";
+const driveTestFolderId = ROOT_DRIVE_FOLDER_ID;
 const teamLabel = (project, team) =>
   project === "pid-spoon" && team === "Mechanical" ? "CAD" : team;
 const driveFolderFor = (project, team) =>
@@ -574,45 +424,17 @@ const driveFolderOptions = (project, team, selectedId = "") => {
     })
     .join("");
 };
-const knownResources = [
-  ...Object.entries(GITHUB_REPOSITORIES).flatMap(([project, repos]) =>
-    Object.entries(repos).map(([team, repo]) => ({
-      id: `${project}-${team}-repo`,
-      project,
-      team,
-      title: `${team} repository`,
-      url: `https://${"github.com"}/${GITHUB_ORG_OR_USERNAME}/${repo}`,
-    })),
-  ),
-  ...folderIds.map(([project, team, id]) => ({
+const knownResources = folderIds.map(([project, team, id]) => ({
     id,
     project,
     team,
     title: teamLabel(project, team) + " Drive folder",
     url: "https://drive.google.com/drive/folders/" + id,
-  })),
-];
+  }));
 const nameOf = (id) =>
   state.projects.find((p) => p.id === id)?.name || "Unknown project";
 const inScope = (item) => scope === "all" || item.project === scope;
 const currentProject = () => (scope === "all" ? state.projects[0].id : scope);
-const githubRepoFor = (project, team) => {
-  const configuredRepo = GITHUB_REPOSITORIES[project]?.[team];
-  if (configuredRepo) {
-    return { owner: GITHUB_ORG_OR_USERNAME, repo: configuredRepo };
-  }
-
-  const resource = state.resources.find(
-    (item) =>
-      item.project === project &&
-      item.team === team &&
-      item.url.startsWith("https://github.com/"),
-  );
-  const match = resource?.url.match(
-    /^https:\/\/github\.com\/([^/]+)\/([^/#?]+)/i,
-  );
-  return match ? { owner: match[1], repo: match[2] } : null;
-};
 const teamOptions = (value, project = null) =>
   (project
     ? folderIds
@@ -695,7 +517,7 @@ function removeBlob(id) {
 }
 function persist() {
   const snapshot = structuredClone(state);
-  $("#save-status").textContent = "Saving…";
+  $("#save-status").textContent = "Savingâ€¦";
   saving = saving
     .catch(() => {})
     .then(async () => {
@@ -902,7 +724,7 @@ function showUpload(photos = false) {
     }
     const button = $("[type=submit]", e.target);
     button.disabled = true;
-    button.textContent = "Uploading to Google Drive…";
+    button.textContent = "Uploading to Google Driveâ€¦";
     const proj = String(form.get("project")),
       team = String(form.get("team")),
       note = String(form.get("note")),
@@ -1011,7 +833,7 @@ function centerCard() {
 function showStorage() {
   openModal(
     "Your workspace storage",
-    `<p class="hint">This workspace stores drawing state and Drive file metadata locally in your browser. File contents are uploaded to Google Drive.</p><ul class="storage-list"><li><b>Google Drive</b>Large files are uploaded directly to the selected project/team folder using resumable uploads.</li><li><b>Browser storage</b>Projects, drawings, relationships, BOM selections, and Drive file links are stored locally in this browser profile.</li><li><b>Share or back up</b>Export a JSON backup containing workspace data and Drive-backed file metadata. The backup does not duplicate large Drive files.</li></ul><div class="row"><button class="primary" data-action="export">↓ Export workspace backup</button><button class="secondary" data-action="import">↑ Import backup</button></div>`,
+    `<p class="hint">This workspace stores drawing state and Drive file metadata locally in your browser. File contents are uploaded to Google Drive.</p><ul class="storage-list"><li><b>Google Drive</b>Large files are uploaded directly to the selected project/team folder using resumable uploads.</li><li><b>Browser storage</b>Projects, drawings, relationships, BOM selections, and Drive file links are stored locally in this browser profile.</li><li><b>Share or back up</b>Export a JSON backup containing workspace data and Drive-backed file metadata. The backup does not duplicate large Drive files.</li></ul><div class="row"><button class="primary" data-action="export">â†“ Export workspace backup</button><button class="secondary" data-action="import">â†‘ Import backup</button></div>`,
   );
 }
 function toolHint() {
@@ -1031,10 +853,10 @@ function boardHTML() {
     edges = state.edges.filter((e) => nodeIds.has(e.from) && nodeIds.has(e.to)),
     strokes = state.strokes.filter(inScope);
   return `<section class="panel"><div class="canvas-top"><div class="tools" aria-label="Drawing tools">${[
-    ["select", "↖ Select"],
-    ["pen", "✎ Draw"],
-    ["connect", "↗ Connect"],
-    ["hand", "✋ Pan"],
+    ["select", "â†– Select"],
+    ["pen", "âœŽ Draw"],
+    ["connect", "â†— Connect"],
+    ["hand", "âœ‹ Pan"],
   ]
     .map(
       ([id, label]) =>
@@ -1042,7 +864,7 @@ function boardHTML() {
     )
     .join(
       "",
-    )}</div><div class="row"><input id="pen-color" type="color" value="#346d4b" title="Pen color" aria-label="Pen color" style="padding:2px;width:27px;height:27px"><button class="text-button" data-action="undo" ${history.length ? "" : "disabled"}>↶ Undo</button><button class="secondary" data-action="zoom-out" aria-label="Zoom out">−</button><span id="zoom-label" class="small muted">${Math.round(zoom * 100)}%</span><button class="secondary" data-action="zoom-in" aria-label="Zoom in">＋</button></div></div><div class="canvas-layout"><div class="canvas-viewport" tabindex="0" aria-label="Drawing board. Use Add card for cards, Draw for freehand marks, and Connect for relationships."><div class="world-space" style="width:${2400 * zoom}px;height:${1600 * zoom}px"><div class="world ${tool === "pen" ? "draw" : tool}" style="transform:scale(${zoom})"><svg width="2400" height="1600" aria-hidden="true"><defs><marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0 0L8 4L0 8" fill="#9caf90"/></marker></defs>${edges.map(edgeSVG).join("")}${strokes.map((s) => `<polyline class="stroke" data-stroke="${s.id}" points="${s.points.map((p) => p.join(",")).join(" ")}" fill="none" stroke="${s.color}" stroke-width="${selected?.id === s.id ? 4 : 2.5}" stroke-linecap="round" stroke-linejoin="round"/>`).join("")}</svg>${nodes.map(cardHTML).join("")}</div></div>${!nodes.length && !strokes.length ? `<div class="canvas-note"><strong>A blank board. Yours to shape.</strong><p>Add your own cards or choose Draw and start sketching. Nothing is generated for you.</p></div>` : ""}</div><aside class="inspector" id="inspector"></aside></div><div class="canvas-footer"><span id="tool-hint">${toolHint()}</span><span>${nodes.length} cards · ${edges.length} connections · ${scope === "all" ? "All projects" : esc(nameOf(scope))}</span></div></section>`;
+    )}</div><div class="row"><input id="pen-color" type="color" value="#346d4b" title="Pen color" aria-label="Pen color" style="padding:2px;width:27px;height:27px"><button class="text-button" data-action="undo" ${history.length ? "" : "disabled"}>â†¶ Undo</button><button class="secondary" data-action="zoom-out" aria-label="Zoom out">âˆ’</button><span id="zoom-label" class="small muted">${Math.round(zoom * 100)}%</span><button class="secondary" data-action="zoom-in" aria-label="Zoom in">ï¼‹</button></div></div><div class="canvas-layout"><div class="canvas-viewport" tabindex="0" aria-label="Drawing board. Use Add card for cards, Draw for freehand marks, and Connect for relationships."><div class="world-space" style="width:${2400 * zoom}px;height:${1600 * zoom}px"><div class="world ${tool === "pen" ? "draw" : tool}" style="transform:scale(${zoom})"><svg width="2400" height="1600" aria-hidden="true"><defs><marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0 0L8 4L0 8" fill="#9caf90"/></marker></defs>${edges.map(edgeSVG).join("")}${strokes.map((s) => `<polyline class="stroke" data-stroke="${s.id}" points="${s.points.map((p) => p.join(",")).join(" ")}" fill="none" stroke="${s.color}" stroke-width="${selected?.id === s.id ? 4 : 2.5}" stroke-linecap="round" stroke-linejoin="round"/>`).join("")}</svg>${nodes.map(cardHTML).join("")}</div></div>${!nodes.length && !strokes.length ? `<div class="canvas-note"><strong>A blank board. Yours to shape.</strong><p>Add your own cards or choose Draw and start sketching. Nothing is generated for you.</p></div>` : ""}</div><aside class="inspector" id="inspector"></aside></div><div class="canvas-footer"><span id="tool-hint">${toolHint()}</span><span>${nodes.length} cards Â· ${edges.length} connections Â· ${scope === "all" ? "All projects" : esc(nameOf(scope))}</span></div></section>`;
 }
 function edgeSVG(edge) {
   const a = state.nodes.find((n) => n.id === edge.from),
@@ -1060,7 +882,7 @@ function edgeSVG(edge) {
   return `<g><path d="${d}" stroke="${sel ? "#477b3a" : "#a7b99b"}" stroke-width="${sel ? 2.5 : 1.4}" fill="none" marker-end="url(#arrow)"/><path class="edge-hit" data-edge="${edge.id}" d="${d}" stroke="transparent" stroke-width="18" fill="none"/>${edge.label ? `<rect x="${mx - 75}" y="${my - 13}" width="150" height="24" rx="5" fill="#fbfdf7" stroke="#e0e8d8"/><text x="${mx}" y="${my + 3}" text-anchor="middle" font-size="10" fill="#718962">${esc(edge.label.slice(0, 25))}</text>` : ""}</g>`;
 }
 function cardHTML(n) {
-  return `<button class="canvas-card ${selected?.id === n.id ? "selected" : ""} ${connectFrom === n.id ? "connect-source" : ""}" data-node="${n.id}" style="left:${n.x}px;top:${n.y}px;--card-color:${teamColors[n.team] || teamColors.Shared}" aria-label="${esc(n.title)}"><span class="card-meta"><span>${esc(n.team)}</span><span>${esc(nameOf(n.project))}</span></span><strong class="card-title">${esc(n.title)}</strong><span class="card-foot"><span>${esc(n.owner || "Owner unassigned")}</span><span>${n.files.length ? "▱ " + n.files.length + " · " : ""}${esc(n.status)}</span></span></button>`;
+  return `<button class="canvas-card ${selected?.id === n.id ? "selected" : ""} ${connectFrom === n.id ? "connect-source" : ""}" data-node="${n.id}" style="left:${n.x}px;top:${n.y}px;--card-color:${teamColors[n.team] || teamColors.Shared}" aria-label="${esc(n.title)}"><span class="card-meta"><span>${esc(n.team)}</span><span>${esc(nameOf(n.project))}</span></span><strong class="card-title">${esc(n.title)}</strong><span class="card-foot"><span>${esc(n.owner || "Owner unassigned")}</span><span>${n.files.length ? "â–± " + n.files.length + " Â· " : ""}${esc(n.status)}</span></span></button>`;
 }
 function renderInspector() {
   const root = $("#inspector");
@@ -1083,12 +905,12 @@ function renderInspector() {
       .map((id) => {
         const f = state.files.find((f) => f.id === id);
         return f
-          ? `<div class="attachment"><a href="#" data-download="${f.id}">${esc(f.name)}</a><button data-unlink="${f.id}" aria-label="Remove file reference">×</button></div>`
+          ? `<div class="attachment"><a href="#" data-download="${f.id}">${esc(f.name)}</a><button data-unlink="${f.id}" aria-label="Remove file reference">Ã—</button></div>`
           : "";
       })
       .join(
         "",
-      )}</div><label class="field">Attach a workspace file<select id="attach-file"><option value="">Choose a file…</option>${state.files
+      )}</div><label class="field">Attach a workspace file<select id="attach-file"><option value="">Choose a fileâ€¦</option>${state.files
       .filter((f) => !n.files.includes(f.id))
       .map(
         (f) =>
@@ -1096,14 +918,14 @@ function renderInspector() {
       )
       .join(
         "",
-      )}</select></label></div><div class="related"><h3>Relationships · ${connections.length}</h3>${
+      )}</select></label></div><div class="related"><h3>Relationships Â· ${connections.length}</h3>${
       connections
         .map((e) => {
           const other = state.nodes.find(
             (x) => x.id === (e.from === n.id ? e.to : e.from),
           );
           return other
-            ? `<button class="related-card" data-select-edge="${e.id}">${e.from === n.id ? "↗" : "↙"} ${esc(other.title)}<small>${esc(nameOf(other.project))} · ${esc(other.team)}<br>${esc(e.label || "Unlabeled connection")}</small></button>`
+            ? `<button class="related-card" data-select-edge="${e.id}">${e.from === n.id ? "â†—" : "â†™"} ${esc(other.title)}<small>${esc(nameOf(other.project))} Â· ${esc(other.team)}<br>${esc(e.label || "Unlabeled connection")}</small></button>`
             : "";
         })
         .join("") || "<p>No relationships drawn yet.</p>"
@@ -1131,7 +953,7 @@ function renderInspector() {
     if (!edge) return;
     const a = state.nodes.find((n) => n.id === edge.from),
       b = state.nodes.find((n) => n.id === edge.to);
-    root.innerHTML = `<div class="eyebrow">SELECTED RELATIONSHIP</div><h3>${esc(a?.title)} → ${esc(b?.title)}</h3><p>${esc(nameOf(a?.project))} / ${esc(a?.team)}<br>to ${esc(nameOf(b?.project))} / ${esc(b?.team)}</p><form id="edge-edit" style="margin-top:18px"><label class="field">Relationship label<input name="label" maxlength="100" placeholder="e.g. supplies sensor data to" value="${esc(edge.label)}"></label><label class="field">Notes<textarea name="note" maxlength="1500">${esc(edge.note || "")}</textarea></label><button class="primary" type="submit">Save relationship</button></form><button class="danger" data-action="delete-selection" style="margin-top:20px">Remove connection</button>`;
+    root.innerHTML = `<div class="eyebrow">SELECTED RELATIONSHIP</div><h3>${esc(a?.title)} â†’ ${esc(b?.title)}</h3><p>${esc(nameOf(a?.project))} / ${esc(a?.team)}<br>to ${esc(nameOf(b?.project))} / ${esc(b?.team)}</p><form id="edge-edit" style="margin-top:18px"><label class="field">Relationship label<input name="label" maxlength="100" placeholder="e.g. supplies sensor data to" value="${esc(edge.label)}"></label><label class="field">Notes<textarea name="note" maxlength="1500">${esc(edge.note || "")}</textarea></label><button class="primary" type="submit">Save relationship</button></form><button class="danger" data-action="delete-selection" style="margin-top:20px">Remove connection</button>`;
     $("#edge-edit").onsubmit = (e) => {
       e.preventDefault();
       checkpoint();
@@ -1342,13 +1164,13 @@ function overviewHTML() {
   const files = state.files.filter(inScope),
     nodes = state.nodes.filter(inScope),
     ids = new Set(nodes.map((n) => n.id));
-  return `<div class="stats"><div class="stat"><span>Files</span><b>${files.length}</b><small>${sizeOf(files.reduce((s, f) => s + f.size, 0))} in Google Drive</small></div><div class="stat"><span>Cards on board</span><b>${nodes.length}</b><small>Manually placed by you</small></div><div class="stat"><span>Relationships</span><b>${state.edges.filter((e) => ids.has(e.from) && ids.has(e.to)).length}</b><small>Connections you have drawn</small></div><div class="stat"><span>Gallery photos</span><b>${files.filter(isPhoto).length}</b><small>From Google Drive</small></div></div><div class="overview-actions"><button class="overview-action" data-view="canvas"><b>↗ Draw the relationships</b><p>Arrange your work and link projects, teams, and files.</p></button><button class="overview-action" data-view="bom"><b>☷ Open the BOM</b><p>Search components and compare project parts lists.</p></button><button class="overview-action" data-view="gallery"><b>▧ Tell the story in photos</b><p>Build a gallery of assemblies, prototypes, and progress.</p></button></div><div class="panel"><div class="panel-head"><div><h2>A workspace you can take with you.</h2><p>Open the dashboard, organize Drive files, and connect them to your project work.</p></div><button class="secondary" data-action="storage">How storage works</button></div></div>`;
+  return `<div class="stats"><div class="stat"><span>Files</span><b>${files.length}</b><small>${sizeOf(files.reduce((s, f) => s + f.size, 0))} in Google Drive</small></div><div class="stat"><span>Cards on board</span><b>${nodes.length}</b><small>Manually placed by you</small></div><div class="stat"><span>Relationships</span><b>${state.edges.filter((e) => ids.has(e.from) && ids.has(e.to)).length}</b><small>Connections you have drawn</small></div><div class="stat"><span>Gallery photos</span><b>${files.filter(isPhoto).length}</b><small>From Google Drive</small></div></div><div class="overview-actions"><button class="overview-action" data-view="canvas"><b>â†— Draw the relationships</b><p>Arrange your work and link projects, teams, and files.</p></button><button class="overview-action" data-view="bom"><b>â˜· Open the BOM</b><p>Search components and compare project parts lists.</p></button><button class="overview-action" data-view="gallery"><b>â–§ Tell the story in photos</b><p>Build a gallery of assemblies, prototypes, and progress.</p></button></div><div class="panel"><div class="panel-head"><div><h2>A workspace you can take with you.</h2><p>Open the dashboard, organize Drive files, and connect them to your project work.</p></div><button class="secondary" data-action="storage">How storage works</button></div></div>`;
 }
 function fileRows(files) {
   return files
     .map(
       (f) =>
-        `<tr><td><div class="file-title"><strong>${esc(f.name)}</strong><small>${esc(f.folderPath || f.note || nameOf(f.project))}</small></div></td><td>${esc(nameOf(f.project))}</td><td><span class="tag ${f.team.toLowerCase()}">${esc(teamLabel(f.project, f.team))}</span></td><td>${sizeOf(f.size)}</td><td><button class="text-button" data-download="${f.id}">↗ Open in Drive</button> <button class="text-button danger-text" data-remove-file="${f.id}">Remove from library</button></td></tr>`,
+        `<tr><td><div class="file-title"><strong>${esc(f.name)}</strong><small>${esc(f.folderPath || f.note || nameOf(f.project))}</small></div></td><td>${esc(nameOf(f.project))}</td><td><span class="tag ${f.team.toLowerCase()}">${esc(teamLabel(f.project, f.team))}</span></td><td>${sizeOf(f.size)}</td><td><button class="text-button" data-download="${f.id}">â†— Open in Drive</button> <button class="text-button danger-text" data-remove-file="${f.id}">Remove from library</button></td></tr>`,
     )
     .join("");
 }
@@ -1365,13 +1187,30 @@ function filteredFiles() {
 }
 const empty = (symbol, title, description, action) =>
   `<div class="empty"><div class="empty-symbol">${symbol}</div><h3>${title}</h3><p>${description}</p>${action || ""}</div>`;
-function filesHTML() {
-  const files = filteredFiles();
-  return `<section class="panel"><div class="panel-head"><div><h2>Your file library</h2><p>Drive-backed project files organized by project and team. The dashboard stores metadata and links, not large file contents.</p><p class="hint">${googleAccessToken ? (driveSyncing ? "Loading files from Google Drive…" : "Files are loaded from the configured Google Drive project folders.") : "Sign in with Google to load files from the project Drive folders."}</p></div><div class="row"><button class="secondary" data-action="refresh-drive" ${driveSyncing || !googleAccessToken ? "disabled" : ""}>↻ Refresh Drive</button><button class="primary" data-action="upload">＋ Add files</button></div></div><div class="section-tools"><input id="file-search" aria-label="Search files" placeholder="Search files, notes, projects…" value="${esc(search)}"><select id="team-filter" aria-label="Filter by team"><option value="all">All teams</option>${teamOptions(fileTeam)}</select></div>${files.length ? `<div class="table-scroll"><table><thead><tr><th>File name</th><th>Project</th><th>Team</th><th>Size</th><th>Access</th></tr></thead><tbody>${fileRows(files)}</tbody></table></div>` : empty("▱", "Your files go here.", googleAccessToken ? "No files were found in the configured Google Drive project folders." : "Sign in with Google to load your project files.", '<button class="secondary" data-action="upload">＋ Add files</button>')}<div class="table-footer">${files.length} Drive files · Metadata stored locally</div></section>`;
+async function loadDriveExplorer(folderId = ROOT_DRIVE_FOLDER_ID, breadcrumb = [{ id: ROOT_DRIVE_FOLDER_ID, name: "EXO Root" }]) {
+  driveExplorerFolder = folderId;
+  driveExplorerBreadcrumbs = breadcrumb;
+  driveExplorerSelected = null;
+  if (!googleAccessToken) { driveExplorerFiles = []; if (view === "files") render(); return; }
+  try {
+    driveExplorerFiles = await listDriveFiles(folderId);
+    if (view === "files") render();
+  } catch (error) {
+    notify(error.message);
+    if (view === "files") render();
+  }
 }
-function galleryHTML() {
+function driveExplorerHTML() {
+  const reconnect = !googleAccessToken;
+  const files = driveExplorerFiles;
+  const selected = driveExplorerSelected;
+  return `<section class="panel drive-explorer"><div class="drive-toolbar"><div class="drive-breadcrumbs">${driveExplorerBreadcrumbs.map((crumb, index) => `<button class="text-button" data-drive-folder="${esc(crumb.id)}" data-drive-breadcrumb-index="${index}">${esc(crumb.name)}</button>${index < driveExplorerBreadcrumbs.length - 1 ? "<span> / </span>" : ""}`).join("")}</div><div class="row"><button class="secondary" data-action="new-drive-folder" ${reconnect ? "disabled" : ""}>＋ New Folder</button><button class="primary" data-action="upload-drive-files" ${reconnect ? "disabled" : ""}>↑ Upload File(s)</button><input id="drive-upload-input" type="file" multiple hidden><div class="drive-drop-zone" id="drive-drop-zone">Drop files here to upload</div></div></div>${reconnect ? `<div class="drive-reconnect"><p>${sessionStorage.getItem("google_provider_token") ? "Your Google Drive connection needs to be refreshed." : "Sign in with Google to browse the shared Drive folder."}</p><button class="primary" data-action="login">Reconnect Google Drive</button></div>` : `<div class="drive-split"><div class="drive-file-list" id="drive-file-list">${files.length ? files.map((file) => { const folder = file.mimeType === GOOGLE_DRIVE_FOLDER_MIME; return `<button class="drive-file" data-drive-item="${esc(file.id)}" data-drive-is-folder="${folder}" data-drive-name="${esc(file.name)}"><span class="drive-file-icon">${folder ? "▰" : "▱"}</span><span class="drive-file-main"><b>${esc(file.name)}</b><small>${folder ? "Folder" : `${file.size ? sizeOf(Number(file.size)) : "Google file"} · ${file.modifiedTime ? new Date(file.modifiedTime).toLocaleDateString() : ""}`}</small></span></button>`; }).join("") : empty("▱", "This folder is empty.", "Upload a file or create a subfolder to get started.")}</div><div class="drive-preview">${selected ? `<div class="drive-preview-head"><strong>${esc(selected.name)}</strong><span class="row"><a href="${esc(selected.webContentLink || "#")}" ${selected.webContentLink ? "download" : "aria-disabled=\"true\""}>Download</a><a class="secondary" href="${esc(selected.webViewLink || `https://drive.google.com/file/d/${selected.id}/view`)}" target="_blank" rel="noopener noreferrer">Open in Drive</a></span></div><iframe src="https://drive.google.com/file/d/${encodeURIComponent(selected.id)}/preview" title="Preview of ${esc(selected.name)}" allow="autoplay"></iframe>` : `<div class="empty"><div class="empty-symbol">▣</div><h3>Select a file to preview</h3><p>PDFs, documents, sheets, photos, videos, and other Drive files stay in this dashboard.</p></div>`}</div></div>`}</section>`;
+}
+function filesHTML() {
+  return driveExplorerHTML();
+}function galleryHTML() {
   const photos = state.files.filter(inScope).filter(isPhoto);
-  return `<section class="panel"><div class="panel-head"><div><h2>Project photo gallery</h2><p>Photos loaded from the project Google Drive folders.</p></div><span class="pill">${photos.length} photos</span></div>${photos.length ? `<div class="tiles">${photos.map((f) => `<article class="photo"><button class="photo-image" data-photo="${f.id}" aria-label="View ${esc(f.name)}"><img data-local-image="${f.id}" alt="${esc(f.note || f.name)}"></button><div class="photo-info"><b>${esc(f.name)}</b><p>${esc(nameOf(f.project))} · ${esc(teamLabel(f.project, f.team))}</p><p>${esc(f.note)}</p><button class="text-button" data-download="${f.id}">↗ Open in Drive</button> <button class="text-button danger-text" data-remove-file="${f.id}">Remove from library</button></div></article>`).join("")}</div>` : empty("▧", "Show what you are building.", "Add photos of prototypes, assemblies, and team progress.", '<button class="secondary" data-action="photos">＋ Add photos</button>')}</section>`;
+  return `<section class="panel"><div class="panel-head"><div><h2>Project photo gallery</h2><p>Photos loaded from the project Google Drive folders.</p></div><span class="pill">${photos.length} photos</span></div>${photos.length ? `<div class="tiles">${photos.map((f) => `<article class="photo"><button class="photo-image" data-photo="${f.id}" aria-label="View ${esc(f.name)}"><img data-local-image="${f.id}" alt="${esc(f.note || f.name)}"></button><div class="photo-info"><b>${esc(f.name)}</b><p>${esc(nameOf(f.project))} Â· ${esc(teamLabel(f.project, f.team))}</p><p>${esc(f.note)}</p><button class="text-button" data-download="${f.id}">â†— Open in Drive</button> <button class="text-button danger-text" data-remove-file="${f.id}">Remove from library</button></div></article>`).join("")}</div>` : empty("â–§", "Show what you are building.", "Add photos of prototypes, assemblies, and team progress.", '<button class="secondary" data-action="photos">ï¼‹ Add photos</button>')}</section>`;
 }
 async function loadImages() {
   for (const img of $$("[data-local-image]")) {
@@ -1383,12 +1222,12 @@ function bomHTML() {
   const projects = scope === "all" ? state.projects : state.projects.filter((p) => p.id === scope);
   const files = projects.map((p) => state.files.find((f) => f.id === state.bom[p.id])).filter(Boolean);
   const hasSharedRows = sharedBOMRows.some((row) => scope === "all" || row.project_id === scope);
-  return `<section class="panel"><div class="panel-head"><div><h2>Bill of materials</h2><p>${scope === "all" ? "Showing BOM rows across every project. Use the project selector above to narrow the workspace." : "Showing the selected project's components and source file."}</p></div><button class="secondary" data-action="add-bom-row">＋ Add component</button></div><div class="bom-bar"><div><strong>${hasSharedRows ? "Shared Supabase BOM connected" : files.length ? `${files.length} source file${files.length === 1 ? "" : "s"} connected` : "No BOM source selected"}</strong><small>${hasSharedRows ? "Approved rows are shared with authenticated workspace users." : files.length ? files.map((f) => `${esc(nameOf(f.project))} · ${esc(f.name)}`).join("  /  ") : "Choose a CSV source in Files to preview its rows here."}</small></div><div class="row">${files.map((f) => `<button class="text-button" data-download="${f.id}">↓ ${esc(nameOf(f.project))}</button>`).join("")}<button class="secondary" data-action="choose-bom">${files.length ? "Manage sources" : "Choose BOM file"}</button></div></div><div id="bom-preview">${files.length || hasSharedRows ? '<div class="empty"><p>Opening BOM…</p></div>' : empty("☷", "Keep the source easy to find.", "Add a BOM in Files, then choose it here. CSV files display as a searchable table.")}</div></section>`;
+  return `<section class="panel"><div class="panel-head"><div><h2>Bill of materials</h2><p>${scope === "all" ? "Showing BOM rows across every project. Use the project selector above to narrow the workspace." : "Showing the selected project's components and source file."}</p></div><button class="secondary" data-action="add-bom-row">ï¼‹ Add component</button></div><div class="bom-bar"><div><strong>${hasSharedRows ? "Shared Supabase BOM connected" : files.length ? `${files.length} source file${files.length === 1 ? "" : "s"} connected` : "No BOM source selected"}</strong><small>${hasSharedRows ? "Approved rows are shared with authenticated workspace users." : files.length ? files.map((f) => `${esc(nameOf(f.project))} Â· ${esc(f.name)}`).join("  /  ") : "Choose a CSV source in Files to preview its rows here."}</small></div><div class="row">${files.map((f) => `<button class="text-button" data-download="${f.id}">â†“ ${esc(nameOf(f.project))}</button>`).join("")}<button class="secondary" data-action="choose-bom">${files.length ? "Manage sources" : "Choose BOM file"}</button></div></div><div id="bom-preview">${files.length || hasSharedRows ? '<div class="empty"><p>Opening BOMâ€¦</p></div>' : empty("â˜·", "Keep the source easy to find.", "Add a BOM in Files, then choose it here. CSV files display as a searchable table.")}</div></section>`;
 }
 function addBOMRow() {
   openModal(
     "Add component",
-    `<form id="bom-entry-form"><p class="hint" style="margin-bottom:18px">Add a planning row without changing the original CSV source. It will be saved in this browser and included in the BOM view.</p><div class="form-grid"><label class="field">Project<select name="project">${projectOptions(currentProject())}</select></label><label class="field">ID<input name="id" placeholder="e.g. D01" required maxlength="40"></label></div><div class="form-grid"><label class="field">Subsystem<input name="subsystem" placeholder="Controls"></label><label class="field">Component<input name="component" placeholder="Component or integration purpose" required></label></div><div class="form-grid"><label class="field">Quantity<input name="qty" type="number" min="0" step="any" value="1"></label><label class="field">Unit cost ($)<input name="unit" type="number" min="0" step="0.01" placeholder="0.00"></label></div><div class="form-grid"><label class="field">Link<input name="link" type="url" placeholder="https://…"></label><label class="field">Cost basis<select name="basis"><option>Baseline</option><option>Quote</option><option>Estimate</option><option>Pending</option></select></label></div>${actions("Add component")}</form>`,
+    `<form id="bom-entry-form"><p class="hint" style="margin-bottom:18px">Add a planning row without changing the original CSV source. It will be saved in this browser and included in the BOM view.</p><div class="form-grid"><label class="field">Project<select name="project">${projectOptions(currentProject())}</select></label><label class="field">ID<input name="id" placeholder="e.g. D01" required maxlength="40"></label></div><div class="form-grid"><label class="field">Subsystem<input name="subsystem" placeholder="Controls"></label><label class="field">Component<input name="component" placeholder="Component or integration purpose" required></label></div><div class="form-grid"><label class="field">Quantity<input name="qty" type="number" min="0" step="any" value="1"></label><label class="field">Unit cost ($)<input name="unit" type="number" min="0" step="0.01" placeholder="0.00"></label></div><div class="form-grid"><label class="field">Link<input name="link" type="url" placeholder="https://â€¦"></label><label class="field">Cost basis<select name="basis"><option>Baseline</option><option>Quote</option><option>Estimate</option><option>Pending</option></select></label></div>${actions("Add component")}</form>`,
   );
   $("#bom-entry-form").onsubmit = (e) => {
     e.preventDefault();
@@ -1494,12 +1333,12 @@ async function previewBOM() {
     }
     records.push(...(state.bomEntries || []).filter((entry) => scope === "all" || entry.project === scope).map((entry) => ({ ...entry, link: entry.link || entry.supplier || "", purpose: entry.purpose || "", source: "Added in workspace" })));
     if (!records.length) {
-      target.innerHTML = empty("☷", "No previewable BOM rows.", "CSV files up to 5 MB can be searched here. Other source types remain available to download.");
+      target.innerHTML = empty("â˜·", "No previewable BOM rows.", "CSV files up to 5 MB can be searched here. Other source types remain available to download.");
       return;
     }
     const values = (field) => [...new Set(records.map((r) => r[field]).filter(Boolean))].sort();
     const money = (value) => Number(String(value).replace(/[^0-9.-]/g, "")) || 0;
-    target.innerHTML = `<div class="section-tools bom-tools"><input id="bom-search" placeholder="Search ID, component, link…" aria-label="Search BOM" value="${esc(bomSearch)}"><select id="bom-team" aria-label="Filter by team"><option value="all">All teams</option>${values("team").map((v) => `<option ${bomTeam === v ? "selected" : ""}>${esc(v)}</option>`).join("")}</select><select id="bom-stage" aria-label="Filter by stage"><option value="all">All stages</option>${values("basis").map((v) => `<option ${bomStage === v ? "selected" : ""}>${esc(v)}</option>`).join("")}</select><select id="bom-price" aria-label="Filter by price"><option value="all">All pricing</option><option value="priced" ${bomPrice === "priced" ? "selected" : ""}>Priced only</option><option value="unpriced" ${bomPrice === "unpriced" ? "selected" : ""}>Needs pricing</option></select></div><div class="bom-stats" id="bom-stats"></div><div class="table-scroll"><table><thead><tr><th>ID</th><th>Project</th><th>Subsystem</th><th>Component / integration purpose</th><th>Qty</th><th>Unit $</th><th>Ext $</th><th>Link</th><th>Cost basis</th></tr></thead><tbody id="bom-rows"></tbody></table></div><div class="table-footer" id="bom-count"></div>`;
+    target.innerHTML = `<div class="section-tools bom-tools"><input id="bom-search" placeholder="Search ID, component, linkâ€¦" aria-label="Search BOM" value="${esc(bomSearch)}"><select id="bom-team" aria-label="Filter by team"><option value="all">All teams</option>${values("team").map((v) => `<option ${bomTeam === v ? "selected" : ""}>${esc(v)}</option>`).join("")}</select><select id="bom-stage" aria-label="Filter by stage"><option value="all">All stages</option>${values("basis").map((v) => `<option ${bomStage === v ? "selected" : ""}>${esc(v)}</option>`).join("")}</select><select id="bom-price" aria-label="Filter by price"><option value="all">All pricing</option><option value="priced" ${bomPrice === "priced" ? "selected" : ""}>Priced only</option><option value="unpriced" ${bomPrice === "unpriced" ? "selected" : ""}>Needs pricing</option></select></div><div class="bom-stats" id="bom-stats"></div><div class="table-scroll"><table><thead><tr><th>ID</th><th>Project</th><th>Subsystem</th><th>Component / integration purpose</th><th>Qty</th><th>Unit $</th><th>Ext $</th><th>Link</th><th>Cost basis</th></tr></thead><tbody id="bom-rows"></tbody></table></div><div class="table-footer" id="bom-count"></div>`;
     const draw = () => {
       const query = bomSearch.toLowerCase();
       const list = records.filter((r) => {
@@ -1508,8 +1347,8 @@ async function previewBOM() {
       });
       const total = list.reduce((sum, r) => sum + money(r.ext || money(r.unit) * (Number(r.qty) || 1)), 0);
       $("#bom-stats").innerHTML = `<div class="stat"><span>Visible lines</span><b>${list.length}</b><small>of ${records.length} total rows</small></div><div class="stat"><span>Visible priced sum</span><b>$${total.toFixed(2)}</b><small>Extended cost where available</small></div><div class="stat"><span>Needs pricing</span><b>${list.filter((r) => !money(r.unit)).length}</b><small>Rows without a unit price</small></div>`;
-      $("#bom-rows").innerHTML = list.map((r) => `<tr><td><strong>${esc(r.id)}</strong></td><td>${esc(nameOf(r.project))}<small>${esc(r.source)}</small></td><td>${esc(r.subsystem)}</td><td><strong>${esc(r.component)}</strong>${r.purpose ? `<small>${esc(r.purpose)}</small>` : ""}</td><td>${esc(r.qty)}</td><td>${r.unit ? "$" + money(r.unit).toFixed(2) : "—"}</td><td>${r.ext ? "$" + money(r.ext).toFixed(2) : "—"}</td><td>${bomLinkHTML(r.link)}</td><td>${esc(r.basis || "—")}</td></tr>`).join("");
-      $("#bom-count").textContent = `${list.length} visible line items · ${records.length} total rows`;
+      $("#bom-rows").innerHTML = list.map((r) => `<tr><td><strong>${esc(r.id)}</strong></td><td>${esc(nameOf(r.project))}<small>${esc(r.source)}</small></td><td>${esc(r.subsystem)}</td><td><strong>${esc(r.component)}</strong>${r.purpose ? `<small>${esc(r.purpose)}</small>` : ""}</td><td>${esc(r.qty)}</td><td>${r.unit ? "$" + money(r.unit).toFixed(2) : "â€”"}</td><td>${r.ext ? "$" + money(r.ext).toFixed(2) : "â€”"}</td><td>${bomLinkHTML(r.link)}</td><td>${esc(r.basis || "â€”")}</td></tr>`).join("");
+      $("#bom-count").textContent = `${list.length} visible line items Â· ${records.length} total rows`;
     };
     draw();
     $("#bom-search").oninput = (e) => { bomSearch = e.target.value; draw(); };
@@ -1518,7 +1357,7 @@ async function previewBOM() {
     $("#bom-price").onchange = (e) => { bomPrice = e.target.value; draw(); };
   } catch (error) {
     target.innerHTML = empty(
-      "☷",
+      "â˜·",
       "Could not preview this BOM.",
       esc(error.message),
     );
@@ -1534,7 +1373,7 @@ function chooseBOM() {
   }
   openModal(
     "Choose the BOM source",
-    `<form id="bom-form"><p class="hint" style="margin-bottom:18px">Select the source file for ${esc(nameOf(project))}. No BOM data is invented or imported automatically.</p><label class="field">Source file<select name="file" required><option value="">Choose a file…</option>${files.map((f) => `<option value="${f.id}" ${state.bom[project] === f.id ? "selected" : ""}>${esc(f.name)}</option>`).join("")}</select></label>${actions("Set BOM source")}</form>`,
+    `<form id="bom-form"><p class="hint" style="margin-bottom:18px">Select the source file for ${esc(nameOf(project))}. No BOM data is invented or imported automatically.</p><label class="field">Source file<select name="file" required><option value="">Choose a fileâ€¦</option>${files.map((f) => `<option value="${f.id}" ${state.bom[project] === f.id ? "selected" : ""}>${esc(f.name)}</option>`).join("")}</select></label>${actions("Set BOM source")}</form>`,
   );
   $("#bom-form").onsubmit = (e) => {
     e.preventDefault();
@@ -1546,12 +1385,12 @@ function chooseBOM() {
 }
 function resourcesHTML() {
   const links = [...knownResources, ...state.resources].filter(inScope);
-  return `<section class="panel"><div class="panel-head"><div><h2>Repositories & links</h2><p>Open project Google Drive folders and GitHub repositories as needed. Upload shared files to Drive; move them to GitHub separately when needed.</p></div></div><div class="resource-grid">${links.map((r) => `<a class="resource" href="${esc(r.url)}" target="_blank" rel="noopener noreferrer"><div><b>${esc(r.title)}</b><small>${esc(nameOf(r.project))} ·${esc(r.team)}</small></div><span>↗</span></a>`).join("")}</div>${!links.length ? empty("↗", "Connect your project.", "Add a repository, folder, or reference link.") : ""}</section>`;
+  return `<section class="panel"><div class="panel-head"><div><h2>Repositories & links</h2><p>Open project Google Drive folders and other project references.</p></div></div><div class="resource-grid">${links.map((r) => `<a class="resource" href="${esc(r.url)}" target="_blank" rel="noopener noreferrer"><div><b>${esc(r.title)}</b><small>${esc(nameOf(r.project))} · ${esc(r.team)}</small></div><span>↗</span></a>`).join("")}</div>${!links.length ? empty("↗", "Connect your project.", "Add a Drive folder or reference link.") : ""}</section>`;
 }
 function resourceForm() {
   openModal(
     "Add a resource",
-    `<form id="resource-form"><p class="hint" style="margin-bottom:14px">Add a Google Drive folder, GitHub repository, or other project reference.</p><label class="field">Title<input name="title" required maxlength="100"></label><label class="field">HTTPS address<input name="url" type="url" required placeholder="https://…" maxlength="2000"></label><div class="form-grid"><label class="field">Project<select name="project">${projectOptions(currentProject())}</select></label><label class="field">Team<select name="team">${teamOptions("Shared")}</select></label></div>${actions("Add resource")}</form>`,
+    `<form id="resource-form"><p class="hint" style="margin-bottom:14px">Add a Google Drive folder or other project reference.</p><label class="field">Title<input name="title" required maxlength="100"></label><label class="field">HTTPS address<input name="url" type="url" required placeholder="https://â€¦" maxlength="2000"></label><div class="form-grid"><label class="field">Project<select name="project">${projectOptions(currentProject())}</select></label><label class="field">Team<select name="team">${teamOptions("Shared")}</select></label></div>${actions("Add resource")}</form>`,
   );
   $("#resource-form").onsubmit = (e) => {
     e.preventDefault();
@@ -1576,45 +1415,8 @@ function resourceForm() {
   };
 }
 
-// Upload a file through a new branch and pull request.
-function githubForm() {
-  const repos = [...knownResources, ...state.resources].filter((r) =>
-    r.url.startsWith("https://github.com/"),
-  );
-  openModal(
-    "Upload to GitHub",
-    `<p class="hint" style="margin-bottom:16px">The dashboard will create a branch and open a pull request, so protected default branches remain protected.</p><form id="github-form"><label class="field">Repository<select name="repo">${repos.map((r, index) => `<option value="${esc(r.url)}" ${index === 0 ? "selected" : ""}>${esc(r.title)} (${esc(r.url.replace("https://github.com/", ""))})</option>`).join("")}</select></label><label class="field">Folder path<input name="folder" value="uploads" placeholder="e.g. uploads or docs/drawings" pattern="[a-zA-Z0-9_./ -]*"><small>Leave empty for the repository root.</small></label><label class="field">Select file to push<input type="file" name="ghfile" required></label>${actions("Open pull request ↗")}</form>`,
-  );
-  $("#github-form").onsubmit = async (e) => {
-    e.preventDefault();
-    const f = new FormData(e.target),
-      repoUrl = String(f.get("repo")),
-      folder = String(f.get("folder") || "").trim(),
-      file = e.target.elements.ghfile.files[0];
-    if (!file) return;
-    const match = repoUrl.match(/github\.com\/([^/]+)\/([^/]+)/);
-    if (!match) {
-      notify("Invalid GitHub repository URL.");
-      return;
-    }
-    const [, owner, repo] = match;
-    const btn = $("[type=submit]", e.target);
-    btn.disabled = true;
-    btn.textContent = "Creating pull request…";
-    try {
-      const pullRequest = await pushFileToGitHub(file, owner, repo, folder);
-      $("#dialog").close();
-      notify(`Pull request opened for ${file.name}: ${pullRequest.html_url}`);
-    } catch (err) {
-      notify("GitHub upload failed: " + err.message);
-      btn.disabled = false;
-      btn.textContent = "Open pull request ↗";
-    }
-  };
-}
-
 async function exportBackup() {
-  notify("Preparing a backup with your files…");
+  notify("Preparing a backup with your filesâ€¦");
   await saving;
   try {
     const blobs = [];
@@ -1812,32 +1614,32 @@ function render() {
     overview: [
       "The whole project, at a glance.",
       "Files, drawings, and references in one local workspace.",
-      "＋ Add files",
+      "ï¼‹ Add files",
     ],
     canvas: [
       "Your ideas. Your connections.",
       "Draw freely, place cards, and connect work across teams and projects.",
-      "＋ Add card",
+      "ï¼‹ Add card",
     ],
     files: [
       "Project files.",
       "Add files once. Reference them anywhere on the drawing board.",
-      "↑ Add files",
+      "â†‘ Add files",
     ],
     bom: [
       "One place for the parts list.",
       "Search, filter, and compare components across every project.",
-      "↑ Add BOM file",
+      "â†‘ Add BOM file",
     ],
     gallery: [
       "A closer look at the work.",
       "Keep your actual project photos together, with notes and context.",
-      "＋ Add photos",
+      "ï¼‹ Add photos",
     ],
     resources: [
       "Your project, connected.",
       "Open the tools, repositories, and folders your team uses.",
-      "＋ Add resource",
+      "ï¼‹ Add resource",
     ],
   };
   $("#page-title").textContent = labels[view][0];
@@ -1861,7 +1663,7 @@ function render() {
           `<option value="${esc(p.id)}" ${scope === p.id ? "selected" : ""}>${esc(p.name)}</option>`,
       )
       .join("") +
-    `<option value="__new-project__">＋ Add new project</option>`;
+    `<option value="__new-project__">ï¼‹ Add new project</option>`;
   $("#project-context").onchange = (e) => {
     if (e.target.value === "__new-project__") {
       e.target.value = scope;
@@ -1901,16 +1703,27 @@ function render() {
   if (view === "gallery") loadImages();
   if (view === "bom") previewBOM();
   if (view === "files") {
-    $("#file-search").oninput = (e) => {
-      search = e.target.value;
-      const pos = e.target.selectionStart;
-      render();
-      $("#file-search").focus();
-      $("#file-search").setSelectionRange(pos, pos);
+    if (googleAccessToken && !driveExplorerFiles.length) loadDriveExplorer(driveExplorerFolder, driveExplorerBreadcrumbs);
+    const dropZone = $("#drive-drop-zone");
+    if (!dropZone) return;
+    const uploadFiles = async (files) => {
+      try {
+        for (const file of files) await uploadFileToDrive(file, driveExplorerFolder);
+        await loadDriveExplorer(driveExplorerFolder, driveExplorerBreadcrumbs);
+        notify("Files uploaded to Google Drive.");
+      } catch (error) {
+        notify("Google Drive upload failed: " + error.message);
+      }
     };
-    $("#team-filter").onchange = (e) => {
-      fileTeam = e.target.value;
-      render();
+    dropZone.ondragover = (event) => {
+      event.preventDefault();
+      dropZone.classList.add("dragging");
+    };
+    dropZone.ondragleave = () => dropZone.classList.remove("dragging");
+    dropZone.ondrop = (event) => {
+      event.preventDefault();
+      dropZone.classList.remove("dragging");
+      uploadFiles(event.dataTransfer.files);
     };
   }
 }
@@ -1950,6 +1763,22 @@ document.addEventListener("click", async (e) => {
     e.preventDefault();
     downloadFile(el.dataset.download);
   }
+  if (el.dataset.driveFolder) {
+    e.preventDefault();
+    const index = Number(el.dataset.driveBreadcrumbIndex);
+    loadDriveExplorer(el.dataset.driveFolder, driveExplorerBreadcrumbs.slice(0, index + 1));
+  }
+  if (el.dataset.driveItem) {
+    e.preventDefault();
+    const item = driveExplorerFiles.find((file) => file.id === el.dataset.driveItem);
+    if (!item) return;
+    if (item.mimeType === GOOGLE_DRIVE_FOLDER_MIME) {
+      loadDriveExplorer(item.id, [...driveExplorerBreadcrumbs, { id: item.id, name: item.name }]);
+    } else {
+      driveExplorerSelected = item;
+      render();
+    }
+  }
   if (el.dataset.removeFile) {
     e.preventDefault();
     await removeLocalFile(el.dataset.removeFile);
@@ -1971,7 +1800,7 @@ document.addEventListener("click", async (e) => {
       url = await fileURL(f.id);
     openModal(
       f.name,
-      `<img src="${esc(url)}" alt="${esc(f.note || f.name)}" style="width:100%;max-height:68vh;object-fit:contain"><p class="hint" style="margin-top:15px">${esc(nameOf(f.project))} · ${esc(f.team)} · ${esc(f.note)}</p>`,
+      `<img src="${esc(url)}" alt="${esc(f.note || f.name)}" style="width:100%;max-height:68vh;object-fit:contain"><p class="hint" style="margin-top:15px">${esc(nameOf(f.project))} Â· ${esc(f.team)} Â· ${esc(f.note)}</p>`,
     );
     $("#dialog").classList.add("lightbox");
   }
@@ -1984,6 +1813,29 @@ document.addEventListener("click", async (e) => {
       notify("Google Drive files could not be synchronized: " + error.message);
       render();
     });
+  }
+  if (action === "new-drive-folder") {
+    const name = window.prompt("New folder name");
+    if (name?.trim()) {
+      createSubfolder(name.trim(), driveExplorerFolder)
+        .then(() => loadDriveExplorer(driveExplorerFolder, driveExplorerBreadcrumbs))
+        .catch((error) => notify(error.message));
+    }
+  }
+  if (action === "upload-drive-files") {
+    const input = $("#drive-upload-input");
+    input.onchange = async () => {
+      try {
+        for (const file of input.files) await uploadFileToDrive(file, driveExplorerFolder);
+        await loadDriveExplorer(driveExplorerFolder, driveExplorerBreadcrumbs);
+        notify("Files uploaded to Google Drive.");
+      } catch (error) {
+        notify("Google Drive upload failed: " + error.message);
+      } finally {
+        input.value = "";
+      }
+    };
+    input.click();
   }
   if (action === "upload") showDriveTestUpload();
   if (action === "photos") showUpload(true);
@@ -2014,7 +1866,9 @@ $("#page-action").onclick = () =>
         ? resourceForm()
         : view === "bom"
           ? showUpload()
-          : showDriveTestUpload();
+            : view === "files"
+              ? $("#drive-upload-input")?.click()
+              : showDriveTestUpload();
 $("#close-dialog").onclick = () => $("#dialog").close();
 $("#dialog").onclick = (e) => {
   if (e.target === $("#dialog")) $("#dialog").close();
