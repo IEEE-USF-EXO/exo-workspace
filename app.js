@@ -455,13 +455,72 @@ let tldrawRoot = null;
 let tldrawImportPromise = null;
 let tldrawRenderToken = 0;
 let tldrawEditor = null;
+let workspaceChannel = null;
 let applyingTldrawSnapshot = false;
+let tldrawPersistTimer = null;
 
-function loadTldrawSnapshot(snapshot) {
-  if (!tldrawEditor || !snapshot?.store) return;
+const tldrawInstanceRecordTypes = new Set([
+  "camera",
+  "instance",
+  "instance_page_state",
+  "pointer",
+]);
+
+function scheduleTldrawPersist() {
+  clearTimeout(tldrawPersistTimer);
+  tldrawPersistTimer = setTimeout(() => {
+    tldrawPersistTimer = null;
+    persist();
+  }, 1000);
+}
+
+function documentRecords(records) {
+  return Object.fromEntries(
+    Object.entries(records || {}).filter(
+      ([, record]) => !tldrawInstanceRecordTypes.has(record.typeName),
+    ),
+  );
+}
+
+function documentUpdates(updates) {
+  return Object.fromEntries(
+    Object.entries(updates || {}).filter(
+      ([, change]) =>
+        !tldrawInstanceRecordTypes.has(change[1]?.typeName),
+    ),
+  );
+}
+
+function applyTldrawChanges(payload) {
+  if (!tldrawEditor || !payload) return;
+  const added = documentRecords(payload.added);
+  const updated = documentUpdates(payload.updated);
   applyingTldrawSnapshot = true;
   try {
-    tldrawEditor.store.loadSnapshot(snapshot);
+    tldrawEditor.store.mergeRemoteChanges(() => {
+      tldrawEditor.store.put(Object.values(added));
+      tldrawEditor.store.put(Object.values(updated).map((change) => change[1]));
+      tldrawEditor.store.remove(Object.keys(payload.removed || {}));
+    });
+    state = {
+      ...state,
+      tldrawSnapshot: tldrawEditor.store.getSnapshot(),
+    };
+  } finally {
+    applyingTldrawSnapshot = false;
+  }
+}
+
+function mergeTldrawDocumentSnapshot(snapshot) {
+  if (!tldrawEditor || !snapshot?.store) return;
+  const records = Object.values(snapshot.store).filter(
+    (record) => !tldrawInstanceRecordTypes.has(record.typeName),
+  );
+  applyingTldrawSnapshot = true;
+  try {
+    tldrawEditor.store.mergeRemoteChanges(() => {
+      tldrawEditor.store.put(records);
+    });
   } finally {
     applyingTldrawSnapshot = false;
   }
@@ -514,15 +573,32 @@ async function initTldrawBoard() {
             editor.createPage({ name: "Electrical Breakout Room" });
             editor.setCurrentPage(pages[0].id);
           }
-          loadTldrawSnapshot(state.tldrawSnapshot);
+          mergeTldrawDocumentSnapshot(state.tldrawSnapshot);
           editor.store.listen(
-            () => {
+            (update) => {
               if (applyingTldrawSnapshot) return;
               state = {
                 ...state,
                 tldrawSnapshot: editor.store.getSnapshot(),
               };
-              persist();
+              if (update.source !== "user") return;
+              const added = documentRecords(update.changes.added);
+              const updated = documentUpdates(update.changes.updated);
+              const removed = Object.fromEntries(
+                Object.entries(update.changes.removed || {}).filter(
+                  ([, record]) =>
+                    !tldrawInstanceRecordTypes.has(record.typeName),
+                ),
+              );
+              const broadcast = workspaceChannel?.send({
+                type: "broadcast",
+                event: "tldraw-changes",
+                payload: { added, updated, removed },
+              });
+              broadcast?.catch((error) =>
+                notify("Live drawing update failed: " + error.message),
+              );
+              scheduleTldrawPersist();
             },
             { scope: "document" },
           );
@@ -1209,21 +1285,10 @@ function bindBoard() {
   };
 }
 function deleteSelection() {
-  if (!selected) return;
-  checkpoint();
-  if (selected.kind === "node") {
-    state.nodes = state.nodes.filter((n) => n.id !== selected.id);
-    state.edges = state.edges.filter(
-      (e) => e.from !== selected.id && e.to !== selected.id,
-    );
-  }
-  if (selected.kind === "edge")
-    state.edges = state.edges.filter((e) => e.id !== selected.id);
-  if (selected.kind === "stroke")
-    state.strokes = state.strokes.filter((s) => s.id !== selected.id);
-  selected = null;
-  persist();
-  renderBoardPreservingScroll();
+  if (!tldrawEditor) return;
+  const shapeIds = tldrawEditor.getSelectedShapeIds();
+  if (!shapeIds.length) return;
+  tldrawEditor.deleteShapes(shapeIds);
 }
 function overviewHTML() {
   const files = state.files.filter(inScope),
@@ -1904,17 +1969,6 @@ document.addEventListener("click", async (e) => {
     await removeLocalFile(el.dataset.removeFile);
     return;
   }
-  if (el.dataset.selectEdge) {
-    selected = { kind: "edge", id: el.dataset.selectEdge };
-    renderBoardPreservingScroll();
-  }
-  if (el.dataset.unlink && selected?.kind === "node") {
-    checkpoint();
-    const n = state.nodes.find((n) => n.id === selected.id);
-    n.files = n.files.filter((id) => id !== el.dataset.unlink);
-    persist();
-    renderBoardPreservingScroll();
-  }
   if (el.dataset.photo) {
     const f = state.files.find((f) => f.id === el.dataset.photo),
       url = await fileURL(f.id);
@@ -1984,20 +2038,9 @@ document.addEventListener("click", async (e) => {
   if (action === "storage") showStorage();
   if (action === "export") exportBackup();
   if (action === "import") $("#backup-input").click();
-  if (action === "undo") undo();
   if (action === "delete-selection") deleteSelection();
   if (action === "choose-bom") chooseBOM();
   if (action === "add-bom-row") addBOMRow();
-  if (action === "zoom-in" || action === "zoom-out") {
-    zoom = Math.max(
-      0.4,
-      Math.min(
-        1.6,
-        Math.round((zoom + (action === "zoom-in" ? 0.1 : -0.1)) * 10) / 10,
-      ),
-    );
-    renderBoardPreservingScroll();
-  }
 });
 $("#close-dialog").onclick = () => $("#dialog").close();
 $("#dialog").onclick = (e) => {
@@ -2025,8 +2068,11 @@ window.addEventListener("beforeunload", (e) => {
     state = data ? data.data : initial();
     storageAvailable = true;
     // Listen for live updates from other team members
-    supabaseClient
+    workspaceChannel = supabaseClient
       .channel("workspace-updates")
+      .on("broadcast", { event: "tldraw-changes" }, ({ payload }) => {
+        applyTldrawChanges(payload);
+      })
       .on(
         "postgres_changes",
         {
@@ -2038,11 +2084,10 @@ window.addEventListener("beforeunload", (e) => {
         (payload) => {
           if (payload.new && payload.new.data) {
             state = payload.new.data;
-            loadTldrawSnapshot(state.tldrawSnapshot);
 
             // Redraw the screen to show the new changes,
             // but skip the re-render if the user is actively dragging/drawing
-            if (!gesture) {
+            if (view !== "canvas" && !gesture) {
               render();
             }
           }
