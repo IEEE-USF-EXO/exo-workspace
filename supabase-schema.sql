@@ -85,7 +85,7 @@ create table if not exists public.workspace_state (
     'version', 1,
     'projects', jsonb_build_array(),
     'files', jsonb_build_array(),
-    'tldrawSnapshot', null,
+    'projectDrawings', jsonb_build_object(),
     'resources', jsonb_build_array(),
     'bom', jsonb_build_object(),
     'bomEntries', jsonb_build_array()
@@ -223,7 +223,7 @@ values (
       jsonb_build_object('id', 'pid-spoon', 'name', 'PID Spoon', 'description', 'Stabilized assistive utensil')
     ),
     'files', jsonb_build_array(),
-    'tldrawSnapshot', null,
+    'projectDrawings', jsonb_build_object(),
     'resources', jsonb_build_array(),
     'bom', jsonb_build_object(),
     'bomEntries', jsonb_build_array()

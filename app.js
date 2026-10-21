@@ -76,6 +76,13 @@ async function checkUserSession() {
   const logoutBtn = document.getElementById("logout-btn");
 
   if (session) {
+    const metadata = session.user?.user_metadata || {};
+    tldrawPointerName = firstName(
+      metadata.full_name ||
+        metadata.name ||
+        metadata.user_name ||
+        session.user?.email,
+    );
     googleAccessToken = session.provider_token || sessionStorage.getItem("google_provider_token");
     if (session.provider_token) {
       sessionStorage.setItem("google_provider_token", session.provider_token);
@@ -94,6 +101,7 @@ async function checkUserSession() {
       }
     }
   } else {
+    tldrawPointerName = "Collaborator";
     googleAccessToken = null;
     sessionStorage.removeItem("google_provider_token");
     driveTokenExpired = false;
@@ -395,7 +403,7 @@ const initial = () => ({
     },
   ],
   files: [],
-  tldrawSnapshot: null,
+  projectDrawings: {},
   resources: [],
   bom: {},
   bomEntries: [],
@@ -405,6 +413,17 @@ function normalizeWorkspaceState(data) {
   delete next.nodes;
   delete next.edges;
   delete next.strokes;
+  if (
+    !next.projectDrawings ||
+    typeof next.projectDrawings !== "object" ||
+    Array.isArray(next.projectDrawings)
+  ) {
+    next.projectDrawings = {};
+  }
+  if (next.tldrawSnapshot && !next.projectDrawings.exo) {
+    next.projectDrawings.exo = next.tldrawSnapshot;
+  }
+  delete next.tldrawSnapshot;
   return next;
 }
 document.addEventListener("input", (event) => {
@@ -451,9 +470,36 @@ let tldrawRoot = null;
 let tldrawImportPromise = null;
 let tldrawRenderToken = 0;
 let tldrawEditor = null;
+let tldrawUnlisten = null;
 let workspaceChannel = null;
 let applyingTldrawSnapshot = false;
 let tldrawPersistTimer = null;
+let remoteTldrawPointers = new Map();
+let pointerBroadcastFrame = null;
+let localPointer = null;
+let tldrawPointerName = "Collaborator";
+const tldrawClientId =
+  globalThis.crypto?.randomUUID?.() ||
+  `client-${Date.now().toString(36)}-${Math.random().toString(36).slice(2)}`;
+const tldrawPointerColors = [
+  "#e45756",
+  "#3a86ff",
+  "#8338ec",
+  "#fb8500",
+  "#2a9d8f",
+  "#d63384",
+  "#6f42c1",
+  "#198754",
+];
+const tldrawPointerColor =
+  tldrawPointerColors[
+    Math.floor(Math.random() * tldrawPointerColors.length)
+  ];
+const tldrawPointerHue = Math.floor(Math.random() * 360);
+
+function firstName(value) {
+  return String(value || "Collaborator").trim().split(/\s+/)[0] || "Collaborator";
+}
 
 const tldrawInstanceRecordTypes = new Set([
   "camera",
@@ -487,8 +533,105 @@ function documentUpdates(updates) {
   );
 }
 
+function broadcastTldrawPointer(point, active) {
+  if (!workspaceChannel) return;
+  const message = workspaceChannel.send({
+    type: "broadcast",
+    event: "tldraw-pointer",
+    payload: {
+      projectId: scope,
+      clientId: tldrawClientId,
+      point,
+      active,
+      color: tldrawPointerColor,
+      hue: tldrawPointerHue,
+      name: tldrawPointerName,
+    },
+  });
+  message?.catch((error) =>
+    notify("Live pointer update failed: " + error.message),
+  );
+}
+
+function renderRemoteTldrawPointers() {
+  const overlay = $("#tldraw-pointer-overlay");
+  if (!overlay || !tldrawEditor) return;
+  overlay.innerHTML = "";
+  for (const pointer of remoteTldrawPointers.values()) {
+    if (!pointer.point || pointer.projectId !== scope) continue;
+    const screenPoint = tldrawEditor.pageToScreen(pointer.point);
+    const dot = document.createElement("div");
+    dot.className = "tldraw-remote-pointer";
+    dot.style.left = `${screenPoint.x}px`;
+    dot.style.top = `${screenPoint.y}px`;
+    dot.style.setProperty("--pointer-color", pointer.color);
+    dot.title = pointer.name || "Collaborator";
+    const icon = document.createElement("img");
+    icon.className = "tldraw-remote-pointer-icon";
+    icon.src = "content/collab-cursor.png";
+    icon.alt = "";
+    icon.draggable = false;
+    icon.style.filter = `hue-rotate(${Number(pointer.hue) || 0}deg) drop-shadow(1px 1px 0 #fff) drop-shadow(0 1px 2px #0008)`;
+    dot.append(icon);
+    const label = document.createElement("span");
+    label.className = "tldraw-remote-pointer-name";
+    label.textContent = pointer.name || "Collaborator";
+    dot.append(label);
+    overlay.append(dot);
+  }
+}
+
+function scheduleRemotePointerRender() {
+  if (pointerBroadcastFrame !== null) return;
+  pointerBroadcastFrame = requestAnimationFrame(() => {
+    pointerBroadcastFrame = null;
+    renderRemoteTldrawPointers();
+  });
+}
+
+function handleTldrawPointer(payload) {
+  if (
+    !payload ||
+    payload.clientId === tldrawClientId ||
+    payload.projectId !== scope
+  )
+    return;
+  if (payload.active === false || !payload.point) {
+    remoteTldrawPointers.delete(payload.clientId);
+  } else {
+    remoteTldrawPointers.set(payload.clientId, payload);
+  }
+  scheduleRemotePointerRender();
+}
+
+function bindTldrawPointerPresence(container, editor, projectId) {
+  const sendPointer = (event, active = true) => {
+    if (scope !== projectId || tldrawEditor !== editor) return;
+    const bounds = container.getBoundingClientRect();
+    const point = editor.screenToPage({
+      x: event.clientX - bounds.left,
+      y: event.clientY - bounds.top,
+    });
+    localPointer = point;
+    if (active) broadcastTldrawPointer(point, true);
+  };
+  container.addEventListener("pointermove", sendPointer);
+  container.addEventListener("pointerenter", sendPointer);
+  container.addEventListener("pointerleave", () => {
+    if (scope !== projectId || tldrawEditor !== editor || !localPointer) return;
+    broadcastTldrawPointer(null, false);
+    localPointer = null;
+  });
+  return () => {
+    container.removeEventListener("pointermove", sendPointer);
+    container.removeEventListener("pointerenter", sendPointer);
+    if (localPointer) broadcastTldrawPointer(null, false);
+    localPointer = null;
+  };
+}
+
 function applyTldrawChanges(payload) {
-  if (!tldrawEditor || !payload) return;
+  if (!tldrawEditor || !payload || payload.projectId !== scope) return;
   const added = documentRecords(payload.added);
   const updated = documentUpdates(payload.updated);
   applyingTldrawSnapshot = true;
@@ -500,16 +643,30 @@ function applyTldrawChanges(payload) {
     });
     state = {
       ...state,
-      tldrawSnapshot: tldrawEditor.store.getSnapshot(),
+      projectDrawings: {
+        ...state.projectDrawings,
+        [scope]: tldrawEditor.store.getSnapshot(),
+      },
     };
   } finally {
     applyingTldrawSnapshot = false;
   }
 }
 
-function mergeTldrawDocumentSnapshot(snapshot) {
-  if (!tldrawEditor || !snapshot?.store) return;
-  const records = Object.values(snapshot.store).filter(
+function saveActiveTldrawSnapshot() {
+  if (!tldrawEditor) return;
+  state = {
+    ...state,
+    projectDrawings: {
+      ...state.projectDrawings,
+      [scope]: tldrawEditor.store.getSnapshot(),
+    },
+  };
+}
+
+function loadProjectTldrawSnapshot(snapshot) {
+  if (!tldrawEditor) return;
+  const records = Object.values(snapshot?.store || {}).filter(
     (record) => !tldrawInstanceRecordTypes.has(record.typeName),
   );
   applyingTldrawSnapshot = true;
@@ -517,6 +674,23 @@ function mergeTldrawDocumentSnapshot(snapshot) {
     tldrawEditor.store.mergeRemoteChanges(() => {
       tldrawEditor.store.put(records);
     });
+    const pages = tldrawEditor.getPages();
+    if (!records.length && pages.length === 1 && pages[0].name === "Page 1") {
+      tldrawEditor.renamePage(pages[0].id, "Main Architecture");
+      tldrawEditor.createPage({ name: "Controls Breakout Room" });
+      tldrawEditor.createPage({ name: "Electrical Breakout Room" });
+      tldrawEditor.setCurrentPage(pages[0].id);
+    } else if (pages.length) {
+      const incomingIds = new Set(records.map((record) => record.id));
+      const currentPage = pages.find((page) => incomingIds.has(page.id));
+      if (currentPage) {
+        tldrawEditor.setCurrentPage(currentPage.id);
+        const staleRecords = pages.filter(
+          (page) => !incomingIds.has(page.id),
+        );
+        tldrawEditor.store.remove(staleRecords.map((page) => page.id));
+      }
+    }
   } finally {
     applyingTldrawSnapshot = false;
   }
@@ -524,6 +698,11 @@ function mergeTldrawDocumentSnapshot(snapshot) {
 
 function disposeTldrawBoard() {
   tldrawRenderToken += 1;
+  saveActiveTldrawSnapshot();
+  tldrawUnlisten?.();
+  tldrawUnlisten = null;
+  remoteTldrawPointers.clear();
+  $("#tldraw-pointer-overlay")?.replaceChildren();
   tldrawEditor = null;
   if (!tldrawRoot) return;
   try {
@@ -540,6 +719,7 @@ async function initTldrawBoard() {
   const container = $("#tldraw-container");
   if (!container) return;
   const renderToken = ++tldrawRenderToken;
+  const projectId = scope;
   try {
     if (!tldrawImportPromise) {
       tldrawImportPromise = Promise.all([
@@ -559,23 +739,31 @@ async function initTldrawBoard() {
     tldrawRoot = createRoot(container);
     tldrawRoot.render(
       React.createElement(Tldraw, {
-        persistenceKey: `exo-board-${scope}`,
         onMount: (editor) => {
-          tldrawEditor = editor;
-          const pages = editor.getPages();
-          if (pages.length === 1 && pages[0].name === "Page 1") {
-            editor.renamePage(pages[0].id, "Main Architecture");
-            editor.createPage({ name: "Controls Breakout Room" });
-            editor.createPage({ name: "Electrical Breakout Room" });
-            editor.setCurrentPage(pages[0].id);
+          if (renderToken !== tldrawRenderToken || view !== "canvas") {
+            return;
           }
-          mergeTldrawDocumentSnapshot(state.tldrawSnapshot);
-          editor.store.listen(
+          tldrawEditor = editor;
+          loadProjectTldrawSnapshot(state.projectDrawings[projectId]);
+          const unbindPointerPresence = bindTldrawPointerPresence(
+            container,
+            editor,
+            projectId,
+          );
+          tldrawUnlisten = editor.store.listen(
             (update) => {
-              if (applyingTldrawSnapshot) return;
+              if (
+                applyingTldrawSnapshot ||
+                tldrawEditor !== editor ||
+                scope !== projectId
+              )
+                return;
               state = {
                 ...state,
-                tldrawSnapshot: editor.store.getSnapshot(),
+                projectDrawings: {
+                  ...state.projectDrawings,
+                  [projectId]: editor.store.getSnapshot(),
+                },
               };
               if (update.source !== "user") return;
               const added = documentRecords(update.changes.added);
@@ -589,7 +777,7 @@ async function initTldrawBoard() {
               const broadcast = workspaceChannel?.send({
                 type: "broadcast",
                 event: "tldraw-changes",
-                payload: { added, updated, removed },
+                payload: { projectId, added, updated, removed },
               });
               broadcast?.catch((error) =>
                 notify("Live drawing update failed: " + error.message),
@@ -598,6 +786,12 @@ async function initTldrawBoard() {
             },
             { scope: "document" },
           );
+          const previousUnlisten = tldrawUnlisten;
+          tldrawUnlisten = () => {
+            previousUnlisten();
+            unbindPointerPresence();
+          };
+          renderRemoteTldrawPointers();
         },
       }),
     );
@@ -652,6 +846,20 @@ const nameOf = (id) =>
   state.projects.find((p) => p.id === id)?.name || "Unknown project";
 const inScope = (item) => item.project === scope;
 const currentProject = () => scope;
+function switchProject(projectId) {
+  if (!projectId || projectId === scope) return;
+  saveActiveTldrawSnapshot();
+  tldrawEditor = null;
+  persist();
+  scope = projectId;
+  search = "";
+  fileTeam = "all";
+  bomSearch = "";
+  bomTeam = "all";
+  bomStage = "all";
+  bomPrice = "all";
+  render();
+}
 const teamOptions = (value, project = null) =>
   (project
     ? folderIds
@@ -979,7 +1187,7 @@ function toolHint() {
         : "Drag cards to arrange them. Select a connection to label it.";
 }
 function boardHTML() {
-  return '<div id="tldraw-container" style="width: 100%; height: 75vh; border-radius: 8px; overflow: hidden; border: 1px solid var(--line);"></div>';
+  return '<div id="tldraw-stage" style="position: relative; width: 100%; height: 75vh; border-radius: 8px; overflow: hidden; border: 1px solid var(--line);"><div id="tldraw-container" style="width: 100%; height: 100%;"></div><div id="tldraw-pointer-overlay" style="position: absolute; inset: 0; pointer-events: none; z-index: 20;"></div></div>';
 }
 function edgeSVG(edge) {
   const a = state.nodes.find((n) => n.id === edge.from),
@@ -1266,7 +1474,7 @@ function deleteSelection() {
 }
 function overviewHTML() {
   const files = state.files.filter(inScope),
-    records = Object.values(state.tldrawSnapshot?.store || {}),
+    records = Object.values(state.projectDrawings[scope]?.store || {}),
     shapes = records.filter((record) => record.typeName === "shape");
   return `<div class="stats"><div class="stat"><span>Files</span><b>${files.length}</b><small>${sizeOf(files.reduce((s, f) => s + f.size, 0))} in Google Drive</small></div><div class="stat"><span>Drawing shapes</span><b>${shapes.length}</b><small>Stored in the shared Tldraw board</small></div><div class="stat"><span>Drawing records</span><b>${records.length}</b><small>Shapes, assets, bindings, and pages</small></div><div class="stat"><span>Gallery photos</span><b>${files.filter(isPhoto).length}</b><small>From Google Drive</small></div></div><div class="overview-actions"><button class="overview-action" data-view="canvas"><b>â†— Open the drawing board</b><p>Draw, arrange, and connect ideas with Tldraw.</p></button><button class="overview-action" data-view="bom"><b>â˜· Open the BOM</b><p>Search components and compare project parts lists.</p></button><button class="overview-action" data-view="gallery"><b>â–§ Tell the story in photos</b><p>Build a gallery of assemblies, prototypes, and progress.</p></button></div><div class="panel"><div class="panel-head"><div><h2>A workspace you can take with you.</h2><p>Open the dashboard, organize Drive files, and connect them to your project work.</p></div><button class="secondary" data-action="storage">How storage works</button></div></div>`;
 }
@@ -1616,8 +1824,14 @@ function validateBackup(data) {
     !s.projects.length ||
     !s.bom ||
     typeof s.bom !== "object" ||
-    (s.tldrawSnapshot !== null &&
-      (typeof s.tldrawSnapshot !== "object" || !s.tldrawSnapshot.store))
+    (!s.projectDrawings ||
+      typeof s.projectDrawings !== "object" ||
+      Array.isArray(s.projectDrawings) ||
+      Object.values(s.projectDrawings).some(
+        (snapshot) =>
+          snapshot !== null &&
+          (typeof snapshot !== "object" || !snapshot.store),
+      ))
   )
     throw new Error("Backup structure is incomplete.");
   const str = (v, max = 2000) => typeof v === "string" && v.length <= max;
@@ -1767,14 +1981,7 @@ function render() {
       projectForm();
       return;
     }
-    scope = e.target.value;
-    search = "";
-    fileTeam = "all";
-    bomSearch = "";
-    bomTeam = "all";
-    bomStage = "all";
-    bomPrice = "all";
-    render();
+    switchProject(e.target.value);
   };
   $$("#nav .nav").forEach((b) =>
     b.classList.toggle("active", b.dataset.view === view),
@@ -1845,14 +2052,7 @@ document.addEventListener("click", async (e) => {
     }
   }
   if (el.dataset.project) {
-    scope = el.dataset.project;
-    search = "";
-    fileTeam = "all";
-    bomSearch = "";
-    bomTeam = "all";
-    bomStage = "all";
-    bomPrice = "all";
-    render();
+    switchProject(el.dataset.project);
   }
   if (el.dataset.download) {
     e.preventDefault();
@@ -1985,6 +2185,9 @@ $("#backup-input").onchange = (e) => {
       .channel("workspace-updates")
       .on("broadcast", { event: "tldraw-changes" }, ({ payload }) => {
         applyTldrawChanges(payload);
+      })
+      .on("broadcast", { event: "tldraw-pointer" }, ({ payload }) => {
+        handleTldrawPointer(payload);
       })
       .on(
         "postgres_changes",
