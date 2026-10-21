@@ -385,10 +385,12 @@ const teamColors = {
 const initial = () => ({
   version: 1,
   projects: [
-    { id: "exo", name: "EXO", description: "Lower-limb exoskeleton" },
+    { id: "exo",
+      name: "exo-leg",
+      description: "Lower-limb exoskeleton" },
     {
       id: "pid-spoon",
-      name: "PID Spoon",
+      name: "PID-spoon",
       description: "Stabilized assistive utensil",
     },
   ],
