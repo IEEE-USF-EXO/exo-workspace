@@ -422,7 +422,6 @@ document.addEventListener("change", (event) => {
   }
 });
 let state = initial(),
-  db = null,
   view = "overview",
   scope = "exo",
   tool = "select",
@@ -590,66 +589,20 @@ function warn(message) {
   $("#storage-warning").textContent = message;
   $("#storage-warning").classList.remove("hidden");
 }
-function openDB() {
-  return new Promise((resolve, reject) => {
-    const request = indexedDB.open("exo-html-workspace-v1", 1);
-    request.onupgradeneeded = () => {
-      request.result.createObjectStore("state");
-      request.result.createObjectStore("blobs");
-    };
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error);
-  });
-}
-function record(store, key) {
-  return new Promise((resolve, reject) => {
-    const request = db.transaction(store).objectStore(store).get(key);
-    request.onsuccess = () => resolve(request.result);
-    request.onerror = () => reject(request.error);
-  });
-}
-function writeStores(nextState, blobs = [], replace = false) {
-  return new Promise((resolve, reject) => {
-    const tx = db.transaction(["state", "blobs"], "readwrite");
-    tx.objectStore("state").put(nextState, "workspace");
-    if (replace) tx.objectStore("blobs").clear();
-    for (const item of blobs) tx.objectStore("blobs").put(item.blob, item.id);
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
-    tx.onabort = () =>
-      reject(tx.error || new Error("Storage write interrupted"));
-  });
-}
-function removeBlob(id) {
-  return new Promise((resolve, reject) => {
-    if (!db) {
-      resolve();
-      return;
-    }
-    const tx = db.transaction("blobs", "readwrite");
-    tx.objectStore("blobs").delete(id);
-    tx.oncomplete = () => resolve();
-    tx.onerror = () => reject(tx.error);
-    tx.onabort = () =>
-      reject(tx.error || new Error("Storage deletion interrupted"));
-  });
-}
 function persist() {
-  const snapshot = structuredClone(state);
-  $("#save-status").textContent = "Savingâ€¦";
-  saving = saving
-    .catch(() => {})
-    .then(async () => {
-      if (!db) throw new Error("Browser storage unavailable");
-      await writeStores(snapshot);
-      $("#save-status").textContent = "Saved in this browser";
+  if (!googleAccessToken) return Promise.resolve();
+  $("#save-status").textContent = "Saving to cloud…";
+  saving = saving.catch(() => {}).then(async () => {
+      const { error } = await supabaseClient
+        .from("workspace_state")
+        .update({ data: state, updated_at: new Date().toISOString() })
+        .eq("id", 1);
+      if (error) throw error;
+      $("#save-status").textContent = "Saved to cloud";
     })
     .catch((error) => {
       $("#save-status").textContent = "Not saved";
-      warn(
-        "Your browser could not save this change. Keep this tab open and export a backup. " +
-          error.message,
-      );
+      warn("Cloud save failed: " + error.message);
     });
   return saving;
 }
@@ -681,11 +634,7 @@ function download(blob, name) {
   setTimeout(() => URL.revokeObjectURL(url), 5000);
 }
 async function getBlob(id) {
-  return urls.has("blob-" + id)
-    ? urls.get("blob-" + id)
-    : db
-      ? await record("blobs", id)
-      : null;
+  return urls.get("blob-" + id) || null;
 }
 async function getDriveBlob(file) {
   if (!file?.driveId || !googleAccessToken) return null;
@@ -742,14 +691,9 @@ async function removeLocalFile(id) {
     URL.revokeObjectURL(url);
     urls.delete(id);
   }
-  try {
-    await removeBlob(id);
-    await persist();
-    render();
-    notify(`Removed ${file.name} from this browser.`);
-  } catch (error) {
-    notify("Could not remove the local file: " + error.message);
-  }
+  await persist();
+  render();
+  notify(`Removed ${file.name} from this workspace.`);
 }
 function openModal(title, html) {
   $("#modal-title").textContent = title;
@@ -887,9 +831,8 @@ function showUpload(photos = false) {
       }
       await saving;
       const next = { ...state, files: [...state.files, ...additions] };
-      await writeStores(next);
       state = next;
-      $("#save-status").textContent = "Saved in this browser";
+      await persist();
       $("#dialog").close();
       render();
       notify(
@@ -944,7 +887,7 @@ function centerCard() {
 function showStorage() {
   openModal(
     "Your workspace storage",
-    `<p class="hint">This workspace stores drawing state and Drive file metadata locally in your browser. File contents are uploaded to Google Drive.</p><ul class="storage-list"><li><b>Google Drive</b>Large files are uploaded directly to the selected project/team folder using resumable uploads.</li><li><b>Browser storage</b>Projects, drawings, relationships, BOM selections, and Drive file links are stored locally in this browser profile.</li><li><b>Share or back up</b>Export a JSON backup containing workspace data and Drive-backed file metadata. The backup does not duplicate large Drive files.</li></ul><div class="row"><button class="primary" data-action="export">â†“ Export workspace backup</button><button class="secondary" data-action="import">â†‘ Import backup</button></div>`,
+    `<p class="hint">This workspace stores drawing state and Drive file metadata in the cloud. File contents are uploaded to Google Drive.</p><ul class="storage-list"><li><b>Google Drive</b>Large files are uploaded directly to the selected project/team folder using resumable uploads.</li><li><b>Cloud workspace</b>Projects, drawings, relationships, BOM selections, and Drive file links are stored in Supabase.</li><li><b>Share or back up</b>Export a JSON backup containing workspace data and Drive-backed file metadata. The backup does not duplicate large Drive files.</li></ul><div class="row"><button class="primary" data-action="export">â†“ Export workspace backup</button><button class="secondary" data-action="import">â†‘ Import backup</button></div>`,
   );
 }
 function toolHint() {
@@ -1723,13 +1666,11 @@ async function importBackup(file) {
     }
     if (
       !confirm(
-        "Replace the current local workspace with this backup? Export your current work first if you want to keep it.",
+        "Replace the current cloud workspace with this backup? Export your current work first if you want to keep it.",
       )
     )
       return;
-    if (!db) throw new Error("Local browser storage is unavailable.");
     await saving;
-    await writeStores(next, blobs, true);
     for (const [key, url] of urls)
       if (!key.startsWith("blob-")) URL.revokeObjectURL(url);
     urls.clear();
@@ -1738,8 +1679,9 @@ async function importBackup(file) {
     selected = null;
     connectFrom = null;
     history = [];
+    await persist();
     render();
-    notify("Backup imported, including files and drawings.");
+    notify("Backup imported into the cloud workspace.");
     $("#dialog").close();
   } catch (error) {
     notify("Import failed: " + error.message);
@@ -2046,15 +1988,44 @@ window.addEventListener("beforeunload", (e) => {
 });
 (async () => {
   try {
-    db = await openDB();
-    state = (await record("state", "workspace")) || initial();
+    const { data, error } = await supabaseClient
+      .from("workspace_state")
+      .select("data")
+      .eq("id", 1)
+      .single();
+
+    if (error && error.code !== "PGRST116") throw error;
+    state = data ? data.data : initial();
     storageAvailable = true;
-    $("#save-status").textContent = "Saved in this browser";
+    // Listen for live updates from other team members
+    supabaseClient
+      .channel("workspace-updates")
+      .on(
+        "postgres_changes",
+        {
+          event: "UPDATE",
+          schema: "public",
+          table: "workspace_state",
+          filter: "id=eq.1",
+        },
+        (payload) => {
+          if (payload.new && payload.new.data) {
+            state = payload.new.data;
+
+            // Redraw the screen to show the new changes,
+            // but skip the re-render if the user is actively dragging/drawing
+            if (!gesture) {
+              render();
+            }
+          }
+        },
+      )
+      .subscribe();
+    $("#save-status").textContent = "Workspace synced";
   } catch (error) {
-    $("#save-status").textContent = "Storage unavailable";
-    warn(
-      "This browser has blocked local storage. Drawing can be explored, but files cannot be saved. Use a regular browser window with local storage enabled.",
-    );
+    $("#save-status").textContent = "Sync failed";
+    warn("Could not load the live workspace. " + error.message);
+    state = initial();
   }
   await checkUserSession();
   render();
