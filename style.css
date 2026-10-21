@@ -1561,6 +1561,35 @@ dialog::backdrop {
   flex: 2 1 560px;
   justify-content: flex-end;
 }
+.drive-new-menu {
+  position: relative;
+}
+.drive-new-dropdown {
+  position: absolute;
+  z-index: 5;
+  top: calc(100% + 6px);
+  right: 0;
+  min-width: 150px;
+  padding: 5px;
+  background: var(--paper);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  box-shadow: 0 8px 24px rgb(34 62 50 / 14%);
+}
+.drive-new-dropdown[hidden] {
+  display: none;
+}
+.drive-new-dropdown button {
+  display: block;
+  width: 100%;
+  padding: 8px 10px;
+  border-radius: 5px;
+  text-align: left;
+  font-size: 11px;
+}
+.drive-new-dropdown button:hover {
+  background: #f0f5ef;
+}
 .drive-search {
   display: flex;
   align-items: center;

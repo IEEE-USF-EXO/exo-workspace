@@ -24,6 +24,7 @@ const GOOGLE_DRIVE_FOLDER_MIME = "application/vnd.google-apps.folder";
 let googleAccessToken = sessionStorage.getItem("google_provider_token");
 let sharedBOMRows = [];
 let driveFolders = [];
+let driveTokenExpired = false;
 
 async function signInWithGoogle() {
   if (window.location.protocol === "file:") {
@@ -78,6 +79,7 @@ async function checkUserSession() {
     googleAccessToken = session.provider_token || sessionStorage.getItem("google_provider_token");
     if (session.provider_token) {
       sessionStorage.setItem("google_provider_token", session.provider_token);
+      driveTokenExpired = false;
     }
     if (loginBtn) loginBtn.style.display = "none";
     if (logoutBtn) logoutBtn.style.display = "inline-flex";
@@ -87,11 +89,14 @@ async function checkUserSession() {
       if (googleAccessToken) await syncDriveFiles();
     } catch (error) {
       driveSyncing = false;
-      notify("Google Drive files could not be synchronized: " + error.message);
+      if (!isDriveAuthorizationError(error)) {
+        notify("Google Drive files could not be synchronized: " + error.message);
+      }
     }
   } else {
     googleAccessToken = null;
     sessionStorage.removeItem("google_provider_token");
+    driveTokenExpired = false;
     sharedBOMRows = [];
     if (loginBtn) loginBtn.style.display = "inline-flex";
     if (logoutBtn) logoutBtn.style.display = "none";
@@ -119,15 +124,33 @@ supabaseClient.auth.onAuthStateChange((event, session) => {
   if (event === "SIGNED_OUT") {
     googleAccessToken = null;
     sessionStorage.removeItem("google_provider_token");
+    driveTokenExpired = false;
   } else if (session?.provider_token) {
     googleAccessToken = session.provider_token;
     sessionStorage.setItem("google_provider_token", session.provider_token);
+    driveTokenExpired = false;
   }
   checkUserSession().catch((error) => notify("Could not update your session: " + error.message));
 });
 
-async function driveRequest(url, options = {}) {
-  if (!googleAccessToken) throw new Error("Reconnect Google Drive to continue.");
+class DriveAuthorizationError extends Error {
+  constructor(message = "Your Google Drive connection expired. Reconnect Google Drive.") {
+    super(message);
+    this.name = "DriveAuthorizationError";
+  }
+}
+
+function isDriveAuthorizationError(error) {
+  return error instanceof DriveAuthorizationError;
+}
+
+async function fetchDriveAPI(url, options = {}) {
+  googleAccessToken = sessionStorage.getItem("google_provider_token");
+  if (!googleAccessToken) throw new DriveAuthorizationError("Reconnect Google Drive to continue.");
+  options.headers = {
+    ...(options.headers || {}),
+    Authorization: `Bearer ${googleAccessToken}`,
+  };
   const response = await fetch(url, {
     ...options,
     headers: { Authorization: `Bearer ${googleAccessToken}`, ...(options.headers || {}) },
@@ -135,8 +158,10 @@ async function driveRequest(url, options = {}) {
   if (response.status === 401) {
     googleAccessToken = null;
     sessionStorage.removeItem("google_provider_token");
+    driveTokenExpired = true;
+    driveExplorerError = "Your Google Drive connection expired.";
     if (view === "files") render();
-    throw new Error("Google Drive authorization expired. Reconnect Google Drive.");
+    throw new DriveAuthorizationError();
   }
   if (!response.ok) {
     const details = await response.json().catch(() => ({}));
@@ -153,7 +178,7 @@ async function listDriveFiles(folderId = ROOT_DRIVE_FOLDER_ID) {
     includeItemsFromAllDrives: "true",
     fields: "files(id,name,mimeType,webViewLink,webContentLink,iconLink,thumbnailLink,modifiedTime,size)",
   });
-  return (await (await driveRequest(`https://www.googleapis.com/drive/v3/files?${params}`)).json()).files || [];
+  return (await (await fetchDriveAPI(`https://www.googleapis.com/drive/v3/files?${params}`)).json()).files || [];
 }
 
 async function uploadFileToDrive(file, folderId) {
@@ -161,11 +186,11 @@ async function uploadFileToDrive(file, folderId) {
   const body = new FormData();
   body.append("metadata", new Blob([JSON.stringify(metadata)], { type: "application/json" }));
   body.append("file", file);
-  return (await (await driveRequest("https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&supportsAllDrives=true&fields=id,name,mimeType,webViewLink,webContentLink,modifiedTime,size", { method: "POST", body })).json());
+  return (await (await fetchDriveAPI("https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&supportsAllDrives=true&fields=id,name,mimeType,webViewLink,webContentLink,modifiedTime,size", { method: "POST", body })).json());
 }
 
 async function createSubfolder(folderName, parentFolderId) {
-  return (await (await driveRequest("https://www.googleapis.com/drive/v3/files?supportsAllDrives=true&fields=id,name,mimeType,webViewLink", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: folderName, mimeType: GOOGLE_DRIVE_FOLDER_MIME, parents: [parentFolderId] }) })).json());
+  return (await (await fetchDriveAPI("https://www.googleapis.com/drive/v3/files?supportsAllDrives=true&fields=id,name,mimeType,webViewLink", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: folderName, mimeType: GOOGLE_DRIVE_FOLDER_MIME, parents: [parentFolderId] }) })).json());
 }
 
 async function uploadFileToGoogleDrive(file, folderId) {
@@ -203,7 +228,7 @@ function showDriveTestUpload() {
 }
 
 async function createDriveFolder(name, parentId) {
-  const response = await fetch(
+  const response = await fetchDriveAPI(
     "https://www.googleapis.com/drive/v3/files?supportsAllDrives=true&fields=id,name,mimeType,parents",
     {
       method: "POST",
@@ -239,7 +264,7 @@ async function listDriveChildren(parentId) {
         "nextPageToken,files(id,name,mimeType,size,modifiedTime,webViewLink,thumbnailLink,parents)",
     });
     if (pageToken) params.set("pageToken", pageToken);
-    const response = await fetch(
+    const response = await fetchDriveAPI(
       `https://www.googleapis.com/drive/v3/files?${params}`,
       { headers: { Authorization: `Bearer ${googleAccessToken}` } },
     );
@@ -590,7 +615,7 @@ async function getBlob(id) {
 }
 async function getDriveBlob(file) {
   if (!file?.driveId || !googleAccessToken) return null;
-  const response = await fetch(
+  const response = await fetchDriveAPI(
     `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(file.driveId)}?alt=media`,
     { headers: { Authorization: `Bearer ${googleAccessToken}` } },
   );
@@ -1224,7 +1249,7 @@ async function loadDriveExplorer(folderId = ROOT_DRIVE_FOLDER_ID, breadcrumb = [
   } catch (error) {
     driveExplorerFiles = [];
     driveExplorerError = error instanceof Error ? error.message : "Google Drive could not be loaded.";
-    notify(driveExplorerError);
+    if (!isDriveAuthorizationError(error)) notify(driveExplorerError);
   } finally {
     driveExplorerLoading = false;
     if (view === "files") render();
@@ -1265,7 +1290,7 @@ function driveExplorerHTML() {
       ? `<div class="drive-file-grid">${sortedFiles.map((file) => `<button class="drive-file-card" data-drive-item="${esc(file.id)}"><span class="drive-file-icon">${driveFileIcon(file)}</span><b>${esc(file.name)}</b><small>${file.size ? sizeOf(Number(file.size)) : "Google file"} · ${file.modifiedTime ? new Date(file.modifiedTime).toLocaleDateString() : "—"}</small></button>`).join("")}</div>`
       : `<div class="drive-table-wrap"><table class="drive-table"><thead><tr><th>Name</th><th>Owner</th><th>Last modified</th><th>File size</th><th><span class="sr-only">Actions</span></th></tr></thead><tbody>${sortedFiles.map((file) => `<tr class="${driveExplorerSelected?.id === file.id ? "selected" : ""}" data-drive-item="${esc(file.id)}"><td><div class="drive-name"><span class="drive-file-icon">${driveFileIcon(file)}</span><strong>${esc(file.name)}</strong></div></td><td class="drive-muted">—</td><td class="drive-muted">${file.modifiedTime ? new Date(file.modifiedTime).toLocaleDateString() : "—"}</td><td class="drive-muted">${file.size ? sizeOf(Number(file.size)) : "—"}</td><td class="drive-actions"><button class="icon-button" data-drive-preview="${esc(file.id)}" aria-label="Preview ${esc(file.name)}">⋮</button></td></tr>`).join("")}</tbody></table></div>`)
     : `<div class="drive-empty"><div class="drive-empty-icon">⌁</div><h3>${query ? "No files match your search" : "This folder is empty"}</h3><p>${query ? "Try a different search term." : "Upload a file to start building this folder."}</p></div>`;
-  return `<section class="drive-explorer"><div class="drive-toolbar"><div class="drive-toolbar-location"><div class="drive-breadcrumbs" aria-label="Drive folder path"><button class="drive-home" data-drive-folder="${esc(driveExplorerBreadcrumbs[0].id)}" data-drive-breadcrumb-index="0" aria-label="Project files">⌂</button>${driveExplorerBreadcrumbs.map((crumb, index) => `<span aria-hidden="true">›</span><button class="text-button" data-drive-folder="${esc(crumb.id)}" data-drive-breadcrumb-index="${index}" ${index === driveExplorerBreadcrumbs.length - 1 ? 'aria-current="page"' : ""}>${esc(crumb.name)}</button>`).join("")}</div><span class="drive-version">${driveExplorerFiles.length} items in this folder</span></div><div class="drive-toolbar-actions"><label class="drive-search"><span aria-hidden="true">⌕</span><input id="drive-search" type="search" value="${esc(driveExplorerSearch)}" placeholder="Search in EXO" aria-label="Search in EXO"></label><button class="primary" data-action="upload-drive-files" ${reconnect ? "disabled" : ""}>＋ New</button><button class="secondary" data-action="upload-drive-files" ${reconnect ? "disabled" : ""}>↑ Upload</button><button class="secondary" data-action="new-drive-folder" ${reconnect ? "disabled" : ""}>＋ Folder</button></div></div>${reconnect ? `<div class="drive-reconnect"><p>${sessionStorage.getItem("google_provider_token") ? "Your Google Drive connection needs to be refreshed." : "Sign in with Google to browse the shared Drive folder."}</p><button class="primary" data-action="login">Reconnect Google Drive</button></div>` : `<div class="drive-control-row"><span class="drive-location-label">${esc(driveExplorerBreadcrumbs[driveExplorerBreadcrumbs.length - 1].name)}</span><div class="drive-controls"><label>Sort <select id="drive-sort"><option value="name" ${driveExplorerSort === "name" ? "selected" : ""}>Name</option><option value="modified" ${driveExplorerSort === "modified" ? "selected" : ""}>Last modified</option><option value="size" ${driveExplorerSort === "size" ? "selected" : ""}>File size</option></select></label><span class="view-toggle" aria-label="View mode"><button class="${driveExplorerView === "list" ? "active" : ""}" data-drive-view="list" aria-label="List view">☷</button><button class="${driveExplorerView === "grid" ? "active" : ""}" data-drive-view="grid" aria-label="Grid view">⊞</button></span><button class="secondary drive-export" data-action="export">↓ Export</button></div></div><section class="drive-section"><div class="drive-section-head"><div><strong>Folders</strong><small>${sortedFolders.length} folder${sortedFolders.length === 1 ? "" : "s"}</small></div></div><div class="drive-folder-grid">${folderContent}</div></section><section class="drive-section drive-files-section"><div class="drive-section-head"><div><strong>Files</strong><small>${sortedFiles.length} file${sortedFiles.length === 1 ? "" : "s"}</small></div></div>${fileContent}</section></section>`}</section>`;
+  return `<section class="drive-explorer"><div class="drive-toolbar"><div class="drive-toolbar-location"><div class="drive-breadcrumbs" aria-label="Drive folder path"><button class="drive-home" data-drive-folder="${esc(driveExplorerBreadcrumbs[0].id)}" data-drive-breadcrumb-index="0" aria-label="Project files">⌂</button>${driveExplorerBreadcrumbs.map((crumb, index) => `<span aria-hidden="true">›</span><button class="text-button" data-drive-folder="${esc(crumb.id)}" data-drive-breadcrumb-index="${index}" ${index === driveExplorerBreadcrumbs.length - 1 ? 'aria-current="page"' : ""}>${esc(crumb.name)}</button>`).join("")}</div><span class="drive-version">${driveExplorerFiles.length} items in this folder</span></div><div class="drive-toolbar-actions"><label class="drive-search"><span aria-hidden="true">⌕</span><input id="drive-search" type="search" value="${esc(driveExplorerSearch)}" placeholder="Search in EXO" aria-label="Search in EXO"></label><div class="drive-new-menu"><button class="primary" data-action="toggle-drive-new" ${reconnect ? "disabled" : ""}>＋ New</button><div class="drive-new-dropdown" data-drive-new-menu hidden><button type="button" data-action="new-drive-folder">New folder</button><button type="button" data-action="upload-drive-files">File upload</button><button type="button" data-action="upload-drive-folder">Folder upload</button></div></div></div></div>${reconnect ? `<div class="drive-reconnect"><p>${driveTokenExpired ? "Your Google Drive connection expired. Reconnect to continue browsing and uploading files." : "Sign in with Google to browse the shared Drive folder."}</p><button class="primary" data-action="login">Reconnect Google Drive</button></div>` : `<div class="drive-control-row"><span class="drive-location-label">${esc(driveExplorerBreadcrumbs[driveExplorerBreadcrumbs.length - 1].name)}</span><div class="drive-controls"><label>Sort <select id="drive-sort"><option value="name" ${driveExplorerSort === "name" ? "selected" : ""}>Name</option><option value="modified" ${driveExplorerSort === "modified" ? "selected" : ""}>Last modified</option><option value="size" ${driveExplorerSort === "size" ? "selected" : ""}>File size</option></select></label><span class="view-toggle" aria-label="View mode"><button class="${driveExplorerView === "list" ? "active" : ""}" data-drive-view="list" aria-label="List view">☷</button><button class="${driveExplorerView === "grid" ? "active" : ""}" data-drive-view="grid" aria-label="Grid view">⊞</button></span><button class="secondary drive-export" data-action="export">↓ Export</button></div></div><section class="drive-section"><div class="drive-section-head"><div><strong>Folders</strong><small>${sortedFolders.length} folder${sortedFolders.length === 1 ? "" : "s"}</small></div></div><div class="drive-folder-grid">${folderContent}</div></section><section class="drive-section drive-files-section"><div class="drive-section-head"><div><strong>Files</strong><small>${sortedFiles.length} file${sortedFiles.length === 1 ? "" : "s"}</small></div></div>${fileContent}</section></section>`}</section>`;
 }
 function filesHTML() {
   return driveExplorerHTML();
@@ -1705,7 +1730,6 @@ function render() {
   };
   $("#page-title").textContent = labels[view][0];
   $("#page-description").textContent = labels[view][1];
-  $("#page-action").textContent = labels[view][2];
   $("#eyebrow").textContent =
     (scope === "all" ? "ALL PROJECTS" : nameOf(scope).toUpperCase()) +
     " / " +
@@ -1804,7 +1828,9 @@ document.addEventListener("click", async (e) => {
     if (view === "files") {
       syncDriveFiles().catch((error) => {
         driveSyncing = false;
-        notify("Google Drive files could not be synchronized: " + error.message);
+        if (!isDriveAuthorizationError(error)) {
+          notify("Google Drive files could not be synchronized: " + error.message);
+        }
         render();
       });
     }
@@ -1889,29 +1915,45 @@ document.addEventListener("click", async (e) => {
   if (action === "refresh-drive") {
     syncDriveFiles().catch((error) => {
       driveSyncing = false;
-      notify("Google Drive files could not be synchronized: " + error.message);
+      if (!isDriveAuthorizationError(error)) {
+        notify("Google Drive files could not be synchronized: " + error.message);
+      }
       render();
     });
+  }
+  if (action === "toggle-drive-new") {
+    const menu = el.parentElement.querySelector("[data-drive-new-menu]");
+    if (menu) menu.hidden = !menu.hidden;
+    return;
   }
   if (action === "new-drive-folder") {
     const name = window.prompt("New folder name");
     if (name?.trim()) {
       createSubfolder(name.trim(), driveExplorerFolder)
         .then(() => loadDriveExplorer(driveExplorerFolder, driveExplorerBreadcrumbs))
-        .catch((error) => notify(error.message));
+        .catch((error) => {
+          if (!isDriveAuthorizationError(error)) notify(error.message);
+        });
     }
   }
-  if (action === "upload-drive-files") {
-    const input = $("#drive-upload-input");
+  if (action === "upload-drive-files" || action === "upload-drive-folder") {
+    const input = document.createElement("input");
+    input.type = "file";
+    input.multiple = true;
+    input.hidden = true;
+    if (action === "upload-drive-folder") input.setAttribute("webkitdirectory", "");
+    document.body.append(input);
     input.onchange = async () => {
       try {
         for (const file of input.files) await uploadFileToDrive(file, driveExplorerFolder);
         await loadDriveExplorer(driveExplorerFolder, driveExplorerBreadcrumbs);
         notify("Files uploaded to Google Drive.");
       } catch (error) {
-        notify("Google Drive upload failed: " + error.message);
+        if (!isDriveAuthorizationError(error)) {
+          notify("Google Drive upload failed: " + error.message);
+        }
       } finally {
-        input.value = "";
+        input.remove();
       }
     };
     input.click();
@@ -1936,18 +1978,6 @@ document.addEventListener("click", async (e) => {
     renderBoardPreservingScroll();
   }
 });
-$("#page-action").onclick = () =>
-  view === "canvas"
-    ? centerCard()
-    : view === "gallery"
-      ? showUpload(true)
-      : view === "resources"
-        ? resourceForm()
-        : view === "bom"
-          ? showUpload()
-            : view === "files"
-              ? $("#drive-upload-input")?.click()
-              : showDriveTestUpload();
 $("#close-dialog").onclick = () => $("#dialog").close();
 $("#dialog").onclick = (e) => {
   if (e.target === $("#dialog")) $("#dialog").close();
