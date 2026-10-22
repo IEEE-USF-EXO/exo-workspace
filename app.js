@@ -482,6 +482,7 @@ const initial = () => ({
   ],
   files: [],
   projectDrawings: {},
+  projectUpdates: {},
   resources: [],
   bom: {},
   bomEntries: [],
@@ -497,6 +498,13 @@ function normalizeWorkspaceState(data) {
     Array.isArray(next.projectDrawings)
   ) {
     next.projectDrawings = {};
+  }
+  if (
+    !next.projectUpdates ||
+    typeof next.projectUpdates !== "object" ||
+    Array.isArray(next.projectUpdates)
+  ) {
+    next.projectUpdates = {};
   }
   if (next.tldrawSnapshot && !next.projectDrawings.exo) {
     next.projectDrawings.exo = next.tldrawSnapshot;
@@ -1217,7 +1225,7 @@ function centerCard() {
 function showStorage() {
   openModal(
     "Your workspace storage",
-    `<p class="hint">This workspace stores drawing state and Drive file metadata in the cloud. File contents are uploaded to Google Drive.</p><ul class="storage-list"><li><b>Google Drive</b>Large files are uploaded directly to the selected project/team folder using resumable uploads.</li><li><b>Cloud workspace</b>Projects, drawings, relationships, BOM selections, and Drive file links are stored in Supabase.</li><li><b>Share or back up</b>Export a JSON backup containing workspace data and Drive-backed file metadata. The backup does not duplicate large Drive files.</li></ul><div class="row"><button class="primary" data-action="export">â†“ Export workspace backup</button><button class="secondary" data-action="import">â†‘ Import backup</button></div>`,
+    `<p class="hint">This workspace stores drawing state and Drive file metadata in the cloud. File contents are uploaded to Google Drive.</p><ul class="storage-list"><li><b>Google Drive</b>Large files are uploaded directly to the selected project/team folder using resumable uploads.</li><li><b>Cloud workspace</b>Projects, drawings, relationships, BOM selections, and Drive file links are stored in Supabase.</li><li><b>Share or back up</b>Import a JSON backup containing workspace data and Drive-backed file metadata. The backup does not duplicate large Drive files.</li></ul><div class="row"><button class="secondary" data-action="import">â†‘ Import backup</button></div>`,
   );
 }
 function toolHint() {
@@ -1519,9 +1527,35 @@ function deleteSelection() {
 }
 function overviewHTML() {
   const files = state.files.filter(inScope),
-    records = Object.values(state.projectDrawings[scope]?.store || {}),
-    shapes = records.filter((record) => record.typeName === "shape");
-  return `<div class="stats"><div class="stat"><span>Files</span><b>${files.length}</b><small>${sizeOf(files.reduce((s, f) => s + f.size, 0))} in Google Drive</small></div><div class="stat"><span>Drawing shapes</span><b>${shapes.length}</b><small>Stored in the shared Tldraw board</small></div><div class="stat"><span>Drawing records</span><b>${records.length}</b><small>Shapes, assets, bindings, and pages</small></div><div class="stat"><span>Gallery photos</span><b>${files.filter(isPhoto).length}</b><small>From Google Drive</small></div></div><div class="overview-actions"><button class="overview-action" data-view="canvas"><b>&#8599; Open the drawing board</b><p>Draw, arrange, and connect ideas with Tldraw.</p></button><button class="overview-action" data-view="bom"><b>&#9783; Open the BOM</b><p>Search components and compare project parts lists.</p></button><button class="overview-action" data-view="gallery"><b>&#9639; Tell the story in photos</b><p>Build a gallery of assemblies, prototypes, and progress.</p></button></div><div class="panel"><div class="panel-head"><div><h2>A workspace you can take with you.</h2><p>Open the dashboard, organize Drive files, and connect them to your project work.</p></div><button class="secondary" data-action="storage">How storage works</button></div></div>`;
+    photos = files.filter(isPhoto),
+    updates = state.projectUpdates[scope] || [];
+  return `<section class="overview-updates panel"><div class="panel-head"><div><h2>Team updates</h2><p>Shared notes for everyone working on ${esc(nameOf(scope))}.</p></div></div><form id="update-composer" class="update-composer"><input name="message" maxlength="500" placeholder="Write an update and press Enter…" aria-label="Write a team update" required><span>Press Enter to post</span></form>${updates.length ? `<div class="updates-list">${updates.map((update) => `<article class="update-item"><div><strong>${esc(update.message)}</strong><small>${esc(update.author || "Team member")} · ${new Date(update.createdAt).toLocaleString()}</small></div><button class="update-remove" type="button" data-update-delete="${esc(update.id)}" aria-label="Remove update" title="Remove update">×</button></article>`).join("")}</div>` : `<div class="updates-empty"><p>No updates yet. Start writing above to let the team know what is happening.</p></div>`}</section><div class="overview-stats"><button class="overview-stat" data-view="files"><span>Files</span><b>${files.length}</b><small>${sizeOf(files.reduce((s, f) => s + f.size, 0))} in Google Drive</small><strong>Open files &#8599;</strong></button><button class="overview-stat" data-view="gallery"><span>Gallery photos</span><b>${photos.length}</b><small>Project photos from Google Drive</small><strong>Open gallery &#8599;</strong></button></div><div class="overview-actions"><button class="overview-action" data-view="bom"><b>&#9783; Open the BOM</b><p>Search components and compare parts for this project.</p><span>Go to BOM &#8599;</span></button><button class="overview-action" data-view="canvas"><b>&#8599; Open the drawing board</b><p>Draw, arrange, and connect ideas with your team.</p><span>Go to drawing board &#8599;</span></button></div>`;
+}
+async function saveOverviewUpdate(event) {
+  event.preventDefault();
+  const input = event.target.elements.message;
+  const message = input.value.trim();
+  if (!message) return;
+  const projectUpdates = { ...state.projectUpdates };
+  projectUpdates[scope] = [
+    {
+      id: uid(),
+      message,
+      author: tldrawPointerName,
+      createdAt: new Date().toISOString(),
+    },
+    ...(projectUpdates[scope] || []),
+  ];
+  input.disabled = true;
+  state = normalizeWorkspaceState({ ...state, projectUpdates });
+  try {
+    await persist();
+    render();
+    $("#update-composer input")?.focus();
+  } catch (error) {
+    input.disabled = false;
+    notify("Update could not be saved: " + error.message);
+  }
 }
 function fileRows(files) {
   return files
@@ -1604,7 +1638,7 @@ function driveExplorerHTML() {
       : `<div class="drive-table-wrap"><table class="drive-table"><thead><tr><th>Name</th><th>Owner</th><th>Last modified</th><th>File size</th><th><span class="sr-only">Actions</span></th></tr></thead><tbody>${sortedFiles.map((file) => `<tr class="${driveExplorerSelected?.id === file.id ? "selected" : ""}" data-drive-item="${esc(file.id)}"><td><div class="drive-name"><span class="drive-file-icon">${driveFileIcon(file)}</span><strong>${esc(file.name)}</strong></div></td><td class="drive-muted">—</td><td class="drive-muted">${file.modifiedTime ? new Date(file.modifiedTime).toLocaleDateString() : "—"}</td><td class="drive-muted">${file.size ? sizeOf(Number(file.size)) : "—"}</td><td class="drive-actions"><button class="icon-button" data-drive-preview="${esc(file.id)}" aria-label="Preview ${esc(file.name)}">⋮</button></td></tr>`).join("")}</tbody></table></div>`)
     : `<div class="drive-empty"><div class="drive-empty-icon">⌁</div><h3>${query ? "No files match your search" : "This folder is empty"}</h3><p>${query ? "Try a different search term." : "Upload a file to start building this folder."}</p></div>`;
   const connectionClass = reconnect ? "is-reconnecting" : "is-connected";
-  return `<section class="drive-explorer ${connectionClass}"><div class="drive-toolbar"><div class="drive-toolbar-location"><div class="drive-breadcrumbs" aria-label="Drive folder path"><button class="drive-home" data-drive-folder="${esc(driveExplorerBreadcrumbs[0].id)}" data-drive-breadcrumb-index="0" aria-label="Project files">⌂</button>${driveExplorerBreadcrumbs.map((crumb, index) => `<span aria-hidden="true">›</span><button class="text-button" data-drive-folder="${esc(crumb.id)}" data-drive-breadcrumb-index="${index}" ${index === driveExplorerBreadcrumbs.length - 1 ? 'aria-current="page"' : ""}>${esc(crumb.name)}</button>`).join("")}</div><span class="drive-version">${driveExplorerFiles.length} items in this folder</span></div><div class="drive-toolbar-actions"><label class="drive-search"><span aria-hidden="true">⌕</span><input id="drive-search" type="search" value="${esc(driveExplorerSearch)}" placeholder="Search in EXO" aria-label="Search in EXO"></label><div class="drive-new-menu"><button class="primary" data-action="toggle-drive-new" ${reconnect ? "disabled" : ""}>＋ New</button><div class="drive-new-dropdown" data-drive-new-menu hidden><button type="button" data-action="new-drive-folder">New folder</button><button type="button" data-action="upload-drive-files">File upload</button><button type="button" data-action="upload-drive-folder">Folder upload</button></div></div></div></div>${reconnect ? `<div class="drive-reconnect"><p>${driveTokenExpired ? "Your Google Drive connection expired. Reconnect to continue browsing and uploading files." : "Sign in with Google to browse the shared Drive folder."}</p><button class="primary" data-action="login">Reconnect Google Drive</button></div>` : `<div class="drive-control-row"><span class="drive-location-label">${esc(driveExplorerBreadcrumbs[driveExplorerBreadcrumbs.length - 1].name)}</span><div class="drive-controls"><label>Sort <select id="drive-sort"><option value="name" ${driveExplorerSort === "name" ? "selected" : ""}>Name</option><option value="modified" ${driveExplorerSort === "modified" ? "selected" : ""}>Last modified</option><option value="size" ${driveExplorerSort === "size" ? "selected" : ""}>File size</option></select></label><span class="view-toggle" aria-label="View mode"><button class="${driveExplorerView === "list" ? "active" : ""}" data-drive-view="list" aria-label="List view">☷</button><button class="${driveExplorerView === "grid" ? "active" : ""}" data-drive-view="grid" aria-label="Grid view">⊞</button></span><button class="secondary drive-export" data-action="export">↓ Export</button></div></div><section class="drive-section"><div class="drive-section-head"><div><strong>Folders</strong><small>${sortedFolders.length} folder${sortedFolders.length === 1 ? "" : "s"}</small></div></div><div class="drive-folder-grid">${folderContent}</div></section><section class="drive-section drive-files-section"><div class="drive-section-head"><div><strong>Files</strong><small>${sortedFiles.length} file${sortedFiles.length === 1 ? "" : "s"}</small></div></div>${fileContent}</section></section>`}</section>`;
+  return `<section class="drive-explorer ${connectionClass}"><div class="drive-toolbar"><div class="drive-toolbar-location"><div class="drive-breadcrumbs" aria-label="Drive folder path"><button class="drive-home" data-drive-folder="${esc(driveExplorerBreadcrumbs[0].id)}" data-drive-breadcrumb-index="0" aria-label="Project files">⌂</button>${driveExplorerBreadcrumbs.map((crumb, index) => `<span aria-hidden="true">›</span><button class="text-button" data-drive-folder="${esc(crumb.id)}" data-drive-breadcrumb-index="${index}" ${index === driveExplorerBreadcrumbs.length - 1 ? 'aria-current="page"' : ""}>${esc(crumb.name)}</button>`).join("")}</div><span class="drive-version">${driveExplorerFiles.length} items in this folder</span></div><div class="drive-toolbar-actions"><label class="drive-search"><span aria-hidden="true">⌕</span><input id="drive-search" type="search" value="${esc(driveExplorerSearch)}" placeholder="Search in EXO" aria-label="Search in EXO"></label><div class="drive-new-menu"><button class="primary" data-action="toggle-drive-new" ${reconnect ? "disabled" : ""}>＋ New</button><div class="drive-new-dropdown" data-drive-new-menu hidden><button type="button" data-action="new-drive-folder">New folder</button><button type="button" data-action="upload-drive-files">File upload</button><button type="button" data-action="upload-drive-folder">Folder upload</button></div></div></div></div>${reconnect ? `<div class="drive-reconnect"><p>${driveTokenExpired ? "Your Google Drive connection expired. Reconnect to continue browsing and uploading files." : "Sign in with Google to browse the shared Drive folder."}</p><button class="primary" data-action="login">Reconnect Google Drive</button></div>` : `<div class="drive-control-row"><span class="drive-location-label">${esc(driveExplorerBreadcrumbs[driveExplorerBreadcrumbs.length - 1].name)}</span><div class="drive-controls"><label>Sort <select id="drive-sort"><option value="name" ${driveExplorerSort === "name" ? "selected" : ""}>Name</option><option value="modified" ${driveExplorerSort === "modified" ? "selected" : ""}>Last modified</option><option value="size" ${driveExplorerSort === "size" ? "selected" : ""}>File size</option></select></label><span class="view-toggle" aria-label="View mode"><button class="${driveExplorerView === "list" ? "active" : ""}" data-drive-view="list" aria-label="List view">☷</button><button class="${driveExplorerView === "grid" ? "active" : ""}" data-drive-view="grid" aria-label="Grid view">⊞</button></span></div></div><section class="drive-section"><div class="drive-section-head"><div><strong>Folders</strong><small>${sortedFolders.length} folder${sortedFolders.length === 1 ? "" : "s"}</small></div></div><div class="drive-folder-grid">${folderContent}</div></section><section class="drive-section drive-files-section"><div class="drive-section-head"><div><strong>Files</strong><small>${sortedFiles.length} file${sortedFiles.length === 1 ? "" : "s"}</small></div></div>${fileContent}</section></section>`}</section>`;
 }
 function filesHTML() {
   return driveExplorerHTML();
@@ -1623,6 +1657,33 @@ function bomHTML() {
   const files = projects.map((p) => state.files.find((f) => f.id === state.bom[p.id])).filter(Boolean);
   const hasSharedRows = sharedBOMRows.some((row) => row.project_id === scope);
   return `<section class="panel"><div class="panel-head"><div><h2>Bill of materials</h2><p>Showing the selected project's components and source file.</p></div><button class="secondary" data-action="add-bom-row">+ Add component</button></div><div class="bom-bar"><div><strong>${hasSharedRows ? "Shared Supabase BOM connected" : files.length ? `${files.length} source file${files.length === 1 ? "" : "s"} connected` : "No BOM source selected"}</strong><small>${hasSharedRows ? "Approved rows are shared with authenticated workspace users." : files.length ? files.map((f) => `${esc(nameOf(f.project))} Â· ${esc(f.name)}`).join("  /  ") : "Choose a CSV source in Files to preview its rows here."}</small></div><div class="row">${files.map((f) => `<button class="text-button" data-download="${f.id}">â†“ ${esc(nameOf(f.project))}</button>`).join("")}<button class="secondary" data-action="choose-bom">${files.length ? "Manage sources" : "Choose BOM file"}</button></div></div><div id="bom-preview">${files.length || hasSharedRows ? '<div class="empty"><p>Opening BOMâ€¦</p></div>' : empty("â˜·", "Keep the source easy to find.", "Add a BOM in Files, then choose it here. CSV files display as a searchable table.")}</div></section>`;
+}
+function driveFolderForm() {
+  openModal(
+    "Create a new folder",
+    `<form id="drive-folder-form"><label class="field">Folder name<input name="name" maxlength="80" placeholder="Name your folder" required autofocus></label><p class="hint">This folder will be created in the current Google Drive location.</p>${actions("Create folder")}</form>`,
+  );
+  $("#drive-folder-form").onsubmit = async (event) => {
+    event.preventDefault();
+    const form = new FormData(event.target);
+    const name = String(form.get("name") || "").trim();
+    if (!name) return;
+    const button = $("[type=submit]", event.target);
+    button.disabled = true;
+    button.textContent = "Creating folder…";
+    try {
+      await createSubfolder(name, driveExplorerFolder);
+      $("#dialog").close();
+      await loadDriveExplorer(driveExplorerFolder, driveExplorerBreadcrumbs);
+      notify(`Created folder "${name}".`);
+    } catch (error) {
+      if (!isDriveAuthorizationError(error)) {
+        notify(error instanceof Error ? error.message : "The folder could not be created.");
+      }
+      button.disabled = false;
+      button.textContent = "Try again";
+    }
+  };
 }
 function addBOMRow() {
   openModal(
@@ -2046,6 +2107,10 @@ function render() {
             : view === "bom"
               ? bomHTML()
               : resourcesHTML();
+  if (view === "overview") {
+    const updateComposer = $("#update-composer");
+    if (updateComposer) updateComposer.onsubmit = saveOverviewUpdate;
+  }
   if (view === "canvas") {
     initTldrawBoard();
   }
@@ -2145,6 +2210,22 @@ document.addEventListener("click", async (e) => {
     );
     $("#dialog").classList.add("lightbox");
   }
+  if (el.dataset.updateDelete) {
+    const update = (state.projectUpdates[scope] || []).find(
+      (item) => item.id === el.dataset.updateDelete,
+    );
+    if (update) {
+      const projectUpdates = {
+        ...state.projectUpdates,
+        [scope]: (state.projectUpdates[scope] || []).filter(
+          (item) => item.id !== update.id,
+        ),
+      };
+      state = normalizeWorkspaceState({ ...state, projectUpdates });
+      await persist();
+      render();
+    }
+  }
   if (el.hasAttribute("data-close")) $("#dialog").close();
   const action = el.dataset.action;
   if (action === "login") signInWithGoogle();
@@ -2169,14 +2250,7 @@ document.addEventListener("click", async (e) => {
     return;
   }
   if (action === "new-drive-folder") {
-    const name = window.prompt("New folder name");
-    if (name?.trim()) {
-      createSubfolder(name.trim(), driveExplorerFolder)
-        .then(() => loadDriveExplorer(driveExplorerFolder, driveExplorerBreadcrumbs))
-        .catch((error) => {
-          if (!isDriveAuthorizationError(error)) notify(error.message);
-        });
-    }
+    driveFolderForm();
   }
   if (action === "upload-drive-files" || action === "upload-drive-folder") {
     const input = document.createElement("input");

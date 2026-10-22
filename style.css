@@ -940,37 +940,50 @@ td small {
   font-size: 22px;
   margin: 6px 0 2px;
 }
-.stats {
+.overview-stats {
   display: grid;
-  grid-template-columns: repeat(4, 1fr);
+  grid-template-columns: repeat(2, 1fr);
   gap: 14px;
   margin-bottom: 22px;
 }
-.stat {
+.overview-stat {
   background: #fff;
   border: 1px solid var(--line);
   border-radius: 9px;
   padding: 19px;
+  text-align: left;
 }
-.stat span {
+.overview-stat:hover,
+.overview-action:hover {
+  border-color: #aec4a4;
+  box-shadow: 0 5px 18px rgb(34 62 50 / 7%);
+}
+.overview-stat span {
   font-size: 9px;
   letter-spacing: 1px;
   color: #849875;
   text-transform: uppercase;
 }
-.stat b {
+.overview-stat b {
   font-size: 27px;
   display: block;
   font-weight: 500;
   margin: 10px 0 4px;
 }
-.stat small {
+.overview-stat small {
+  display: block;
   font-size: 10px;
   color: #8c9f7c;
 }
+.overview-stat strong {
+  display: block;
+  margin-top: 16px;
+  color: var(--green);
+  font-size: 11px;
+}
 .overview-actions {
   display: grid;
-  grid-template-columns: repeat(3, 1fr);
+  grid-template-columns: repeat(2, 1fr);
   gap: 14px;
   margin-bottom: 22px;
 }
@@ -990,6 +1003,73 @@ td small {
 .overview-action p {
   font-size: 11px;
   color: #829775;
+}
+.overview-action span {
+  display: block;
+  margin-top: 18px;
+  color: var(--green);
+  font-size: 11px;
+}
+.overview-updates {
+  margin-bottom: 22px;
+}
+.update-composer {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 0 22px 16px;
+}
+.update-composer input {
+  flex: 1;
+  min-width: 0;
+  border-radius: 6px;
+  padding: 11px 12px;
+}
+.update-composer span {
+  color: #8c9f7c;
+  font-size: 10px;
+  white-space: nowrap;
+}
+.updates-list {
+  padding: 0 22px 8px;
+}
+.update-item {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 18px;
+  padding: 14px 0;
+  border-top: 1px solid var(--line);
+}
+.update-item strong {
+  display: block;
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 1.5;
+}
+.update-item small {
+  display: block;
+  margin-top: 5px;
+  color: #8c9f7c;
+  font-size: 10px;
+}
+.update-remove {
+  border: 0;
+  color: #a5b69a;
+  font-size: 20px;
+  line-height: 1;
+  padding: 2px 5px;
+  flex-shrink: 0;
+}
+.update-remove:hover {
+  color: #a85d52;
+  background: #fff4f1;
+}
+.updates-empty {
+  padding: 4px 22px 22px;
+  color: #829775;
+  font-size: 11px;
 }
 .alert {
   padding: 12px 16px;
@@ -1077,6 +1157,7 @@ td small {
   display: none;
 }
 dialog {
+  margin: auto;
   padding: 0;
   border: 1px solid var(--line);
   border-radius: 13px;
@@ -1087,8 +1168,8 @@ dialog {
   box-shadow: 0 20px 80px #172e2820;
 }
 dialog::backdrop {
-  background: #1b362d55;
-  backdrop-filter: blur(3px);
+  background: rgb(27 54 45 / 38%);
+  backdrop-filter: blur(6px);
 }
 .modal {
   padding: 25px;
@@ -1941,7 +2022,7 @@ dialog::backdrop {
     min-width: 0;
   }
 
-  .stats,
+  .overview-stats,
   .bom-stats {
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 8px;
@@ -1966,6 +2047,16 @@ dialog::backdrop {
   .overview-action,
   .resource {
     padding: 14px;
+  }
+
+  .update-composer {
+    align-items: stretch;
+    flex-direction: column;
+    gap: 6px;
+  }
+
+  .update-composer span {
+    text-align: right;
   }
 
   .resource-grid,
@@ -2113,10 +2204,6 @@ dialog::backdrop {
 
   .drive-controls select {
     max-width: 155px;
-  }
-
-  .drive-export {
-    flex: 1 1 100%;
   }
 
   .drive-folder-grid,

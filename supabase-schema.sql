@@ -86,6 +86,7 @@ create table if not exists public.workspace_state (
     'projects', jsonb_build_array(),
     'files', jsonb_build_array(),
     'projectDrawings', jsonb_build_object(),
+    'projectUpdates', jsonb_build_object(),
     'resources', jsonb_build_array(),
     'bom', jsonb_build_object(),
     'bomEntries', jsonb_build_array()
