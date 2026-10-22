@@ -1609,7 +1609,7 @@ function filesHTML() {
   return driveExplorerHTML();
 }function galleryHTML() {
   const photos = state.files.filter(inScope).filter(isPhoto);
-  return `<section class="panel"><div class="panel-head"><div><h2>Project photo gallery</h2><p>Photos loaded from the project Google Drive folders.</p></div><span class="pill">${photos.length} photos</span></div>${photos.length ? `<div class="tiles">${photos.map((f) => `<article class="photo"><button class="photo-image" data-photo="${f.id}" aria-label="View ${esc(f.name)}"><img data-local-image="${f.id}" alt="${esc(f.note || f.name)}"></button><div class="photo-info"><b>${esc(f.name)}</b><p>${esc(nameOf(f.project))} Â· ${esc(teamLabel(f.project, f.team))}</p><p>${esc(f.note)}</p><button class="text-button" data-download="${f.id}">â†— Open in Drive</button> <button class="text-button danger-text" data-remove-file="${f.id}">Remove from library</button></div></article>`).join("")}</div>` : empty("â–§", "Show what you are building.", "Add photos of prototypes, assemblies, and team progress.", '<button class="secondary" data-action="photos">ï¼‹ Add photos</button>')}</section>`;
+  return `<section class="panel"><div class="panel-head"><div><h2>Project photo gallery</h2><p>Photos loaded from the project Google Drive folders.</p></div><span class="pill">${photos.length} photos</span></div>${photos.length ? `<div class="tiles">${photos.map((f) => `<article class="photo"><button class="photo-image" data-photo="${f.id}" aria-label="View ${esc(f.name)}"><img data-local-image="${f.id}" alt="${esc(f.note || f.name)}"></button><div class="photo-info"><b>${esc(f.name)}</b><p>${esc(nameOf(f.project))} Â· ${esc(teamLabel(f.project, f.team))}</p><p>${esc(f.note)}</p><button class="text-button" data-download="${f.id}">â†— Open in Drive</button> <button class="text-button danger-text" data-remove-file="${f.id}">Remove from library</button></div></article>`).join("")}</div>` : empty("&#9639;", "Show what you are building.", "Add photos of prototypes, assemblies, and team progress.", '<button class="secondary" data-action="photos">+ Add photos</button>')}</section>`;
 }
 async function loadImages() {
   for (const img of $$("[data-local-image]")) {
@@ -1994,7 +1994,7 @@ function render() {
     gallery: [
       "A closer look at the work.",
       "Keep your actual project photos together, with notes and context.",
-      "ï¼‹ Add photos",
+      "+ Add photos",
     ],
     resources: [
       "Your project, connected.",
@@ -2021,7 +2021,7 @@ function render() {
           `<option value="${esc(p.id)}" ${scope === p.id ? "selected" : ""}>${esc(p.name)}</option>`,
       )
       .join("") +
-    `<option value="__new-project__">ï¼‹ Add new project</option>`;
+    `<option value="__new-project__">+ Add new project</option>`;
   $("#project-context").onchange = (e) => {
     if (e.target.value === "__new-project__") {
       e.target.value = scope;
