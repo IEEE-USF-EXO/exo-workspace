@@ -1456,11 +1456,6 @@ dialog::backdrop {
     padding: 6px 8px;
   }
 }
-@media (max-width: 850px) {
-  .app {
-    display: block;
-  }
-}
 @media (max-width: 768px) {
     body {
       overflow-x: hidden;
@@ -1638,148 +1633,6 @@ dialog::backdrop {
       touch-action: none;
       overscroll-behavior: none;
     }
-}
-@media (min-width: 769px) and (max-width: 850px) {
-  .sidebar {
-    height: auto;
-    position: static;
-    padding: 16px;
-    border-right: 0;
-    border-bottom: 1px solid var(--line);
-  }
-  .brand {
-    padding: 0 0 14px;
-  }
-  .brand b {
-    font-size: 21px;
-  }
-  .brand-mark {
-    width: 33px;
-    height: 33px;
-  }
-  .nav-label,
-  .sidebar-bottom {
-    display: none;
-  }
-  nav {
-    display: flex;
-    overflow: auto;
-    gap: 4px;
-  }
-  .nav {
-    width: auto;
-    white-space: nowrap;
-    padding: 9px;
-    font-size: 10px;
-  }
-  .nav .symbol {
-    font-size: 15px;
-  }
-  .project-list {
-    display: flex;
-    overflow: auto;
-    margin: 10px 0 0;
-  }
-  .project-button {
-    white-space: nowrap;
-    padding: 6px 10px;
-    font-size: 11px;
-  }
-  .add-project {
-    padding: 7px 10px;
-    font-size: 11px;
-  }
-  .topbar {
-    height: 52px;
-    padding: 0 18px;
-  }
-  .content {
-    padding: 23px 16px;
-  }
-  .topbar-right .pill {
-    display: none;
-  }
-  .heading {
-    margin-bottom: 20px;
-  }
-  .heading h1 {
-    font-size: 26px;
-  }
-  .heading p {
-    font-size: 11px;
-  }
-  .canvas-layout {
-    grid-template-columns: 1fr;
-  }
-  .canvas-viewport {
-    height: 480px;
-  }
-  .inspector {
-    border-left: 0;
-    border-top: 1px solid var(--line);
-    max-height: none;
-    height: auto;
-  }
-  .inspector form {
-    display: grid;
-    grid-template-columns: repeat(2, 1fr);
-    gap: 0 14px;
-  }
-  .inspector .related,
-  .inspector .wide {
-    grid-column: 1/-1;
-  }
-  .canvas-top {
-    padding: 12px;
-  }
-  .canvas-footer {
-    font-size: 8px;
-  }
-  .stats {
-    grid-template-columns: repeat(2, 1fr);
-  }
-  .overview-actions {
-    grid-template-columns: 1fr;
-  }
-  .resource-grid {
-    grid-template-columns: 1fr;
-  }
-  .bom-bar {
-    align-items: flex-start;
-    flex-direction: column;
-  }
-  .tiles {
-    grid-template-columns: repeat(2, 1fr);
-    gap: 10px;
-    padding-inline: 15px;
-  }
-  .photo img {
-    height: 150px;
-  }
-  .panel-head {
-    padding: 17px;
-  }
-  .section-tools {
-    padding-inline: 17px;
-  }
-  .resource-grid {
-    padding-inline: 17px;
-  }
-  .footer {
-    font-size: 8px;
-  }
-  .drive-toolbar {
-    align-items: stretch;
-  }
-  .drive-toolbar > .row {
-    justify-content: flex-start;
-  }
-  .drive-content-split {
-    min-height: 0;
-  }
-  .drive-preview-empty {
-    min-height: 260px;
-  }
 }
 @media (max-width: 480px) {
   .tiles {
@@ -2253,6 +2106,55 @@ dialog::backdrop {
   clip: rect(0, 0, 0, 0);
   white-space: nowrap;
   border: 0;
+}
+@media (max-width: 768px) {
+  .content,
+  #view,
+  .panel,
+  .drive-explorer,
+  .drive-content-split,
+  .drive-file-list,
+  .drive-preview,
+  .resource-grid,
+  .tiles,
+  .drive-folder-grid,
+  .drive-file-grid {
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+  }
+  .drive-folder-grid,
+  .drive-file-grid,
+  .resource-grid,
+  .tiles {
+    grid-template-columns: 1fr;
+  }
+  .drive-folder-card,
+  .drive-file-card,
+  .resource,
+  .photo {
+    width: 100%;
+    min-width: 0;
+  }
+  .drive-content-split {
+    grid-template-columns: 1fr;
+  }
+  .drive-file-list {
+    max-height: none;
+    border-right: 0;
+    border-bottom: 1px solid var(--line);
+  }
+  .drive-preview {
+    min-height: 300px;
+  }
+  .bom-stats {
+    grid-template-columns: 1fr;
+  }
+  .topbar,
+  .topbar-right,
+  .breadcrumbs {
+    min-width: 0;
+  }
 }
 @media (max-width: 700px) {
   .drive-explorer {
