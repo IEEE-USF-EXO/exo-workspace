@@ -181,7 +181,7 @@ h3 {
   padding: 11px 0;
   font-size: 0;
 }
-.app.sidebar-collapsed .nav .symbol {
+.app.sidebar-collapsed .nav .nav-icon {
   margin: 0;
 }
 .sidebar {
@@ -261,7 +261,7 @@ nav {
 }
 .nav {
   display: flex;
-  gap: 10px;
+  gap: 12px;
   align-items: center;
   padding: 11px 13px;
   border-radius: 7px;
@@ -275,11 +275,49 @@ nav {
   color: #285939;
   font-weight: 600;
 }
-.symbol {
-  width: 20px;
-  display: inline-grid;
-  place-items: center;
-  font-size: 17px;
+.nav:hover:not(:disabled) {
+  color: #49674c;
+  filter: none;
+}
+.nav.active:hover:not(:disabled) {
+  color: #285939;
+}
+.nav-icon {
+  width: 22px;
+  height: 22px;
+  flex: 0 0 22px;
+  display: block;
+  background-color: currentColor;
+  mask-position: center;
+  mask-repeat: no-repeat;
+  mask-size: contain;
+  -webkit-mask-position: center;
+  -webkit-mask-repeat: no-repeat;
+  -webkit-mask-size: contain;
+}
+.nav-icon-overview {
+  mask-image: url("assets/icons/overview.svg");
+  -webkit-mask-image: url("assets/icons/overview.svg");
+}
+.nav-icon-drawing-board {
+  mask-image: url("assets/icons/drawing-board.svg");
+  -webkit-mask-image: url("assets/icons/drawing-board.svg");
+}
+.nav-icon-files {
+  mask-image: url("assets/icons/files.svg");
+  -webkit-mask-image: url("assets/icons/files.svg");
+}
+.nav-icon-bom {
+  mask-image: url("assets/icons/bom.svg");
+  -webkit-mask-image: url("assets/icons/bom.svg");
+}
+.nav-icon-gallery {
+  mask-image: url("assets/icons/gallery.svg");
+  -webkit-mask-image: url("assets/icons/gallery.svg");
+}
+.nav-icon-repo-and-links {
+  mask-image: url("assets/icons/repo-and-links.svg");
+  -webkit-mask-image: url("assets/icons/repo-and-links.svg");
 }
 .project-list {
   display: grid;
@@ -910,12 +948,15 @@ td small {
   padding: 0 22px 20px;
 }
 .bom-stats .stat {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
   padding: 14px 16px;
   background: #f8faf6;
 }
 .bom-stats .stat b {
   font-size: 22px;
-  margin: 6px 0 2px;
+  margin: 0;
 }
 .overview-stats {
   display: grid;
@@ -924,6 +965,9 @@ td small {
   margin-bottom: 22px;
 }
 .overview-stat {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
   background: #fff;
   border: 1px solid var(--line);
   border-radius: 9px;
@@ -945,7 +989,7 @@ td small {
   font-size: 27px;
   display: block;
   font-weight: 500;
-  margin: 10px 0 4px;
+  margin: 0;
 }
 .overview-stat small {
   display: block;
@@ -954,7 +998,7 @@ td small {
 }
 .overview-stat strong {
   display: block;
-  margin-top: 16px;
+  margin-top: 8px;
   color: var(--green);
   font-size: 11px;
 }
@@ -1888,10 +1932,8 @@ dialog::backdrop {
     white-space: normal;
   }
 
-  .nav .symbol {
-    width: auto;
-    font-size: 18px;
-    line-height: 1;
+  .nav .nav-icon {
+    flex-basis: 22px;
   }
 
   .topbar {

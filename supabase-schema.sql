@@ -1,5 +1,7 @@
--- Shared BOM and group membership foundation for EXO Dashboard.
--- Run this in the Supabase SQL editor before enabling shared BOM data.
+-- EXO Dashboard database schema.
+-- This file includes the dashboard tables plus shared membership and BOM
+-- workflow tables reserved for collaboration features.
+-- Run it in the Supabase SQL editor. All statements are safe to re-run.
 
 create table if not exists public.projects (
   id text primary key,
@@ -96,12 +98,24 @@ create table if not exists public.workspace_state (
 
 alter table public.bom_items add column if not exists purpose text not null default '';
 alter table public.bom_items add column if not exists stage text not null default 'Baseline';
+alter table public.workspace_state
+  alter column data set default jsonb_build_object(
+    'version', 1,
+    'projects', jsonb_build_array(),
+    'files', jsonb_build_array(),
+    'projectDrawings', jsonb_build_object(),
+    'projectUpdates', jsonb_build_object(),
+    'resources', jsonb_build_array(),
+    'bom', jsonb_build_object(),
+    'bomEntries', jsonb_build_array()
+  );
 
-create index if not exists bom_items_project_id_idx on public.bom_items(project_id);
+create index if not exists bom_items_project_id_idx
+  on public.bom_items(project_id);
+
 create index if not exists bom_change_requests_project_status_idx
   on public.bom_change_requests(project_id, status);
 
-drop function if exists public.is_project_admin(text);
 create or replace function public.is_global_admin()
 returns boolean
 language sql
@@ -124,24 +138,13 @@ alter table public.workspace_state enable row level security;
 
 drop policy if exists "Authenticated users can read projects" on public.projects;
 create policy "Authenticated users can read projects"
-  on public.projects for select to authenticated using (true);
-
-drop policy if exists "Authenticated users can read workspace state" on public.workspace_state;
-create policy "Authenticated users can read workspace state"
-  on public.workspace_state for select to authenticated using (true);
-
-drop policy if exists "Authenticated users can create workspace state" on public.workspace_state;
-create policy "Authenticated users can create workspace state"
-  on public.workspace_state for insert to authenticated with check (true);
-
-drop policy if exists "Authenticated users can update workspace state" on public.workspace_state;
-create policy "Authenticated users can update workspace state"
-  on public.workspace_state for update to authenticated using (true) with check (true);
+  on public.projects for select to authenticated
+  using (true);
 
 drop policy if exists "Members can read the group roster" on public.members;
 create policy "Members can read the group roster"
   on public.members for select to authenticated
-  using (active = true and (user_id = auth.uid() or public.is_global_admin()));
+  using (active = true and user_id = auth.uid());
 
 drop policy if exists "Users can register themselves" on public.members;
 create policy "Users can register themselves"
@@ -151,12 +154,14 @@ create policy "Users can register themselves"
 drop policy if exists "Users can update their profile" on public.members;
 create policy "Users can update their profile"
   on public.members for update to authenticated
-  using (user_id = auth.uid()) with check (user_id = auth.uid());
+  using (user_id = auth.uid())
+  with check (user_id = auth.uid());
 
 drop policy if exists "Chairs can manage the group roster" on public.members;
 create policy "Chairs can manage the group roster"
   on public.members for all to authenticated
-  using (public.is_global_admin()) with check (public.is_global_admin());
+  using (public.is_global_admin())
+  with check (public.is_global_admin());
 
 drop policy if exists "Users can read their memberships" on public.project_members;
 create policy "Users can read their memberships"
@@ -166,7 +171,8 @@ create policy "Users can read their memberships"
 drop policy if exists "Admins can manage memberships" on public.project_members;
 create policy "Admins can manage memberships"
   on public.project_members for all to authenticated
-  using (public.is_global_admin()) with check (public.is_global_admin());
+  using (public.is_global_admin())
+  with check (public.is_global_admin());
 
 drop policy if exists "Chairs can read global admins" on public.global_admins;
 create policy "Chairs can read global admins"
@@ -176,16 +182,19 @@ create policy "Chairs can read global admins"
 drop policy if exists "Chairs can manage global admins" on public.global_admins;
 create policy "Chairs can manage global admins"
   on public.global_admins for all to authenticated
-  using (public.is_global_admin()) with check (public.is_global_admin());
+  using (public.is_global_admin())
+  with check (public.is_global_admin());
 
-drop policy if exists "Authenticated users can read approved BOM" on public.bom_items;
-create policy "Authenticated users can read approved BOM"
-  on public.bom_items for select to authenticated using (true);
+drop policy if exists "Authenticated users can read BOM" on public.bom_items;
+create policy "Authenticated users can read BOM"
+  on public.bom_items for select to authenticated
+  using (true);
 
 drop policy if exists "Admins can manage BOM" on public.bom_items;
 create policy "Admins can manage BOM"
   on public.bom_items for all to authenticated
-  using (public.is_global_admin()) with check (public.is_global_admin());
+  using (public.is_global_admin())
+  with check (public.is_global_admin());
 
 drop policy if exists "Authenticated users can submit BOM changes" on public.bom_change_requests;
 create policy "Authenticated users can submit BOM changes"
@@ -200,19 +209,37 @@ create policy "Users can read BOM change requests"
 drop policy if exists "Admins can review BOM change requests" on public.bom_change_requests;
 create policy "Admins can review BOM change requests"
   on public.bom_change_requests for update to authenticated
-  using (public.is_global_admin()) with check (public.is_global_admin());
+  using (public.is_global_admin())
+  with check (public.is_global_admin());
 
 drop policy if exists "Admins can read BOM audit log" on public.bom_audit_log;
 create policy "Admins can read BOM audit log"
   on public.bom_audit_log for select to authenticated
   using (public.is_global_admin());
 
+drop policy if exists "Authenticated users can read workspace state" on public.workspace_state;
+create policy "Authenticated users can read workspace state"
+  on public.workspace_state for select to authenticated
+  using (true);
+
+drop policy if exists "Authenticated users can create workspace state" on public.workspace_state;
+create policy "Authenticated users can create workspace state"
+  on public.workspace_state for insert to authenticated
+  with check (id = 1);
+
+drop policy if exists "Authenticated users can update workspace state" on public.workspace_state;
+create policy "Authenticated users can update workspace state"
+  on public.workspace_state for update to authenticated
+  using (id = 1)
+  with check (id = 1);
+
 insert into public.projects (id, name, description)
 values
   ('exo', 'EXO', 'Lower-limb exoskeleton'),
   ('pid-spoon', 'PID Spoon', 'Stabilized assistive utensil')
 on conflict (id) do update
-set name = excluded.name, description = excluded.description;
+set name = excluded.name,
+    description = excluded.description;
 
 insert into public.workspace_state (id, data)
 values (
@@ -225,9 +252,29 @@ values (
     ),
     'files', jsonb_build_array(),
     'projectDrawings', jsonb_build_object(),
+    'projectUpdates', jsonb_build_object(),
     'resources', jsonb_build_array(),
     'bom', jsonb_build_object(),
     'bomEntries', jsonb_build_array()
   )
 )
 on conflict (id) do nothing;
+
+update public.workspace_state
+set data = data || jsonb_build_object('projectUpdates', '{}'::jsonb)
+where not (data ? 'projectUpdates');
+
+-- app.js listens for workspace_state changes through Supabase Realtime.
+do $$
+begin
+  if not exists (
+    select 1
+    from pg_publication_tables
+    where pubname = 'supabase_realtime'
+      and schemaname = 'public'
+      and tablename = 'workspace_state'
+  ) then
+    alter publication supabase_realtime add table public.workspace_state;
+  end if;
+end
+$$;

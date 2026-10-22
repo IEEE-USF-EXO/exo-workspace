@@ -1,4 +1,4 @@
-﻿"use strict";
+"use strict";
 
 // ==========================================
 // 1. GOOGLE & SUPABASE CONFIGURATION
@@ -134,7 +134,14 @@ async function loadSharedBOM() {
     notify("Shared BOM could not be loaded: " + error.message);
     return;
   }
-  sharedBOMRows = data || [];
+  sharedBOMRows = (data || []).map((row) =>
+    Object.fromEntries(
+      Object.entries(row).map(([key, value]) => [
+        key,
+        typeof value === "string" ? cleanImportedText(value) : value,
+      ]),
+    ),
+  );
   if (view === "bom") previewBOM();
 }
 
@@ -400,7 +407,7 @@ function showDriveTestUpload() {
     }
     const button = $("[type=submit]", event.target);
     button.disabled = true;
-    button.textContent = "Uploading to Google Driveâ€¦";
+    button.textContent = "Uploading to Google Drive…";
     try {
       const driveFile = await uploadFileToGoogleDrive(file, driveTestFolderId);
       $("#dialog").close();
@@ -542,7 +549,7 @@ const esc = (v) =>
   );
 const bomLinkHTML = (value) => {
   const link = String(value ?? "").trim();
-  if (!link) return "â€”";
+  if (!link) return "—";
   try {
     const url = new URL(link);
     if (!["http:", "https:"].includes(url.protocol)) throw new Error();
@@ -622,8 +629,45 @@ document.addEventListener("change", (event) => {
     render();
   }
 });
+const workspaceViews = new Set([
+  "overview",
+  "canvas",
+  "files",
+  "bom",
+  "gallery",
+  "resources",
+]);
+const viewHashNames = {
+  overview: "overview",
+  canvas: "drawing-board",
+  files: "files",
+  bom: "bom",
+  gallery: "gallery",
+  resources: "repos",
+};
+const hashViewNames = Object.fromEntries(
+  Object.entries(viewHashNames).map(([viewName, hashName]) => [
+    hashName,
+    viewName,
+  ]),
+);
+function viewFromLocation() {
+  const hashView = hashViewNames[window.location.hash.slice(1).toLowerCase()];
+  if (hashView) return hashView;
+  const savedView = localStorage.getItem("exo_workspace_view");
+  return workspaceViews.has(savedView) ? savedView : "overview";
+}
+function setView(viewName, updateHash = true) {
+  if (!workspaceViews.has(viewName)) return;
+  view = viewName;
+  localStorage.setItem("exo_workspace_view", viewName);
+  if (updateHash) {
+    const hash = `#${viewHashNames[viewName]}`;
+    if (window.location.hash !== hash) window.location.hash = hash;
+  }
+}
 let state = initial(),
-  view = "overview",
+  view = viewFromLocation(),
   scope = "exo",
   search = "",
   fileTeam = "all",
@@ -1241,7 +1285,7 @@ function showUpload(photos = false) {
     }
     const button = $("[type=submit]", e.target);
     button.disabled = true;
-    button.textContent = "Uploading to Google Driveâ€¦";
+    button.textContent = "Uploading to Google Drive…";
     const proj = String(form.get("project")),
       team = String(form.get("team")),
       note = String(form.get("note")),
@@ -1349,7 +1393,7 @@ function centerCard() {
 function showStorage() {
   openModal(
     "Your workspace storage",
-    `<p class="hint">This workspace stores drawing state and Drive file metadata in the cloud. File contents are uploaded to Google Drive.</p><ul class="storage-list"><li><b>Google Drive</b>Large files are uploaded directly to the selected project/team folder using resumable uploads.</li><li><b>Cloud workspace</b>Projects, drawings, relationships, BOM selections, and Drive file links are stored in Supabase.</li><li><b>Share or back up</b>Import a JSON backup containing workspace data and Drive-backed file metadata. The backup does not duplicate large Drive files.</li></ul><div class="row"><button class="secondary" data-action="import">â†‘ Import backup</button><button class="secondary" data-action="backup-boards">Back up boards to Drive now</button><button class="secondary" data-action="restore-board">Restore current board from backup file…</button></div>`,
+    `<p class="hint">This workspace stores drawing state and Drive file metadata in the cloud. File contents are uploaded to Google Drive.</p><ul class="storage-list"><li><b>Google Drive</b>Large files are uploaded directly to the selected project/team folder using resumable uploads.</li><li><b>Cloud workspace</b>Projects, drawings, relationships, BOM selections, and Drive file links are stored in Supabase.</li><li><b>Share or back up</b>Import a JSON backup containing workspace data and Drive-backed file metadata. The backup does not duplicate large Drive files.</li></ul><div class="row"><button class="secondary" data-action="import">↑ Import backup</button><button class="secondary" data-action="backup-boards">Back up boards to Drive now</button><button class="secondary" data-action="restore-board">Restore current board from backup file…</button></div>`,
   );
 }
 function toolHint() {
@@ -1382,7 +1426,7 @@ function edgeSVG(edge) {
   return `<g><path d="${d}" stroke="${sel ? "#477b3a" : "#a7b99b"}" stroke-width="${sel ? 2.5 : 1.4}" fill="none" marker-end="url(#arrow)"/><path class="edge-hit" data-edge="${edge.id}" d="${d}" stroke="transparent" stroke-width="18" fill="none"/>${edge.label ? `<rect x="${mx - 75}" y="${my - 13}" width="150" height="24" rx="5" fill="#fbfdf7" stroke="#e0e8d8"/><text x="${mx}" y="${my + 3}" text-anchor="middle" font-size="10" fill="#718962">${esc(edge.label.slice(0, 25))}</text>` : ""}</g>`;
 }
 function cardHTML(n) {
-  return `<button class="canvas-card ${selected?.id === n.id ? "selected" : ""} ${connectFrom === n.id ? "connect-source" : ""}" data-node="${n.id}" style="left:${n.x}px;top:${n.y}px;--card-color:${teamColors[n.team] || teamColors.Shared}" aria-label="${esc(n.title)}"><span class="card-meta"><span>${esc(n.team)}</span><span>${esc(nameOf(n.project))}</span></span><strong class="card-title">${esc(n.title)}</strong><span class="card-foot"><span>${esc(n.owner || "Owner unassigned")}</span><span>${n.files.length ? "â–± " + n.files.length + " Â· " : ""}${esc(n.status)}</span></span></button>`;
+  return `<button class="canvas-card ${selected?.id === n.id ? "selected" : ""} ${connectFrom === n.id ? "connect-source" : ""}" data-node="${n.id}" style="left:${n.x}px;top:${n.y}px;--card-color:${teamColors[n.team] || teamColors.Shared}" aria-label="${esc(n.title)}"><span class="card-meta"><span>${esc(n.team)}</span><span>${esc(nameOf(n.project))}</span></span><strong class="card-title">${esc(n.title)}</strong><span class="card-foot"><span>${esc(n.owner || "Owner unassigned")}</span><span>${n.files.length ? "▱ " + n.files.length + " · " : ""}${esc(n.status)}</span></span></button>`;
 }
 function renderInspector() {
   const root = $("#inspector");
@@ -1405,12 +1449,12 @@ function renderInspector() {
       .map((id) => {
         const f = state.files.find((f) => f.id === id);
         return f
-          ? `<div class="attachment"><a href="#" data-download="${f.id}">${esc(f.name)}</a><button data-unlink="${f.id}" aria-label="Remove file reference">Ã—</button></div>`
+          ? `<div class="attachment"><a href="#files" data-download="${f.id}">${esc(f.name)}</a><button data-unlink="${f.id}" aria-label="Remove file reference">×</button></div>`
           : "";
       })
       .join(
         "",
-      )}</div><label class="field">Attach a workspace file<select id="attach-file"><option value="">Choose a fileâ€¦</option>${state.files
+      )}</div><label class="field">Attach a workspace file<select id="attach-file"><option value="">Choose a file…</option>${state.files
       .filter((f) => !n.files.includes(f.id))
       .map(
         (f) =>
@@ -1418,14 +1462,14 @@ function renderInspector() {
       )
       .join(
         "",
-      )}</select></label></div><div class="related"><h3>Relationships Â· ${connections.length}</h3>${
+      )}</select></label></div><div class="related"><h3>Relationships · ${connections.length}</h3>${
       connections
         .map((e) => {
           const other = state.nodes.find(
             (x) => x.id === (e.from === n.id ? e.to : e.from),
           );
           return other
-            ? `<button class="related-card" data-select-edge="${e.id}">${e.from === n.id ? "â†—" : "â†™"} ${esc(other.title)}<small>${esc(nameOf(other.project))} Â· ${esc(other.team)}<br>${esc(e.label || "Unlabeled connection")}</small></button>`
+            ? `<button class="related-card" data-select-edge="${e.id}">${e.from === n.id ? "↗" : "↙"} ${esc(other.title)}<small>${esc(nameOf(other.project))} · ${esc(other.team)}<br>${esc(e.label || "Unlabeled connection")}</small></button>`
             : "";
         })
         .join("") || "<p>No relationships drawn yet.</p>"
@@ -1453,7 +1497,7 @@ function renderInspector() {
     if (!edge) return;
     const a = state.nodes.find((n) => n.id === edge.from),
       b = state.nodes.find((n) => n.id === edge.to);
-    root.innerHTML = `<div class="eyebrow">SELECTED RELATIONSHIP</div><h3>${esc(a?.title)} â†’ ${esc(b?.title)}</h3><p>${esc(nameOf(a?.project))} / ${esc(a?.team)}<br>to ${esc(nameOf(b?.project))} / ${esc(b?.team)}</p><form id="edge-edit" style="margin-top:18px"><label class="field">Relationship label<input name="label" maxlength="100" placeholder="e.g. supplies sensor data to" value="${esc(edge.label)}"></label><label class="field">Notes<textarea name="note" maxlength="1500">${esc(edge.note || "")}</textarea></label><button class="primary" type="submit">Save relationship</button></form><button class="danger" data-action="delete-selection" style="margin-top:20px">Remove connection</button>`;
+    root.innerHTML = `<div class="eyebrow">SELECTED RELATIONSHIP</div><h3>${esc(a?.title)} → ${esc(b?.title)}</h3><p>${esc(nameOf(a?.project))} / ${esc(a?.team)}<br>to ${esc(nameOf(b?.project))} / ${esc(b?.team)}</p><form id="edge-edit" style="margin-top:18px"><label class="field">Relationship label<input name="label" maxlength="100" placeholder="e.g. supplies sensor data to" value="${esc(edge.label)}"></label><label class="field">Notes<textarea name="note" maxlength="1500">${esc(edge.note || "")}</textarea></label><button class="primary" type="submit">Save relationship</button></form><button class="danger" data-action="delete-selection" style="margin-top:20px">Remove connection</button>`;
     $("#edge-edit").onsubmit = (e) => {
       e.preventDefault();
       checkpoint();
@@ -1685,7 +1729,7 @@ function fileRows(files) {
   return files
     .map(
       (f) =>
-        `<tr><td><div class="file-title"><strong>${esc(f.name)}</strong><small>${esc(f.folderPath || f.note || nameOf(f.project))}</small></div></td><td>${esc(nameOf(f.project))}</td><td><span class="tag ${f.team.toLowerCase()}">${esc(teamLabel(f.project, f.team))}</span></td><td>${sizeOf(f.size)}</td><td><button class="text-button" data-download="${f.id}">â†— Open in Drive</button> <button class="text-button danger-text" data-remove-file="${f.id}">Remove from library</button></td></tr>`,
+        `<tr><td><div class="file-title"><strong>${esc(f.name)}</strong><small>${esc(f.folderPath || f.note || nameOf(f.project))}</small></div></td><td>${esc(nameOf(f.project))}</td><td><span class="tag ${f.team.toLowerCase()}">${esc(teamLabel(f.project, f.team))}</span></td><td>${sizeOf(f.size)}</td><td><button class="text-button" data-download="${f.id}">↗ Open in Drive</button> <button class="text-button danger-text" data-remove-file="${f.id}">Remove from library</button></td></tr>`,
     )
     .join("");
 }
@@ -1768,7 +1812,7 @@ function filesHTML() {
   return driveExplorerHTML();
 }function galleryHTML() {
   const photos = state.files.filter(inScope).filter(isPhoto);
-  return `<section class="panel"><div class="panel-head"><div><h2>Project photo gallery</h2><p>Photos loaded from the project Google Drive folders.</p></div><span class="pill">${photos.length} photos</span></div>${photos.length ? `<div class="tiles">${photos.map((f) => `<article class="photo"><button class="photo-image" data-photo="${f.id}" aria-label="View ${esc(f.name)}"><img data-local-image="${f.id}" alt="${esc(f.note || f.name)}"></button><div class="photo-info"><b>${esc(f.name)}</b><p>${esc(nameOf(f.project))} Â· ${esc(teamLabel(f.project, f.team))}</p><p>${esc(f.note)}</p><button class="text-button" data-download="${f.id}">â†— Open in Drive</button> <button class="text-button danger-text" data-remove-file="${f.id}">Remove from library</button></div></article>`).join("")}</div>` : empty("&#9639;", "Show what you are building.", "Add photos of prototypes, assemblies, and team progress.", '<button class="secondary" data-action="photos">+ Add photos</button>')}</section>`;
+  return `<section class="panel"><div class="panel-head"><div><h2>Project photo gallery</h2><p>Photos loaded from the project Google Drive folders.</p></div><span class="pill">${photos.length} photos</span></div>${photos.length ? `<div class="tiles">${photos.map((f) => `<article class="photo"><button class="photo-image" data-photo="${f.id}" aria-label="View ${esc(f.name)}"><img data-local-image="${f.id}" alt="${esc(f.note || f.name)}"></button><div class="photo-info"><b>${esc(f.name)}</b><p>${esc(nameOf(f.project))} · ${esc(teamLabel(f.project, f.team))}</p><p>${esc(f.note)}</p><button class="text-button" data-download="${f.id}">↗ Open in Drive</button> <button class="text-button danger-text" data-remove-file="${f.id}">Remove from library</button></div></article>`).join("")}</div>` : empty("&#9639;", "Show what you are building.", "Add photos of prototypes, assemblies, and team progress.", '<button class="secondary" data-action="photos">+ Add photos</button>')}</section>`;
 }
 async function loadImages() {
   for (const img of $$("[data-local-image]")) {
@@ -1780,7 +1824,7 @@ function bomHTML() {
   const projects = state.projects.filter((p) => p.id === scope);
   const files = projects.map((p) => state.files.find((f) => f.id === state.bom[p.id])).filter(Boolean);
   const hasSharedRows = sharedBOMRows.some((row) => row.project_id === scope);
-  return `<section class="panel"><div class="panel-head"><div><h2>Bill of materials</h2><p>Showing the selected project's components and source file.</p></div><button class="secondary" data-action="add-bom-row">+ Add component</button></div><div id="bom-preview">${files.length || hasSharedRows ? '<div class="empty"><p>Opening BOMâ€¦</p></div>' : empty("â˜·", "Keep the source easy to find.", "Add a BOM in Files. CSV files display as a searchable table.")}</div></section>`;
+  return `<section class="panel"><div class="panel-head"><div><h2>Bill of materials</h2><p>Showing the selected project's components and source file.</p></div><button class="secondary" data-action="add-bom-row">+ Add component</button></div><div id="bom-preview">${files.length || hasSharedRows ? '<div class="empty"><p>Opening BOM…</p></div>' : empty("◈", "Keep the source easy to find.", "Add a BOM in Files. CSV files display as a searchable table.")}</div></section>`;
 }
 function driveFolderForm() {
   openModal(
@@ -1812,7 +1856,7 @@ function driveFolderForm() {
 function addBOMRow() {
   openModal(
     "Add component",
-    `<form id="bom-entry-form"><p class="hint" style="margin-bottom:18px">Add a planning row without changing the original CSV source. It will be saved in this browser and included in the BOM view.</p><div class="form-grid"><label class="field">Project<select name="project">${projectOptions(currentProject())}</select></label><label class="field">ID<input name="id" placeholder="e.g. D01" required maxlength="40"></label></div><div class="form-grid"><label class="field">Subsystem<input name="subsystem" placeholder="Controls"></label><label class="field">Component<input name="component" placeholder="Component or integration purpose" required></label></div><div class="form-grid"><label class="field">Quantity<input name="qty" type="number" min="0" step="any" value="1"></label><label class="field">Unit cost ($)<input name="unit" type="number" min="0" step="0.01" placeholder="0.00"></label></div><div class="form-grid"><label class="field">Link<input name="link" type="url" placeholder="https://â€¦"></label><label class="field">Cost basis<select name="basis"><option>Baseline</option><option>Quote</option><option>Estimate</option><option>Pending</option></select></label></div>${actions("Add component")}</form>`,
+    `<form id="bom-entry-form"><p class="hint" style="margin-bottom:18px">Add a planning row without changing the original CSV source. It will be saved in this browser and included in the BOM view.</p><div class="form-grid"><label class="field">Project<select name="project">${projectOptions(currentProject())}</select></label><label class="field">ID<input name="id" placeholder="e.g. D01" required maxlength="40"></label></div><div class="form-grid"><label class="field">Subsystem<input name="subsystem" placeholder="Controls"></label><label class="field">Component<input name="component" placeholder="Component or integration purpose" required></label></div><div class="form-grid"><label class="field">Quantity<input name="qty" type="number" min="0" step="any" value="1"></label><label class="field">Unit cost ($)<input name="unit" type="number" min="0" step="0.01" placeholder="0.00"></label></div><div class="form-grid"><label class="field">Link<input name="link" type="url" placeholder="https://…"></label><label class="field">Cost basis<select name="basis"><option>Baseline</option><option>Quote</option><option>Estimate</option><option>Pending</option></select></label></div>${actions("Add component")}</form>`,
   );
   $("#bom-entry-form").onsubmit = (e) => {
     e.preventDefault();
@@ -1865,6 +1909,17 @@ function parseCSV(text) {
   if (quoted) throw new Error("CSV has an unclosed quoted field.");
   return rows;
 }
+function cleanImportedText(text) {
+  return text
+    .replace(/\u00e2\u20ac\u00a6/g, "…")
+    .replace(/\u00e2\u20ac\u201d/g, "—")
+    .replace(/\u00e2\u20ac\u201c/g, "–")
+    .replace(/\u00e2\u20ac\u2122/g, "’")
+    .replace(/\u00e2\u20ac\u0153|\u00e2\u20ac\u009d/g, '"')
+    .replace(/\u00c2/g, "")
+    .replace(/\u00c3(?=[^a-z])/g, "")
+    .replace(/~=(?=\s*[\d.])/g, "≈");
+}
 async function previewBOM() {
   const target = $("#bom-preview");
   if (!target) return;
@@ -1891,7 +1946,10 @@ async function previewBOM() {
       if (!file || !/\.csv$/i.test(file.name) || file.size > 5 * 1024 * 1024) continue;
       const blob = (await getBlob(file.id)) || (await getDriveBlob(file));
       if (!blob) throw new Error("The source file is missing from this browser.");
-      const rows = parseCSV((await blob.text()).replace(/^\uFEFF/, ""));
+      const csvText = new TextDecoder("utf-8", { fatal: true }).decode(
+        await blob.arrayBuffer(),
+      );
+      const rows = parseCSV(cleanImportedText(csvText).replace(/^\uFEFF/, ""));
       const [head, ...body] = rows;
       if (!head) continue;
       const key = (name) => head.findIndex((h) => h.toLowerCase().replace(/[^a-z]/g, "").includes(name));
@@ -1918,7 +1976,7 @@ async function previewBOM() {
     }
     records.push(...(state.bomEntries || []).filter((entry) => entry.project === scope).map((entry) => ({ ...entry, link: entry.link || entry.supplier || "", purpose: entry.purpose || "", source: "Added in workspace" })));
     if (!records.length) {
-      target.innerHTML = empty("â˜·", "No previewable BOM rows.", "CSV files up to 5 MB can be searched here. Other source types remain available to download.");
+      target.innerHTML = empty("◈", "No previewable BOM rows.", "CSV files up to 5 MB can be searched here. Other source types remain available to download.");
       return;
     }
     const values = (field) => [...new Set(records.map((r) => r[field]).filter(Boolean))].sort();
@@ -1932,8 +1990,8 @@ async function previewBOM() {
       });
       const total = list.reduce((sum, r) => sum + money(r.ext || money(r.unit) * (Number(r.qty) || 1)), 0);
       $("#bom-stats").innerHTML = `<div class="stat"><span>Visible lines</span><b>${list.length}</b><small>of ${records.length} total rows</small></div><div class="stat"><span>Visible priced sum</span><b>$${total.toFixed(2)}</b><small>Extended cost where available</small></div><div class="stat"><span>Needs pricing</span><b>${list.filter((r) => !money(r.unit)).length}</b><small>Rows without a unit price</small></div>`;
-      $("#bom-rows").innerHTML = list.map((r) => `<tr><td><strong>${esc(r.id)}</strong></td><td>${esc(nameOf(r.project))}<small>${esc(r.source)}</small></td><td>${esc(r.subsystem)}</td><td><strong>${esc(r.component)}</strong>${r.purpose ? `<small>${esc(r.purpose)}</small>` : ""}</td><td>${esc(r.qty)}</td><td>${r.unit ? "$" + money(r.unit).toFixed(2) : "â€”"}</td><td>${r.ext ? "$" + money(r.ext).toFixed(2) : "â€”"}</td><td>${bomLinkHTML(r.link)}</td><td>${esc(r.basis || "â€”")}</td></tr>`).join("");
-      $("#bom-count").textContent = `${list.length} visible line items Â· ${records.length} total rows`;
+      $("#bom-rows").innerHTML = list.map((r) => `<tr><td><strong>${esc(r.id)}</strong></td><td>${esc(nameOf(r.project))}<small>${esc(r.source)}</small></td><td>${esc(r.subsystem)}</td><td><strong>${esc(r.component)}</strong>${r.purpose ? `<small>${esc(r.purpose)}</small>` : ""}</td><td>${esc(r.qty)}</td><td>${r.unit ? "$" + money(r.unit).toFixed(2) : "—"}</td><td>${r.ext ? "$" + money(r.ext).toFixed(2) : "—"}</td><td>${bomLinkHTML(r.link)}</td><td>${esc(r.basis || "—")}</td></tr>`).join("");
+      $("#bom-count").textContent = `${list.length} visible line items · ${records.length} total rows`;
     };
     draw();
     $("#bom-search").oninput = (e) => { bomSearch = e.target.value; draw(); };
@@ -1942,7 +2000,7 @@ async function previewBOM() {
     $("#bom-price").onchange = (e) => { bomPrice = e.target.value; draw(); };
   } catch (error) {
     target.innerHTML = empty(
-      "â˜·",
+      "◈",
       "Could not preview this BOM.",
       esc(error.message),
     );
@@ -1955,7 +2013,7 @@ function resourcesHTML() {
 function resourceForm() {
   openModal(
     "Add a resource",
-    `<form id="resource-form"><p class="hint" style="margin-bottom:14px">Add a Google Drive folder or other project reference.</p><label class="field">Title<input name="title" required maxlength="100"></label><label class="field">HTTPS address<input name="url" type="url" required placeholder="https://â€¦" maxlength="2000"></label><div class="form-grid"><label class="field">Project<select name="project">${projectOptions(currentProject())}</select></label><label class="field">Team<select name="team">${teamOptions("Shared")}</select></label></div>${actions("Add resource")}</form>`,
+    `<form id="resource-form"><p class="hint" style="margin-bottom:14px">Add a Google Drive folder or other project reference.</p><label class="field">Title<input name="title" required maxlength="100"></label><label class="field">HTTPS address<input name="url" type="url" required placeholder="https://…" maxlength="2000"></label><div class="form-grid"><label class="field">Project<select name="project">${projectOptions(currentProject())}</select></label><label class="field">Team<select name="team">${teamOptions("Shared")}</select></label></div>${actions("Add resource")}</form>`,
   );
   $("#resource-form").onsubmit = (e) => {
     e.preventDefault();
@@ -1981,7 +2039,7 @@ function resourceForm() {
 }
 
 async function exportBackup() {
-  notify("Preparing a backup with your filesâ€¦");
+  notify("Preparing a backup with your files…");
   await saving;
   try {
     const blobs = [];
@@ -2150,12 +2208,12 @@ function render() {
     files: [
       "Project files.",
       "Add files once. Reference them anywhere on the drawing board.",
-      "â†‘ Add files",
+      "↑ Add files",
     ],
     bom: [
       "One place for the parts list.",
       "Search, filter, and compare components across every project.",
-      "â†‘ Add BOM file",
+      "↑ Add BOM file",
     ],
     gallery: [
       "A closer look at the work.",
@@ -2251,12 +2309,20 @@ function render() {
     };
   }
 }
+window.addEventListener("hashchange", () => {
+  const nextView = viewFromLocation();
+  if (nextView === view && window.location.hash === `#${viewHashNames[view]}`) {
+    return;
+  }
+  setView(nextView);
+  render();
+});
 document.addEventListener("click", async (e) => {
   const el = e.target.closest("button,a,tr");
   if (!el) return;
   if (el.dataset.view) {
     const previousView = view;
-    view = el.dataset.view;
+    setView(el.dataset.view);
 
     render();
     if (view === "canvas" && previousView !== "canvas") {
@@ -2319,7 +2385,7 @@ document.addEventListener("click", async (e) => {
       url = await fileURL(f.id);
     openModal(
       f.name,
-      `<img src="${esc(url)}" alt="${esc(f.note || f.name)}" style="width:100%;max-height:68vh;object-fit:contain"><p class="hint" style="margin-top:15px">${esc(nameOf(f.project))} Â· ${esc(f.team)} Â· ${esc(f.note)}</p>`,
+      `<img src="${esc(url)}" alt="${esc(f.note || f.name)}" style="width:100%;max-height:68vh;object-fit:contain"><p class="hint" style="margin-top:15px">${esc(nameOf(f.project))} · ${esc(f.team)} · ${esc(f.note)}</p>`,
     );
     $("#dialog").classList.add("lightbox");
   }
@@ -2534,6 +2600,7 @@ $("#tldraw-board-restore-input").onchange = async (event) => {
     warn("Could not load the workspace. Saving is disabled until you reload.");
   }
   await checkUserSession();
+  setView(view);
   render();
   if (workspaceLoaded && googleAccessToken) {
     (async () => {

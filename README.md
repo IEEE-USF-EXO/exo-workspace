@@ -112,7 +112,8 @@ If the Drive token expires, the app clears only the Drive token. You stay signed
 - Select a master BOM file and preview CSV-style data
 - Track project, subsystem, supplier, quantity, cost, stage, and source
 
-The related tables are `bom_items`, `bom_change_requests`, and `bom_audit_log`.
+The shared BOM is stored in `bom_items`, with optional review and history
+support in `bom_change_requests` and `bom_audit_log`.
 
 ### Photo gallery
 
@@ -123,6 +124,18 @@ Displays PNG, JPEG, WebP, GIF, and AVIF images with their project, team, and not
 Repository links and team Drive links. Each record has a title, team, project, URL, description, and basis or source.
 
 ## Data model
+
+The Supabase schema contains the following application and collaboration tables:
+
+- `projects` — seeded project metadata and the foreign-key target for BOM rows.
+- `members` — authenticated users who have opened the workspace.
+- `project_members` — project-level membership and roles.
+- `global_admins` — global administrator roster.
+- `bom_items` — shared, approved BOM rows.
+- `bom_change_requests` — proposed BOM insert, update, and delete operations.
+- `bom_audit_log` — administrator-visible BOM history.
+- `workspace_state` — the shared dashboard document, including files, resources,
+  drawing snapshots, project updates, and BOM selections.
 
 The main workspace object includes the current Tldraw document snapshot. Older fields (`nodes`, `edges`, `strokes`) remain because parts of the dashboard and the backup validation were originally built around the previous custom HTML/SVG board. That earlier board code still exists in `app.js`, but it is no longer the visible drawing surface.
 
