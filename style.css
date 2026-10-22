@@ -581,6 +581,12 @@ nav {
   overflow: hidden;
   border: 1px solid var(--line);
 }
+.tldraw-stage[data-camera-ready="false"] > #tldraw-container {
+  opacity: 0;
+}
+.tldraw-stage[data-camera-ready="true"] {
+  cursor: default;
+}
 .tldraw-stage > #tldraw-container {
   width: 100%;
   height: 100%;

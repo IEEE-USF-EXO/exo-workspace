@@ -37,6 +37,10 @@ let tldrawUnlisten = null;
 let workspaceChannel = null;
 let applyingTldrawSnapshot = false;
 let tldrawPersistTimer = null;
+let tldrawViewPersistTimer = null;
+let currentUserId = null;
+let tldrawLastCameraPageId = null;
+let tldrawLastCamera = null;
 let workspaceLoaded = false;
 let remoteTldrawPointers = new Map();
 let pointerBroadcastFrame = null;
@@ -161,6 +165,7 @@ async function checkUserSession() {
   const logoutBtn = document.getElementById("logout-btn");
 
   if (session) {
+    currentUserId = session.user.id;
     const metadata = session.user?.user_metadata || {};
     tldrawPointerName = firstName(
       metadata.full_name ||
@@ -186,6 +191,7 @@ async function checkUserSession() {
       }
     }
   } else {
+    currentUserId = null;
     tldrawPointerName = "Collaborator";
     googleAccessToken = null;
     sessionStorage.removeItem("google_provider_token");
@@ -854,6 +860,71 @@ function scheduleTldrawPersist() {
   }, 1000);
 }
 
+function cameraForStorage(camera) {
+  if (
+    !camera ||
+    !Number.isFinite(camera.x) ||
+    !Number.isFinite(camera.y) ||
+    !Number.isFinite(camera.z) ||
+    camera.z <= 0
+  ) {
+    return null;
+  }
+  return { x: camera.x, y: camera.y, z: camera.z };
+}
+
+async function saveTldrawView(projectId, pageId, camera) {
+  if (!currentUserId || !projectId || !pageId) return;
+  const normalizedCamera = cameraForStorage(camera);
+  if (!normalizedCamera) return;
+  const { error } = await supabaseClient.from("board_view_state").upsert(
+    {
+      user_id: currentUserId,
+      project_id: projectId,
+      board_id: "drawing-board",
+      page_id: pageId,
+      camera_x: normalizedCamera.x,
+      camera_y: normalizedCamera.y,
+      camera_z: normalizedCamera.z,
+      updated_at: new Date().toISOString(),
+    },
+    { onConflict: "user_id,project_id,board_id,page_id" },
+  );
+  if (error) {
+    notify("Board view size could not be saved: " + error.message);
+  }
+}
+
+async function restoreTldrawView(editor, projectId, pageId) {
+  if (!currentUserId || !projectId || !pageId) return;
+  const { data, error } = await supabaseClient
+    .from("board_view_state")
+    .select("camera_x, camera_y, camera_z")
+    .eq("user_id", currentUserId)
+    .eq("project_id", projectId)
+    .eq("board_id", "drawing-board")
+    .eq("page_id", pageId)
+    .maybeSingle();
+  if (error) {
+    notify("Saved board view size could not be loaded: " + error.message);
+    return;
+  }
+  const camera = cameraForStorage({
+    x: Number(data?.camera_x),
+    y: Number(data?.camera_y),
+    z: Number(data?.camera_z),
+  });
+  if (camera) editor.setCamera(camera);
+}
+
+function scheduleTldrawViewPersist(editor, projectId) {
+  clearTimeout(tldrawViewPersistTimer);
+  tldrawViewPersistTimer = setTimeout(() => {
+    tldrawViewPersistTimer = null;
+    saveTldrawView(projectId, editor.getCurrentPageId(), editor.getCamera());
+  }, 500);
+}
+
 function documentRecords(records) {
   return Object.fromEntries(
     Object.entries(records || {}).filter(
@@ -1028,7 +1099,16 @@ function loadProjectTldrawSnapshot(snapshot) {
   const doc = snapshot?.document ?? snapshot;
   const records = Object.values(doc?.store || {}).filter(
     (record) => !tldrawInstanceRecordTypes.has(record.typeName),
-  );
+  ).map((record) => {
+    if (record.typeName !== "page") return record;
+    const pageNameMigration = {
+      "Main Architecture": "Controls",
+      "Controls Breakout Room": "Electrical",
+      "Electrical Breakout Room": "Mechanical",
+    };
+    const nextName = pageNameMigration[record.name];
+    return nextName ? { ...record, name: nextName } : record;
+  });
   applyingTldrawSnapshot = true;
   try {
     tldrawEditor.store.mergeRemoteChanges(() => {
@@ -1036,9 +1116,9 @@ function loadProjectTldrawSnapshot(snapshot) {
     });
     const pages = tldrawEditor.getPages();
     if (!records.length && pages.length === 1 && pages[0].name === "Page 1") {
-      tldrawEditor.renamePage(pages[0].id, "Main Architecture");
-      tldrawEditor.createPage({ name: "Controls Breakout Room" });
-      tldrawEditor.createPage({ name: "Electrical Breakout Room" });
+      tldrawEditor.renamePage(pages[0].id, "Controls");
+      tldrawEditor.createPage({ name: "Electrical" });
+      tldrawEditor.createPage({ name: "Mechanical" });
       tldrawEditor.setCurrentPage(pages[0].id);
     } else if (pages.length) {
       const incomingIds = new Set(records.map((record) => record.id));
@@ -1051,6 +1131,13 @@ function loadProjectTldrawSnapshot(snapshot) {
         tldrawEditor.store.remove(staleRecords.map((page) => page.id));
       }
     }
+    state = {
+      ...state,
+      projectDrawings: {
+        ...state.projectDrawings,
+        [scope]: snapshotTldrawStore(tldrawEditor.store),
+      },
+    };
   } finally {
     applyingTldrawSnapshot = false;
   }
@@ -1059,6 +1146,17 @@ function loadProjectTldrawSnapshot(snapshot) {
 function disposeTldrawBoard() {
   tldrawRenderToken += 1;
   saveActiveTldrawSnapshot();
+  clearTimeout(tldrawViewPersistTimer);
+  tldrawViewPersistTimer = null;
+  if (tldrawEditor && tldrawLastCameraPageId && tldrawLastCamera) {
+    saveTldrawView(
+      scope,
+      tldrawLastCameraPageId,
+      tldrawLastCamera,
+    );
+  }
+  tldrawLastCameraPageId = null;
+  tldrawLastCamera = null;
   tldrawUnlisten?.();
   tldrawUnlisten = null;
   remoteTldrawPointers.clear();
@@ -1099,13 +1197,32 @@ async function initTldrawBoard() {
     tldrawRoot = createRoot(container);
     tldrawRoot.render(
       React.createElement(Tldraw, {
-        onMount: (editor) => {
+        onMount: async (editor) => {
           if (renderToken !== tldrawRenderToken || view !== "canvas") {
             return;
           }
           tldrawEditor = editor;
           loadProjectTldrawSnapshot(state.projectDrawings[projectId]);
-          const unbindPointerPresence = bindTldrawPointerPresence(
+          tldrawLastCameraPageId = editor.getCurrentPageId();
+          tldrawLastCamera = editor.getCamera();
+        try {
+          await restoreTldrawView(
+            editor,
+            projectId,
+            tldrawLastCameraPageId,
+          );
+        } finally {
+          if (tldrawEditor === editor) {
+            tldrawLastCamera = editor.getCamera();
+            container.parentElement?.setAttribute(
+              "data-camera-ready",
+              "true",
+            );
+            container.parentElement?.setAttribute("aria-busy", "false");
+          }
+        }
+        if (tldrawEditor !== editor || view !== "canvas") return;
+        const unbindPointerPresence = bindTldrawPointerPresence(
             container,
             editor,
             projectId,
@@ -1146,9 +1263,33 @@ async function initTldrawBoard() {
             },
             { scope: "document" },
           );
+          const unlistenCamera = editor.store.listen(
+            () => {
+              if (tldrawEditor !== editor || scope !== projectId) return;
+              const pageId = editor.getCurrentPageId();
+              const camera = editor.getCamera();
+              if (
+                tldrawLastCameraPageId &&
+                pageId !== tldrawLastCameraPageId &&
+                tldrawLastCamera
+              ) {
+                saveTldrawView(
+                  projectId,
+                  tldrawLastCameraPageId,
+                  tldrawLastCamera,
+                );
+                restoreTldrawView(editor, projectId, pageId);
+              }
+              tldrawLastCameraPageId = pageId;
+              tldrawLastCamera = camera;
+              scheduleTldrawViewPersist(editor, projectId);
+            },
+            { scope: "session" },
+          );
           const previousUnlisten = tldrawUnlisten;
           tldrawUnlisten = () => {
             previousUnlisten();
+            unlistenCamera();
             unbindPointerPresence();
           };
           renderRemoteTldrawPointers();
@@ -1209,7 +1350,6 @@ const currentProject = () => scope;
 function switchProject(projectId) {
   if (!projectId || projectId === scope) return;
   saveActiveTldrawSnapshot();
-  tldrawEditor = null;
   persist();
   scope = projectId;
   search = "";
@@ -1561,7 +1701,7 @@ function toolHint() {
         : "Drag cards to arrange them. Select a connection to label it.";
 }
 function boardHTML() {
-  return '<div id="tldraw-stage" class="tldraw-stage"><div id="tldraw-container"></div><div id="tldraw-pointer-overlay"></div></div>';
+  return '<div id="tldraw-stage" class="tldraw-stage" data-camera-ready="false" aria-busy="true"><div id="tldraw-container"></div><div id="tldraw-pointer-overlay"></div></div>';
 }
 function edgeSVG(edge) {
   const a = state.nodes.find((n) => n.id === edge.from),
@@ -2841,12 +2981,24 @@ document.addEventListener("click", async (e) => {
   if (action === "add-bom-row") addBOMRow();
 });
 document.addEventListener("visibilitychange", () => {
-  if (document.visibilityState !== "hidden" || tldrawPersistTimer === null) {
+  if (
+    document.visibilityState !== "hidden" ||
+    (tldrawPersistTimer === null && tldrawViewPersistTimer === null)
+  ) {
     return;
   }
   clearTimeout(tldrawPersistTimer);
   tldrawPersistTimer = null;
+  clearTimeout(tldrawViewPersistTimer);
+  tldrawViewPersistTimer = null;
   saveActiveTldrawSnapshot();
+  if (tldrawEditor) {
+    saveTldrawView(
+      scope,
+      tldrawEditor.getCurrentPageId(),
+      tldrawEditor.getCamera(),
+    );
+  }
   persist();
 });
 $("#close-dialog").onclick = () => $("#dialog").close();

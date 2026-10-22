@@ -96,6 +96,18 @@ create table if not exists public.workspace_state (
   updated_at timestamptz not null default now()
 );
 
+create table if not exists public.board_view_state (
+  user_id uuid not null references auth.users(id) on delete cascade,
+  project_id text not null references public.projects(id) on delete cascade,
+  board_id text not null,
+  page_id text not null,
+  camera_x double precision not null,
+  camera_y double precision not null,
+  camera_z double precision not null check (camera_z > 0),
+  updated_at timestamptz not null default now(),
+  primary key (user_id, project_id, board_id, page_id)
+);
+
 alter table public.bom_items add column if not exists purpose text not null default '';
 alter table public.bom_items add column if not exists stage text not null default 'Baseline';
 alter table public.workspace_state
@@ -109,6 +121,7 @@ alter table public.workspace_state
     'bom', jsonb_build_object(),
     'bomEntries', jsonb_build_array()
   );
+alter table public.board_view_state enable row level security;
 
 create index if not exists bom_items_project_id_idx
   on public.bom_items(project_id);
@@ -232,6 +245,22 @@ create policy "Authenticated users can update workspace state"
   on public.workspace_state for update to authenticated
   using (id = 1)
   with check (id = 1);
+
+drop policy if exists "Users can read their board view state" on public.board_view_state;
+create policy "Users can read their board view state"
+  on public.board_view_state for select to authenticated
+  using (user_id = auth.uid());
+
+drop policy if exists "Users can create their board view state" on public.board_view_state;
+create policy "Users can create their board view state"
+  on public.board_view_state for insert to authenticated
+  with check (user_id = auth.uid());
+
+drop policy if exists "Users can update their board view state" on public.board_view_state;
+create policy "Users can update their board view state"
+  on public.board_view_state for update to authenticated
+  using (user_id = auth.uid())
+  with check (user_id = auth.uid());
 
 insert into public.projects (id, name, description)
 values
