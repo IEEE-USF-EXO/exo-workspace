@@ -1,10 +1,10 @@
-"use strict";
+﻿"use strict";
 
 // ==========================================
 // 1. GOOGLE & SUPABASE CONFIGURATION
 // ==========================================
 const SUPABASE_URL = "https://tnupwlucufewosslvcaz.supabase.co";
-const BUILD_VERSION = "1.0.1";
+const BUILD_VERSION = "1.0.4";
 const SUPABASE_ANON_KEY =
   "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRudXB3bHVjdWZld29zc2x2Y2F6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTE3NTM4MjIsImV4cCI6MjEwNzMyOTgyMn0.4TFRb6t4pE547wywotP_SWZG50NiJzlxs1_Ds51aQmM";
 
@@ -20,7 +20,9 @@ const supabaseClient = window.supabase.createClient(
   },
 );
 
-const ROOT_DRIVE_FOLDER_ID = "1TEs2PCaDcNQ0nlahtM9FWJKULPTjQAWM";
+const ROOT_DRIVE_FOLDER_ID = "1kldWFbtd0S_Mr8zsrYBCrYiGJsc1zhl_";
+const ROOT_DRIVE_FOLDER_NAME = "Projects-Testing-Folder";
+const BOARD_BACKUPS_PARENT_FOLDER_ID = ROOT_DRIVE_FOLDER_ID;
 const GOOGLE_DRIVE_FOLDER_MIME = "application/vnd.google-apps.folder";
 let googleAccessToken = sessionStorage.getItem("google_provider_token");
 let sharedBOMRows = [];
@@ -301,14 +303,17 @@ async function uploadFileToGoogleDrive(file, folderId) {
 }
 
 async function boardBackupsFolder() {
-  const folders = await listDriveFiles(ROOT_DRIVE_FOLDER_ID);
+  const folders = await listDriveFiles(BOARD_BACKUPS_PARENT_FOLDER_ID);
   const existing = folders.find(
     (file) =>
       file.mimeType === GOOGLE_DRIVE_FOLDER_MIME &&
-      file.name === "Board backups",
+      file.name === "drawing-backups",
   );
   if (existing) return existing.id;
-  const created = await createDriveFolder("Board backups", ROOT_DRIVE_FOLDER_ID);
+  const created = await createSubfolder(
+    "drawing-backups",
+    BOARD_BACKUPS_PARENT_FOLDER_ID,
+  );
   return created.id;
 }
 
@@ -681,7 +686,9 @@ let state = initial(),
   toastTimer,
   driveSyncing = false,
   driveExplorerFolder = ROOT_DRIVE_FOLDER_ID,
-  driveExplorerBreadcrumbs = [{ id: ROOT_DRIVE_FOLDER_ID, name: "EXO Root" }],
+  driveExplorerBreadcrumbs = [
+    { id: ROOT_DRIVE_FOLDER_ID, name: ROOT_DRIVE_FOLDER_NAME },
+  ],
   driveExplorerFiles = [],
   driveExplorerSelected = null,
   driveExplorerLoading = false,
@@ -1746,7 +1753,10 @@ function filteredFiles() {
 }
 const empty = (symbol, title, description, action) =>
   `<div class="empty"><div class="empty-symbol">${symbol}</div><h3>${title}</h3><p>${description}</p>${action || ""}</div>`;
-async function loadDriveExplorer(folderId = ROOT_DRIVE_FOLDER_ID, breadcrumb = [{ id: ROOT_DRIVE_FOLDER_ID, name: "EXO Root" }]) {
+async function loadDriveExplorer(
+  folderId = ROOT_DRIVE_FOLDER_ID,
+  breadcrumb = [{ id: ROOT_DRIVE_FOLDER_ID, name: ROOT_DRIVE_FOLDER_NAME }],
+) {
   driveExplorerFolder = folderId;
   driveExplorerBreadcrumbs = breadcrumb;
   driveExplorerSelected = null;

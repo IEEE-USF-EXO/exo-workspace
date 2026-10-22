@@ -55,7 +55,7 @@ Dependencies are loaded from a CDN in `index.html`.
 1. **Create the database.** Run `supabase-schema.sql` in your Supabase SQL editor. This creates the tables and Row Level Security policies.
 2. **Configure Supabase.** Set your Supabase project URL and public key in the configuration at the top of `app.js`.
 3. **Enable Google sign-in.** Turn on the Google provider in Supabase Auth, and make sure the app requests the Google Drive scope.
-4. **Configure Drive folders.** Update the Drive folder IDs in the `folderIds` configuration in `app.js` to match your team folders.
+4. **Configure Drive folders.** Update the Drive folder IDs in the configuration at the top of `app.js` to match your team folders. The Drive browser and board backups use the configured `ROOT_DRIVE_FOLDER_ID`.
 5. **Serve the app.** For example:
 
    ```bash
@@ -143,13 +143,15 @@ The main workspace object includes the current Tldraw document snapshot. Older f
 
 - Export the workspace as JSON, including local file data when available
 - Import a backup after confirmation, which replaces the current workspace state
+- The Files view starts at the configured `ROOT_DRIVE_FOLDER_ID` (`Projects-Testing-Folder`).
+- Automatic and manual Tldraw board backups are saved as JSON files in a `board-backups` subfolder created inside that root folder.
 
 ## Known limitations
 
 - **Backup validation is out of date.** It still expects the legacy `nodes`, `edges`, and `strokes` fields. Tldraw snapshots should become first-class in backup export and validation.
 - **Legacy board code remains** in `app.js` and can eventually be removed.
 - **No backend server.** The frontend talks directly to Supabase and Google Drive, so there is no refresh-token flow for Google. Expired Drive tokens require reconnecting.
-- **Drive folder IDs are hardcoded** in `app.js`.
+- **Drive folder IDs are hardcoded** in `app.js`, including the Drive root folder.
 - **No automated tests, linting, or build checks** at present.
 
 ## Contributing
