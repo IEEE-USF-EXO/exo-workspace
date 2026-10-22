@@ -144,7 +144,7 @@ The main workspace object includes the current Tldraw document snapshot. Older f
 - Export the workspace as JSON, including local file data when available
 - Import a backup after confirmation, which replaces the current workspace state
 - The Files view starts at the configured `ROOT_DRIVE_FOLDER_ID` (`Projects-Testing-Folder`).
-- Automatic and manual Tldraw board backups are saved as JSON files in a `board-backups` subfolder created inside that root folder.
+- Automatic and manual Tldraw board backups are saved append-only in `board-backups/<project>/<page>/` folders created inside that root folder. Existing `drawing-backups` folders are also recognized for compatibility.
 
 ## Known limitations
 

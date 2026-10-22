@@ -4,7 +4,7 @@
 // 1. GOOGLE & SUPABASE CONFIGURATION
 // ==========================================
 const SUPABASE_URL = "https://tnupwlucufewosslvcaz.supabase.co";
-const BUILD_VERSION = "1.0.4";
+const BUILD_VERSION = "1.0.5";
 const SUPABASE_ANON_KEY =
   "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRudXB3bHVjdWZld29zc2x2Y2F6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTE3NTM4MjIsImV4cCI6MjEwNzMyOTgyMn0.4TFRb6t4pE547wywotP_SWZG50NiJzlxs1_Ds51aQmM";
 
@@ -23,6 +23,7 @@ const supabaseClient = window.supabase.createClient(
 const ROOT_DRIVE_FOLDER_ID = "1kldWFbtd0S_Mr8zsrYBCrYiGJsc1zhl_";
 const ROOT_DRIVE_FOLDER_NAME = "Projects-Testing-Folder";
 const BOARD_BACKUPS_PARENT_FOLDER_ID = ROOT_DRIVE_FOLDER_ID;
+const BOARD_BACKUPS_FOLDER_NAMES = ["board-backups", "drawing-backups"];
 const GOOGLE_DRIVE_FOLDER_MIME = "application/vnd.google-apps.folder";
 let googleAccessToken = sessionStorage.getItem("google_provider_token");
 let sharedBOMRows = [];
@@ -303,15 +304,23 @@ async function uploadFileToGoogleDrive(file, folderId) {
 }
 
 async function boardBackupsFolder() {
-  const folders = await listDriveFiles(BOARD_BACKUPS_PARENT_FOLDER_ID);
-  const existing = folders.find(
-    (file) =>
-      file.mimeType === GOOGLE_DRIVE_FOLDER_MIME &&
-      file.name === "drawing-backups",
+  let folders;
+  try {
+    folders = await listDriveFiles(BOARD_BACKUPS_PARENT_FOLDER_ID);
+  } catch (error) {
+    throw new Error(
+      "Google Drive cannot access the board backup parent folder. " +
+        "Confirm the signed-in account has access, then reconnect Google Drive. " +
+        `(${error.message})`,
+    );
+  }
+  const existing = folders.find((file) =>
+    file.mimeType === GOOGLE_DRIVE_FOLDER_MIME &&
+    BOARD_BACKUPS_FOLDER_NAMES.includes(file.name),
   );
   if (existing) return existing.id;
   const created = await createSubfolder(
-    "drawing-backups",
+    "board-backups",
     BOARD_BACKUPS_PARENT_FOLDER_ID,
   );
   return created.id;
@@ -325,70 +334,194 @@ function boardBackupSnapshot(projectId) {
   return snapshot;
 }
 
+function driveFolderName(value, fallback) {
+  const name = String(value || fallback)
+    .replace(/[\\/:*?"<>|#%{}[\]]/g, "-")
+    .replace(/\s+/g, " ")
+    .trim()
+    .slice(0, 120);
+  return name || fallback;
+}
+
+async function findOrCreateDriveFolder(name, parentId) {
+  const folders = await listDriveFiles(parentId);
+  const existing = folders.find(
+    (file) =>
+      file.mimeType === GOOGLE_DRIVE_FOLDER_MIME &&
+      file.name === name,
+  );
+  if (existing) return existing.id;
+  return (await createSubfolder(name, parentId)).id;
+}
+
+function boardPages(snapshot) {
+  return Object.values(snapshot.store || {}).filter(
+    (record) => record.typeName === "page",
+  );
+}
+
+function pageSnapshot(snapshot, page) {
+  const records = Object.values(snapshot.store || {}).filter(
+    (record) => !tldrawInstanceRecordTypes.has(record.typeName),
+  );
+  const included = new Set([page.id]);
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const record of records) {
+      if (included.has(record.parentId) && !included.has(record.id)) {
+        included.add(record.id);
+        changed = true;
+      }
+    }
+  }
+  const pageRecords = records.filter((record) => included.has(record.id));
+  const assetIds = new Set();
+  for (const record of pageRecords) {
+    const assetId = record.typeName === "shape" ? record.props?.assetId : null;
+    if (assetId) assetIds.add(assetId);
+  }
+  pageRecords.push(
+    ...records.filter(
+      (record) => record.typeName === "asset" && assetIds.has(record.id),
+    ),
+  );
+  return { store: Object.fromEntries(pageRecords.map((record) => [record.id, record])) };
+}
+
+function replacePageInSnapshot(currentSnapshot, incomingSnapshot, pageId) {
+  const currentRecords = Object.values(currentSnapshot?.store || {});
+  const incomingRecords = Object.values(incomingSnapshot?.store || {});
+  const removedIds = new Set([pageId]);
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const record of currentRecords) {
+      if (removedIds.has(record.parentId) && !removedIds.has(record.id)) {
+        removedIds.add(record.id);
+        changed = true;
+      }
+    }
+  }
+  return {
+    store: Object.fromEntries([
+      ...currentRecords
+        .filter((record) => !removedIds.has(record.id))
+        .map((record) => [record.id, record]),
+      ...incomingRecords.map((record) => [record.id, record]),
+    ]),
+  };
+}
+
+function dataUrlFile(dataUrl, name, fallbackType) {
+  const match = String(dataUrl).match(/^data:([^;,]+)?(;base64)?,(.*)$/s);
+  if (!match) return null;
+  const mimeType = match[1] || fallbackType || "application/octet-stream";
+  const raw = match[2] ? atob(match[3]) : decodeURIComponent(match[3]);
+  const bytes = match[2]
+    ? Uint8Array.from(raw, (character) => character.charCodeAt(0))
+    : new TextEncoder().encode(raw);
+  return new File([bytes], name, { type: mimeType });
+}
+
 function boardBackupHasShapes(snapshot) {
   return Object.values(snapshot.store || {}).some(
     (record) => record.typeName === "shape",
   );
 }
 
-function boardBackupFilename(projectId, date = new Date()) {
-  const pad = (value) => String(value).padStart(2, "0");
-  const timestamp =
-    `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}` +
-    `_${pad(date.getHours())}-${pad(date.getMinutes())}`;
-  return `board-backup_${projectId}_${timestamp}.json`;
-}
-
-async function backupBoardToDrive(projectId, { force = false } = {}) {
+async function backupBoardToDrive(projectId) {
   if (!googleAccessToken) return "skipped: no Google Drive token";
   const snapshot = boardBackupSnapshot(projectId);
   if (!snapshot || !boardBackupHasShapes(snapshot)) {
     return "skipped: board has no shapes";
   }
-  const folderId = await boardBackupsFolder();
+  const backupRootId = await boardBackupsFolder();
   const project = state.projects.find((item) => item.id === projectId);
-  const prefix = `board-backup_${projectId}_`;
-  if (!force) {
-    const params = new URLSearchParams({
-      q: `'${folderId}' in parents and trashed=false and name contains '${prefix}'`,
-      orderBy: "createdTime desc",
-      pageSize: "1",
-      fields: "files(createdTime)",
-    });
-    const response = await fetchDriveAPI(
-      `https://www.googleapis.com/drive/v3/files?${params}`,
-    );
-    const files = (await response.json()).files || [];
-    const newest = files[0]?.createdTime;
-    if (newest && Date.now() - new Date(newest).getTime() < 24 * 60 * 60 * 1000) {
-      return "skipped: newest backup is less than 24 hours old";
-    }
-  }
-  const payload = {
-    type: "exo-tldraw-board-backup",
-    version: 1,
+  const projectFolderId = await findOrCreateDriveFolder(
+    driveFolderName(project?.name, projectId),
+    backupRootId,
+  );
+  const pages = boardPages(snapshot);
+  if (!pages.length) return "skipped: board has no pages";
+  const timestamp = new Date().toISOString().replace(/[.:]/g, "-");
+  const manifest = {
+    type: "exo-tldraw-project-backup",
+    version: 2,
     projectId,
     projectName: project?.name || projectId,
     savedAt: new Date().toISOString(),
     tldraw: "3.15.6",
-    snapshot,
+    pages: pages.map((page) => ({
+      id: page.id,
+      name: page.name,
+      folderName: driveFolderName(page.name, page.id),
+    })),
   };
-  const file = new File(
-    [JSON.stringify(payload, null, 2)],
-    boardBackupFilename(projectId),
+  const manifestFile = new File(
+    [JSON.stringify(manifest, null, 2)],
+    `project-backup_${projectId}_${timestamp}.json`,
     { type: "application/json" },
   );
-  await uploadFileToDrive(file, folderId);
+  await uploadFileToDrive(manifestFile, projectFolderId);
+  for (const page of pages) {
+    const pageFolderId = await findOrCreateDriveFolder(
+      driveFolderName(page.name, page.id),
+      projectFolderId,
+    );
+    const payload = {
+      type: "exo-tldraw-page-backup",
+      version: 2,
+      projectId,
+      projectName: project?.name || projectId,
+      pageId: page.id,
+      pageName: page.name,
+      savedAt: new Date().toISOString(),
+      tldraw: "3.15.6",
+      snapshot: pageSnapshot(snapshot, page),
+    };
+    const assetRecords = Object.values(payload.snapshot.store).filter(
+      (record) => record.typeName === "asset" && record.props?.src,
+    );
+    const assetFolderId = assetRecords.length
+      ? await findOrCreateDriveFolder("assets", pageFolderId)
+      : null;
+    const archivedAssets = [];
+    if (assetFolderId) {
+      for (const asset of assetRecords) {
+        const file = dataUrlFile(
+          asset.props.src,
+          `${asset.id.replace(/[^a-zA-Z0-9_-]/g, "-")}-${driveFolderName(asset.props.name, "asset")}`,
+          asset.props.mimeType,
+        );
+        if (!file) continue;
+        const uploaded = await uploadFileToDrive(file, assetFolderId);
+        archivedAssets.push({
+          assetId: asset.id,
+          fileId: uploaded.id,
+          name: file.name,
+          mimeType: file.type,
+        });
+      }
+    }
+    payload.archivedAssets = archivedAssets;
+    const file = new File(
+      [JSON.stringify(payload, null, 2)],
+      `page-backup_${projectId}_${page.id}_${timestamp}.json`,
+      { type: "application/json" },
+    );
+    await uploadFileToDrive(file, pageFolderId);
+  }
   return "saved";
 }
 
-async function backupAllBoardsToDrive(force = false) {
+async function backupAllBoardsToDrive() {
   const results = [];
   for (const project of state.projects) {
     try {
       results.push({
         project: project.name,
-        result: await backupBoardToDrive(project.id, { force }),
+        result: await backupBoardToDrive(project.id),
       });
     } catch (error) {
       results.push({ project: project.name, result: `failed: ${error.message}` });
@@ -2470,7 +2603,7 @@ document.addEventListener("click", async (e) => {
     const button = el;
     button.disabled = true;
     button.textContent = "Backing up boards…";
-    backupAllBoardsToDrive(true)
+    backupAllBoardsToDrive()
       .then((results) => {
         const saved = results.filter(({ result }) => result === "saved").length;
         const skipped = results
@@ -2522,12 +2655,15 @@ $("#tldraw-board-restore-input").onchange = async (event) => {
     const snapshot = parsed?.snapshot;
     const records = snapshot?.store;
     if (
-      parsed?.type !== "exo-tldraw-board-backup" ||
+      parsed?.type !== "exo-tldraw-page-backup" ||
+      !parsed.pageId ||
       !records ||
       typeof records !== "object" ||
-      !Object.values(records).some((record) => record.typeName === "page")
+      !Object.values(records).some(
+        (record) => record.typeName === "page" && record.id === parsed.pageId,
+      )
     ) {
-      throw new Error("That file is not a valid Tldraw board backup.");
+      throw new Error("That file is not a valid Tldraw page backup.");
     }
     const projectName = nameOf(scope);
     const projectNote =
@@ -2536,14 +2672,14 @@ $("#tldraw-board-restore-input").onchange = async (event) => {
         : "";
     if (
       !confirm(
-        `Replace the ${projectName} board with this backup?${projectNote} The current drawing for this project will be replaced for everyone.`,
+        `Restore the "${parsed.pageName || parsed.pageId}" page in ${projectName}?${projectNote} The current page content will be replaced for everyone.`,
       )
     ) {
       return;
     }
     if (googleAccessToken) {
       try {
-        await backupBoardToDrive(scope, { force: true });
+        await backupBoardToDrive(scope);
       } catch (error) {
         warn("Safety backup failed: " + error.message);
       }
@@ -2553,12 +2689,16 @@ $("#tldraw-board-restore-input").onchange = async (event) => {
       ...state,
       projectDrawings: {
         ...state.projectDrawings,
-        [scope]: snapshot,
+        [scope]: replacePageInSnapshot(
+          boardBackupSnapshot(scope) || { store: {} },
+          snapshot,
+          parsed.pageId,
+        ),
       },
     };
     await persist();
     render();
-    notify("Board restored. Other people need to reload to see it.");
+    notify("Board page restored. Other people need to reload to see it.");
   } catch (error) {
     notify("Board restore failed: " + error.message);
   }
