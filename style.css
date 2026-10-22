@@ -1178,30 +1178,12 @@ dialog::backdrop {
 .hidden {
   display: none !important;
 }
-.drive-toolbar {
-  position: sticky;
-  top: 0;
-  z-index: 2;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  flex-wrap: wrap;
-  padding-bottom: 16px;
-  border-bottom: 1px solid var(--line);
-  background: #fff;
-}
 .drive-breadcrumbs {
   display: flex;
   align-items: center;
   gap: 7px;
   flex-wrap: wrap;
   font-size: 12px;
-}
-.drive-toolbar-location {
-  display: grid;
-  gap: 7px;
-  min-width: 0;
 }
 .drive-breadcrumb-label {
   color: var(--muted);
@@ -1431,12 +1413,20 @@ dialog::backdrop {
   overflow: visible;
 }
 .drive-toolbar {
+  display: flex;
   position: static;
   align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
   padding: 18px 0;
   border-bottom: 1px solid var(--line);
+  background: #fff;
 }
 .drive-toolbar-location {
+  display: grid;
+  gap: 7px;
+  min-width: 0;
   flex: 1 1 240px;
 }
 .drive-breadcrumbs {
@@ -1619,6 +1609,7 @@ dialog::backdrop {
 }
 /* Keep the embedded Drive preview contained within its file-preview panel. */
 .drive-table-wrap {
+  position: relative;
   overflow-x: auto;
   border-top: 1px solid var(--line);
   border-radius: 7px;
@@ -1779,7 +1770,6 @@ dialog::backdrop {
   body {
     width: 100%;
     min-width: 0;
-    overflow-x: hidden;
   }
 
   .app {
@@ -2001,13 +1991,10 @@ dialog::backdrop {
 
   .table-scroll,
   .drive-table-wrap {
-    max-width: 100%;
-    overflow-x: auto;
     -webkit-overflow-scrolling: touch;
   }
 
-  table,
-  .drive-table {
+  table {
     min-width: 620px;
   }
 
@@ -2081,6 +2068,7 @@ dialog::backdrop {
     align-items: stretch;
     flex-direction: column;
     gap: 8px;
+    justify-content: flex-start;
   }
 
   .drive-search,
@@ -2091,7 +2079,15 @@ dialog::backdrop {
   }
 
   .drive-search {
+    flex: 0 0 auto;
     min-height: 42px;
+    width: 100%;
+  }
+
+  .drive-toolbar-location,
+  .drive-toolbar-actions {
+    flex: 0 0 auto;
+    width: 100%;
   }
 
   .drive-new-dropdown {
