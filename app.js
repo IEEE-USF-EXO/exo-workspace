@@ -4,6 +4,7 @@
 // 1. GOOGLE & SUPABASE CONFIGURATION
 // ==========================================
 const SUPABASE_URL = "https://tnupwlucufewosslvcaz.supabase.co";
+const BUILD_VERSION = "1.0.1";
 const SUPABASE_ANON_KEY =
   "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6InRudXB3bHVjdWZld29zc2x2Y2F6Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3OTE3NTM4MjIsImV4cCI6MjEwNzMyOTgyMn0.4TFRb6t4pE547wywotP_SWZG50NiJzlxs1_Ds51aQmM";
 
@@ -62,6 +63,43 @@ const tldrawInstanceRecordTypes = new Set([
   "instance_page_state",
   "pointer",
 ]);
+
+function setBuildVersion(version) {
+  const element = document.querySelector("#build-version");
+  if (element) element.textContent = `v${version}`;
+}
+
+async function checkForAppUpdate() {
+  setBuildVersion(BUILD_VERSION);
+  try {
+    const response = await fetch(`./version.json?t=${Date.now()}`, {
+      cache: "no-store",
+    });
+    if (!response.ok) {
+      throw new Error(`Version check failed (HTTP ${response.status})`);
+    }
+    const payload = await response.json();
+    const serverVersion = String(payload?.version || "").trim();
+    if (!serverVersion) throw new Error("Version check returned no version.");
+    setBuildVersion(serverVersion);
+
+    const loadedVersion = localStorage.getItem("app_version");
+    if (!loadedVersion) {
+      localStorage.setItem("app_version", serverVersion);
+      return true;
+    }
+    if (loadedVersion === serverVersion) return true;
+
+    localStorage.setItem("app_version", serverVersion);
+    const url = new URL(window.location.href);
+    url.searchParams.set("v", serverVersion);
+    window.location.replace(url.toString());
+    return false;
+  } catch (error) {
+    warn("Could not check for a newer app version. " + error.message);
+    return true;
+  }
+}
 
 async function signInWithGoogle() {
   if (window.location.protocol === "file:") {
@@ -2179,6 +2217,7 @@ $("#backup-input").onchange = (e) => {
   e.target.value = "";
 };
 (async () => {
+  if (!(await checkForAppUpdate())) return;
   try {
     const { data, error } = await supabaseClient
       .from("workspace_state")
