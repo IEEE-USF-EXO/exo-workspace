@@ -897,29 +897,6 @@ td small {
   grid-template-columns: repeat(2, 1fr);
   gap: 12px;
 }
-.bom-bar {
-  margin: 0 22px 20px;
-  padding: 18px;
-  background: #f5f8ef;
-  border: 1px solid #e2ead6;
-  border-radius: 8px;
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 15px;
-}
-.bom-bar strong {
-  display: block;
-  font-size: 13px;
-  font-weight: 500;
-}
-.bom-bar small {
-  font-size: 10px;
-  color: #8c9d78;
-}
-.bom-bar .row {
-  flex-wrap: wrap;
-}
 .bom-tools {
   padding-bottom: 14px;
 }
@@ -2066,18 +2043,6 @@ dialog::backdrop {
 
   .photo img {
     height: min(60vw, 240px);
-  }
-
-  .bom-bar {
-    align-items: stretch;
-    flex-direction: column;
-    margin: 0 12px 16px;
-    padding: 14px;
-  }
-
-  .bom-bar .row,
-  .bom-bar .row > button {
-    width: 100%;
   }
 
   .table-scroll,

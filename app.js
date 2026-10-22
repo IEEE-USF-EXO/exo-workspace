@@ -28,13 +28,13 @@ let driveFolders = [];
 let driveTokenExpired = false;
 let tldrawRoot = null;
 let tldrawImportPromise = null;
-let tldrawGetSnapshot = null;
 let tldrawRenderToken = 0;
 let tldrawEditor = null;
 let tldrawUnlisten = null;
 let workspaceChannel = null;
 let applyingTldrawSnapshot = false;
 let tldrawPersistTimer = null;
+let workspaceLoaded = false;
 let remoteTldrawPointers = new Map();
 let pointerBroadcastFrame = null;
 let localPointer = null;
@@ -292,6 +292,99 @@ async function createSubfolder(folderName, parentFolderId) {
 async function uploadFileToGoogleDrive(file, folderId) {
   return uploadFileToDrive(file, folderId || ROOT_DRIVE_FOLDER_ID);
 }
+
+async function boardBackupsFolder() {
+  const folders = await listDriveFiles(ROOT_DRIVE_FOLDER_ID);
+  const existing = folders.find(
+    (file) =>
+      file.mimeType === GOOGLE_DRIVE_FOLDER_MIME &&
+      file.name === "Board backups",
+  );
+  if (existing) return existing.id;
+  const created = await createDriveFolder("Board backups", ROOT_DRIVE_FOLDER_ID);
+  return created.id;
+}
+
+function boardBackupSnapshot(projectId) {
+  const snapshot =
+    state.projectDrawings?.[projectId]?.document ??
+    state.projectDrawings?.[projectId];
+  if (!snapshot || typeof snapshot.store !== "object") return null;
+  return snapshot;
+}
+
+function boardBackupHasShapes(snapshot) {
+  return Object.values(snapshot.store || {}).some(
+    (record) => record.typeName === "shape",
+  );
+}
+
+function boardBackupFilename(projectId, date = new Date()) {
+  const pad = (value) => String(value).padStart(2, "0");
+  const timestamp =
+    `${date.getFullYear()}-${pad(date.getMonth() + 1)}-${pad(date.getDate())}` +
+    `_${pad(date.getHours())}-${pad(date.getMinutes())}`;
+  return `board-backup_${projectId}_${timestamp}.json`;
+}
+
+async function backupBoardToDrive(projectId, { force = false } = {}) {
+  if (!googleAccessToken) return "skipped: no Google Drive token";
+  const snapshot = boardBackupSnapshot(projectId);
+  if (!snapshot || !boardBackupHasShapes(snapshot)) {
+    return "skipped: board has no shapes";
+  }
+  const folderId = await boardBackupsFolder();
+  const project = state.projects.find((item) => item.id === projectId);
+  const prefix = `board-backup_${projectId}_`;
+  if (!force) {
+    const params = new URLSearchParams({
+      q: `'${folderId}' in parents and trashed=false and name contains '${prefix}'`,
+      orderBy: "createdTime desc",
+      pageSize: "1",
+      fields: "files(createdTime)",
+    });
+    const response = await fetchDriveAPI(
+      `https://www.googleapis.com/drive/v3/files?${params}`,
+    );
+    const files = (await response.json()).files || [];
+    const newest = files[0]?.createdTime;
+    if (newest && Date.now() - new Date(newest).getTime() < 24 * 60 * 60 * 1000) {
+      return "skipped: newest backup is less than 24 hours old";
+    }
+  }
+  const payload = {
+    type: "exo-tldraw-board-backup",
+    version: 1,
+    projectId,
+    projectName: project?.name || projectId,
+    savedAt: new Date().toISOString(),
+    tldraw: "3.15.6",
+    snapshot,
+  };
+  const file = new File(
+    [JSON.stringify(payload, null, 2)],
+    boardBackupFilename(projectId),
+    { type: "application/json" },
+  );
+  await uploadFileToDrive(file, folderId);
+  return "saved";
+}
+
+async function backupAllBoardsToDrive(force = false) {
+  const results = [];
+  for (const project of state.projects) {
+    try {
+      results.push({
+        project: project.name,
+        result: await backupBoardToDrive(project.id, { force }),
+      });
+    } catch (error) {
+      results.push({ project: project.name, result: `failed: ${error.message}` });
+    }
+  }
+  return results;
+}
+
 function showDriveTestUpload() {
   openModal(
     "Test Google Drive upload",
@@ -581,7 +674,7 @@ function documentUpdates(updates) {
   );
 }
 function snapshotTldrawStore(store) {
-  return tldrawGetSnapshot ? tldrawGetSnapshot(store) : store.getSnapshot();
+  return store.getStoreSnapshot();
 }
 
 function broadcastTldrawPointer(point, active) {
@@ -591,6 +684,7 @@ function broadcastTldrawPointer(point, active) {
     event: "tldraw-pointer",
     payload: {
       projectId: scope,
+      pageId: tldrawEditor?.getCurrentPageId() ?? null,
       clientId: tldrawClientId,
       point,
       active,
@@ -609,7 +703,12 @@ function renderRemoteTldrawPointers() {
   if (!overlay || !tldrawEditor) return;
   overlay.innerHTML = "";
   for (const pointer of remoteTldrawPointers.values()) {
-    if (!pointer.point || pointer.projectId !== scope) continue;
+    if (
+      !pointer.point ||
+      pointer.projectId !== scope ||
+      pointer.pageId !== tldrawEditor.getCurrentPageId()
+    )
+      continue;
     const screenPoint = tldrawEditor.pageToScreen(pointer.point);
     const dot = document.createElement("div");
     dot.className = "tldraw-remote-pointer";
@@ -656,6 +755,17 @@ function handleTldrawPointer(payload) {
 }
 
 function bindTldrawPointerPresence(container, editor, projectId) {
+  let lastPageId = editor.getCurrentPageId();
+  const unlistenPage = editor.store.listen(
+    () => {
+      const pageId = editor.getCurrentPageId();
+      if (pageId === lastPageId) return;
+      lastPageId = pageId;
+      if (localPointer) broadcastTldrawPointer(null, false);
+      renderRemoteTldrawPointers();
+    },
+    { scope: "session" },
+  );
   const sendPointer = (event, active = true) => {
     if (scope !== projectId || tldrawEditor !== editor) return;
     const bounds = container.getBoundingClientRect();
@@ -674,6 +784,7 @@ function bindTldrawPointerPresence(container, editor, projectId) {
     localPointer = null;
   });
   return () => {
+    unlistenPage();
     container.removeEventListener("pointermove", sendPointer);
     container.removeEventListener("pointerenter", sendPointer);
     if (localPointer) broadcastTldrawPointer(null, false);
@@ -717,7 +828,8 @@ function saveActiveTldrawSnapshot() {
 
 function loadProjectTldrawSnapshot(snapshot) {
   if (!tldrawEditor) return;
-  const records = Object.values(snapshot?.store || {}).filter(
+  const doc = snapshot?.document ?? snapshot;
+  const records = Object.values(doc?.store || {}).filter(
     (record) => !tldrawInstanceRecordTypes.has(record.typeName),
   );
   applyingTldrawSnapshot = true;
@@ -776,12 +888,11 @@ async function initTldrawBoard() {
       tldrawImportPromise = Promise.all([
         import("https://esm.sh/react-dom@18/client"),
         import("https://esm.sh/react@18"),
-        import("https://esm.sh/tldraw@3?external=react,react-dom"),
+        import("https://esm.sh/tldraw@3.15.6?external=react,react-dom"),
       ]);
     }
-    const [{ createRoot }, { default: React }, { getSnapshot, Tldraw }] =
+    const [{ createRoot }, { default: React }, { Tldraw }] =
       await tldrawImportPromise;
-    tldrawGetSnapshot = getSnapshot;
     if (
       renderToken !== tldrawRenderToken ||
       view !== "canvas" ||
@@ -949,14 +1060,27 @@ function warn(message) {
   $("#storage-warning").classList.remove("hidden");
 }
 function persist() {
-  if (!googleAccessToken) return Promise.resolve();
+  if (!workspaceLoaded) return Promise.resolve();
   $("#save-status").textContent = "Saving to cloud…";
   saving = saving.catch(() => {}).then(async () => {
-      const { error } = await supabaseClient
+      const {
+        data: savedRows,
+        error: sessionError,
+      } = await supabaseClient.auth.getSession();
+      if (sessionError) throw sessionError;
+      if (!savedRows?.session) {
+        $("#save-status").textContent = "Sign in to save";
+        return;
+      }
+      const { data, error } = await supabaseClient
         .from("workspace_state")
         .update({ data: state, updated_at: new Date().toISOString() })
-        .eq("id", 1);
+        .eq("id", 1)
+        .select("id");
       if (error) throw error;
+      if (!data?.length) {
+        throw new Error("Save was rejected: row id=1 missing or blocked by RLS");
+      }
       $("#save-status").textContent = "Saved to cloud";
     })
     .catch((error) => {
@@ -1225,7 +1349,7 @@ function centerCard() {
 function showStorage() {
   openModal(
     "Your workspace storage",
-    `<p class="hint">This workspace stores drawing state and Drive file metadata in the cloud. File contents are uploaded to Google Drive.</p><ul class="storage-list"><li><b>Google Drive</b>Large files are uploaded directly to the selected project/team folder using resumable uploads.</li><li><b>Cloud workspace</b>Projects, drawings, relationships, BOM selections, and Drive file links are stored in Supabase.</li><li><b>Share or back up</b>Import a JSON backup containing workspace data and Drive-backed file metadata. The backup does not duplicate large Drive files.</li></ul><div class="row"><button class="secondary" data-action="import">â†‘ Import backup</button></div>`,
+    `<p class="hint">This workspace stores drawing state and Drive file metadata in the cloud. File contents are uploaded to Google Drive.</p><ul class="storage-list"><li><b>Google Drive</b>Large files are uploaded directly to the selected project/team folder using resumable uploads.</li><li><b>Cloud workspace</b>Projects, drawings, relationships, BOM selections, and Drive file links are stored in Supabase.</li><li><b>Share or back up</b>Import a JSON backup containing workspace data and Drive-backed file metadata. The backup does not duplicate large Drive files.</li></ul><div class="row"><button class="secondary" data-action="import">â†‘ Import backup</button><button class="secondary" data-action="backup-boards">Back up boards to Drive now</button><button class="secondary" data-action="restore-board">Restore current board from backup file…</button></div>`,
   );
 }
 function toolHint() {
@@ -1529,7 +1653,7 @@ function overviewHTML() {
   const files = state.files.filter(inScope),
     photos = files.filter(isPhoto),
     updates = state.projectUpdates[scope] || [];
-  return `<section class="overview-updates panel"><div class="panel-head"><div><h2>Team updates</h2><p>Shared notes for everyone working on ${esc(nameOf(scope))}.</p></div></div><form id="update-composer" class="update-composer"><input name="message" maxlength="500" placeholder="Write an update and press Enter…" aria-label="Write a team update" required><span>Press Enter to post</span></form>${updates.length ? `<div class="updates-list">${updates.map((update) => `<article class="update-item"><div><strong>${esc(update.message)}</strong><small>${esc(update.author || "Team member")} · ${new Date(update.createdAt).toLocaleString()}</small></div><button class="update-remove" type="button" data-update-delete="${esc(update.id)}" aria-label="Remove update" title="Remove update">×</button></article>`).join("")}</div>` : `<div class="updates-empty"><p>No updates yet. Start writing above to let the team know what is happening.</p></div>`}</section><div class="overview-stats"><button class="overview-stat" data-view="files"><span>Files</span><b>${files.length}</b><small>${sizeOf(files.reduce((s, f) => s + f.size, 0))} in Google Drive</small><strong>Open files &#8599;</strong></button><button class="overview-stat" data-view="gallery"><span>Gallery photos</span><b>${photos.length}</b><small>Project photos from Google Drive</small><strong>Open gallery &#8599;</strong></button></div><div class="overview-actions"><button class="overview-action" data-view="bom"><b>&#9783; Open the BOM</b><p>Search components and compare parts for this project.</p><span>Go to BOM &#8599;</span></button><button class="overview-action" data-view="canvas"><b>&#8599; Open the drawing board</b><p>Draw, arrange, and connect ideas with your team.</p><span>Go to drawing board &#8599;</span></button></div>`;
+  return `<section class="overview-updates panel"><div class="panel-head"><div><h2>Team updates</h2><p>Shared notes for everyone working on ${esc(nameOf(scope))}.</p></div></div><form id="update-composer" class="update-composer"><input name="message" maxlength="500" placeholder="Write an update and press Enter…" aria-label="Write a team update" required><span>Press Enter to post</span></form>${updates.length ? `<div class="updates-list">${updates.map((update) => `<article class="update-item"><div><strong>${esc(update.message)}</strong><small>${esc(update.author || "Team member")} · ${new Date(update.createdAt).toLocaleString()}</small></div><button class="update-remove" type="button" data-update-delete="${esc(update.id)}" aria-label="Remove update" title="Remove update">×</button></article>`).join("")}</div>` : `<div class="updates-empty"><p>No updates yet. Start writing above to let the team know what is happening.</p></div>`}</section><div class="overview-actions"><button class="overview-action" data-view="bom"><b>&#9783; Open the BOM</b><p>Search components and compare parts for this project.</p><span>Go to BOM &#8599;</span></button><button class="overview-action" data-view="canvas"><b>&#8599; Open the drawing board</b><p>Draw, arrange, and connect ideas with your team.</p><span>Go to drawing board &#8599;</span></button></div><div class="overview-stats"><button class="overview-stat" data-view="files"><span>Files</span><b>${files.length}</b><small>${sizeOf(files.reduce((s, f) => s + f.size, 0))} in Google Drive</small><strong>Open files &#8599;</strong></button><button class="overview-stat" data-view="gallery"><span>Gallery photos</span><b>${photos.length}</b><small>Project photos from Google Drive</small><strong>Open gallery &#8599;</strong></button></div>`;
 }
 async function saveOverviewUpdate(event) {
   event.preventDefault();
@@ -1656,7 +1780,7 @@ function bomHTML() {
   const projects = state.projects.filter((p) => p.id === scope);
   const files = projects.map((p) => state.files.find((f) => f.id === state.bom[p.id])).filter(Boolean);
   const hasSharedRows = sharedBOMRows.some((row) => row.project_id === scope);
-  return `<section class="panel"><div class="panel-head"><div><h2>Bill of materials</h2><p>Showing the selected project's components and source file.</p></div><button class="secondary" data-action="add-bom-row">+ Add component</button></div><div class="bom-bar"><div><strong>${hasSharedRows ? "Shared Supabase BOM connected" : files.length ? `${files.length} source file${files.length === 1 ? "" : "s"} connected` : "No BOM source selected"}</strong><small>${hasSharedRows ? "Approved rows are shared with authenticated workspace users." : files.length ? files.map((f) => `${esc(nameOf(f.project))} Â· ${esc(f.name)}`).join("  /  ") : "Choose a CSV source in Files to preview its rows here."}</small></div><div class="row">${files.map((f) => `<button class="text-button" data-download="${f.id}">â†“ ${esc(nameOf(f.project))}</button>`).join("")}<button class="secondary" data-action="choose-bom">${files.length ? "Manage sources" : "Choose BOM file"}</button></div></div><div id="bom-preview">${files.length || hasSharedRows ? '<div class="empty"><p>Opening BOMâ€¦</p></div>' : empty("â˜·", "Keep the source easy to find.", "Add a BOM in Files, then choose it here. CSV files display as a searchable table.")}</div></section>`;
+  return `<section class="panel"><div class="panel-head"><div><h2>Bill of materials</h2><p>Showing the selected project's components and source file.</p></div><button class="secondary" data-action="add-bom-row">+ Add component</button></div><div id="bom-preview">${files.length || hasSharedRows ? '<div class="empty"><p>Opening BOMâ€¦</p></div>' : empty("â˜·", "Keep the source easy to find.", "Add a BOM in Files. CSV files display as a searchable table.")}</div></section>`;
 }
 function driveFolderForm() {
   openModal(
@@ -1823,26 +1947,6 @@ async function previewBOM() {
       esc(error.message),
     );
   }
-}
-function chooseBOM() {
-  const project = currentProject();
-  const files = state.files.filter((f) => f.project === project);
-  if (!files.length) {
-    notify("Add a BOM file to this project first.");
-    showUpload();
-    return;
-  }
-  openModal(
-    "Choose the BOM source",
-    `<form id="bom-form"><p class="hint" style="margin-bottom:18px">Select the source file for ${esc(nameOf(project))}. No BOM data is invented or imported automatically.</p><label class="field">Source file<select name="file" required><option value="">Choose a fileâ€¦</option>${files.map((f) => `<option value="${f.id}" ${state.bom[project] === f.id ? "selected" : ""}>${esc(f.name)}</option>`).join("")}</select></label>${actions("Set BOM source")}</form>`,
-  );
-  $("#bom-form").onsubmit = (e) => {
-    e.preventDefault();
-    state.bom[project] = String(new FormData(e.target).get("file"));
-    persist();
-    $("#dialog").close();
-    render();
-  };
 }
 function resourcesHTML() {
   const links = [...knownResources, ...state.resources].filter(inScope);
@@ -2151,9 +2255,18 @@ document.addEventListener("click", async (e) => {
   const el = e.target.closest("button,a,tr");
   if (!el) return;
   if (el.dataset.view) {
+    const previousView = view;
     view = el.dataset.view;
 
     render();
+    if (view === "canvas" && previousView !== "canvas") {
+      requestAnimationFrame(() => {
+        $("#tldraw-stage")?.scrollIntoView({
+          block: "center",
+          behavior: "auto",
+        });
+      });
+    }
     if (view === "files") {
       syncDriveFiles().catch((error) => {
         driveSyncing = false;
@@ -2277,11 +2390,44 @@ document.addEventListener("click", async (e) => {
   if (action === "upload") showDriveTestUpload();
   if (action === "photos") showUpload(true);
   if (action === "storage") showStorage();
+  if (action === "backup-boards") {
+    const button = el;
+    button.disabled = true;
+    button.textContent = "Backing up boards…";
+    backupAllBoardsToDrive(true)
+      .then((results) => {
+        const saved = results.filter(({ result }) => result === "saved").length;
+        const skipped = results
+          .filter(({ result }) => result !== "saved")
+          .map(({ project, result }) => `${project}: ${result}`)
+          .join("; ");
+        notify(
+          `${saved} board${saved === 1 ? "" : "s"} saved to Drive` +
+            (skipped ? `. ${skipped}` : "."),
+        );
+      })
+      .catch((error) => notify("Board backups failed: " + error.message))
+      .finally(() => {
+        button.disabled = false;
+        button.textContent = "Back up boards to Drive now";
+      });
+  }
+  if (action === "restore-board") {
+    $("#tldraw-board-restore-input").click();
+  }
   if (action === "export") exportBackup();
   if (action === "import") $("#backup-input").click();
   if (action === "delete-selection") deleteSelection();
-  if (action === "choose-bom") chooseBOM();
   if (action === "add-bom-row") addBOMRow();
+});
+document.addEventListener("visibilitychange", () => {
+  if (document.visibilityState !== "hidden" || tldrawPersistTimer === null) {
+    return;
+  }
+  clearTimeout(tldrawPersistTimer);
+  tldrawPersistTimer = null;
+  saveActiveTldrawSnapshot();
+  persist();
 });
 $("#close-dialog").onclick = () => $("#dialog").close();
 $("#dialog").onclick = (e) => {
@@ -2290,6 +2436,56 @@ $("#dialog").onclick = (e) => {
 $("#backup-input").onchange = (e) => {
   importBackup(e.target.files[0]);
   e.target.value = "";
+};
+$("#tldraw-board-restore-input").onchange = async (event) => {
+  const file = event.target.files[0];
+  event.target.value = "";
+  if (!file) return;
+  try {
+    const parsed = JSON.parse(await file.text());
+    const snapshot = parsed?.snapshot;
+    const records = snapshot?.store;
+    if (
+      parsed?.type !== "exo-tldraw-board-backup" ||
+      !records ||
+      typeof records !== "object" ||
+      !Object.values(records).some((record) => record.typeName === "page")
+    ) {
+      throw new Error("That file is not a valid Tldraw board backup.");
+    }
+    const projectName = nameOf(scope);
+    const projectNote =
+      parsed.projectId !== scope
+        ? ` It was exported from ${parsed.projectName || parsed.projectId}.`
+        : "";
+    if (
+      !confirm(
+        `Replace the ${projectName} board with this backup?${projectNote} The current drawing for this project will be replaced for everyone.`,
+      )
+    ) {
+      return;
+    }
+    if (googleAccessToken) {
+      try {
+        await backupBoardToDrive(scope, { force: true });
+      } catch (error) {
+        warn("Safety backup failed: " + error.message);
+      }
+    }
+    if (view === "canvas") disposeTldrawBoard();
+    state = {
+      ...state,
+      projectDrawings: {
+        ...state.projectDrawings,
+        [scope]: snapshot,
+      },
+    };
+    await persist();
+    render();
+    notify("Board restored. Other people need to reload to see it.");
+  } catch (error) {
+    notify("Board restore failed: " + error.message);
+  }
 };
 (async () => {
   if (!(await checkForAppUpdate())) return;
@@ -2300,8 +2496,9 @@ $("#backup-input").onchange = (e) => {
       .eq("id", 1)
       .single();
 
-    if (error && error.code !== "PGRST116") throw error;
+    if (error || !data?.data) throw error || new Error("Workspace row was not found.");
     state = normalizeWorkspaceState(data?.data);
+    workspaceLoaded = true;
     storageAvailable = true;
     // Listen for live updates from other team members
     workspaceChannel = supabaseClient
@@ -2334,9 +2531,22 @@ $("#backup-input").onchange = (e) => {
     $("#save-status").textContent = "Workspace synced";
   } catch (error) {
     $("#save-status").textContent = "Sync failed";
-    warn("Could not load the live workspace. " + error.message);
-    state = initial();
+    warn("Could not load the workspace. Saving is disabled until you reload.");
   }
   await checkUserSession();
   render();
+  if (workspaceLoaded && googleAccessToken) {
+    (async () => {
+      for (const project of state.projects) {
+        try {
+          await backupBoardToDrive(project.id);
+        } catch (error) {
+          console.warn(
+            `Automatic board backup failed for ${project.name}:`,
+            error,
+          );
+        }
+      }
+    })();
+  }
 })();
