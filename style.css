@@ -1774,36 +1774,38 @@ dialog::backdrop {
   border: 0;
 }
 
-@media (max-width: 767px) {
+@media screen and (max-width: 767px) {
   html,
   body {
+    width: 100%;
     min-width: 0;
     overflow-x: hidden;
   }
 
   .app {
     display: block;
-    min-height: 100dvh;
+    min-height: 100vh;
   }
 
   main {
+    width: 100%;
     min-width: 0;
-    padding-bottom: 64px;
+    padding-bottom: 76px;
   }
 
   .sidebar {
     position: fixed;
     inset: auto 0 0;
-    z-index: 40;
+    z-index: 1000;
+    display: block;
     width: 100%;
-    height: auto;
-    min-height: 62px;
-    padding: 4px 8px env(safe-area-inset-bottom);
+    height: 68px;
+    padding: 5px 6px max(5px, env(safe-area-inset-bottom));
+    overflow: hidden;
     border: 0;
     border-top: 1px solid var(--line);
-    background: rgb(255 255 255 / 96%);
-    box-shadow: 0 -4px 18px rgb(34 62 50 / 8%);
-    backdrop-filter: blur(12px);
+    background: #fff;
+    box-shadow: 0 -4px 18px rgb(34 62 50 / 10%);
   }
 
   .sidebar .brand,
@@ -1819,20 +1821,22 @@ dialog::backdrop {
     grid-template-columns: repeat(6, minmax(0, 1fr));
     gap: 2px;
     width: 100%;
+    height: 58px;
   }
 
   .nav {
-    min-width: 0;
-    min-height: 54px;
-    padding: 5px 2px;
-    border-radius: 7px;
     display: flex;
-    flex-direction: column;
+    align-items: center;
     justify-content: center;
-    gap: 2px;
+    min-width: 0;
+    min-height: 58px;
+    padding: 3px 1px;
+    border-radius: 6px;
+    flex-direction: column;
+    gap: 3px;
     text-align: center;
     font-size: 9px;
-    line-height: 1.1;
+    line-height: 1.05;
     white-space: normal;
   }
 
@@ -1843,14 +1847,16 @@ dialog::backdrop {
   }
 
   .topbar {
-    height: auto;
+    width: 100%;
     min-height: 58px;
-    padding: 9px 12px;
+    height: auto;
+    padding: 8px 12px;
     gap: 8px;
   }
 
   .breadcrumbs {
     min-width: 0;
+    flex: 1 1 auto;
     gap: 6px;
   }
 
@@ -1862,61 +1868,57 @@ dialog::backdrop {
 
   #project-context {
     display: block;
-    max-width: 132px;
+    width: 100%;
+    max-width: 140px;
     padding: 7px 8px;
-    font-size: 11px;
   }
 
   .topbar-right {
     min-width: 0;
-    margin-left: auto;
-    gap: 6px;
+    flex: 0 1 auto;
+    gap: 5px;
   }
 
   .status {
-    width: 9px;
-    height: 9px;
-    flex: 0 0 9px;
+    width: 8px;
+    height: 8px;
+    flex: 0 0 8px;
     overflow: hidden;
     border-radius: 50%;
     background: #6b9573;
     font-size: 0;
   }
 
-  .text-button,
-  .topbar-right .primary,
-  .topbar-right .secondary {
-    min-height: 38px;
-  }
-
   .text-button {
-    padding: 5px;
+    padding: 5px 4px;
     font-size: 10px;
   }
 
   #login-btn,
   #logout-btn {
-    max-width: 92px;
+    max-width: 82px;
     overflow: hidden;
-    padding: 6px 8px !important;
+    padding: 7px 8px !important;
     text-overflow: ellipsis;
     font-size: 10px !important;
   }
 
   .content {
     width: 100%;
-    padding: 20px 14px 28px;
+    max-width: none;
+    padding: 18px 12px 24px;
   }
 
   .heading {
-    align-items: flex-start;
+    align-items: stretch;
     flex-direction: column;
-    gap: 16px;
-    margin-bottom: 20px;
+    gap: 14px;
+    margin-bottom: 18px;
   }
 
   h1 {
-    font-size: 26px;
+    font-size: 25px;
+    overflow-wrap: anywhere;
   }
 
   .heading p {
@@ -1929,23 +1931,17 @@ dialog::backdrop {
   }
 
   .panel {
-    border-radius: 8px;
-    margin-bottom: 16px;
+    margin-bottom: 14px;
   }
 
   .panel-head {
-    align-items: flex-start;
+    align-items: stretch;
     flex-direction: column;
-    padding: 16px;
-  }
-
-  .panel-head > .row,
-  .panel-head > .row > button {
-    width: 100%;
+    padding: 15px;
   }
 
   .section-tools {
-    padding: 0 16px 16px;
+    padding: 0 15px 15px;
   }
 
   .section-tools input,
@@ -1958,48 +1954,44 @@ dialog::backdrop {
   .stats,
   .bom-stats {
     grid-template-columns: repeat(2, minmax(0, 1fr));
-    gap: 9px;
+    gap: 8px;
   }
 
   .stat {
     min-width: 0;
-    padding: 13px;
+    padding: 12px;
   }
 
   .stat b {
-    font-size: 23px;
+    font-size: 22px;
   }
 
   .overview-actions,
-  .resource-grid {
+  .resource-grid,
+  .tiles {
     grid-template-columns: 1fr;
     gap: 9px;
   }
 
   .overview-action,
   .resource {
-    padding: 15px;
+    padding: 14px;
   }
 
   .resource-grid,
   .tiles {
-    padding-inline: 14px;
-  }
-
-  .tiles {
-    grid-template-columns: 1fr;
-    gap: 12px;
+    padding-inline: 12px;
   }
 
   .photo img {
-    height: min(58vw, 240px);
+    height: min(60vw, 240px);
   }
 
   .bom-bar {
-    align-items: flex-start;
+    align-items: stretch;
     flex-direction: column;
-    margin: 0 14px 16px;
-    padding: 15px;
+    margin: 0 12px 16px;
+    padding: 14px;
   }
 
   .bom-bar .row,
@@ -2021,12 +2013,13 @@ dialog::backdrop {
 
   th,
   td {
-    padding-inline: 13px;
+    padding-left: 12px;
+    padding-right: 12px;
   }
 
   .canvas-top {
     align-items: stretch;
-    padding: 12px;
+    padding: 11px;
   }
 
   .canvas-top > .row,
@@ -2040,8 +2033,9 @@ dialog::backdrop {
   }
 
   .tool {
-    flex: 1;
-    padding-inline: 6px;
+    flex: 1 1 0;
+    padding-left: 4px;
+    padding-right: 4px;
   }
 
   .canvas-layout {
@@ -2050,36 +2044,37 @@ dialog::backdrop {
 
   .canvas-viewport {
     height: 52vh;
-    min-height: 360px;
+    min-height: 320px;
   }
 
   .inspector {
     max-height: none;
     border-top: 1px solid var(--line);
     border-left: 0;
-    padding: 16px;
+    padding: 15px;
   }
 
   .canvas-footer {
     flex-direction: column;
-    padding: 10px 12px;
+    padding: 9px 11px;
   }
 
   .canvas-note {
-    top: 14px;
-    left: 14px;
-    width: min(280px, calc(100% - 28px));
-    padding: 14px 16px;
+    top: 12px;
+    left: 12px;
+    width: min(280px, calc(100% - 24px));
+    padding: 13px 15px;
   }
 
   .drive-explorer {
-    padding: 0 12px 16px;
+    padding: 0 11px 15px;
   }
 
   .drive-toolbar {
     align-items: stretch;
-    gap: 12px;
-    padding: 14px 0;
+    flex-direction: column;
+    gap: 10px;
+    padding: 13px 0;
   }
 
   .drive-toolbar-actions {
@@ -2088,26 +2083,26 @@ dialog::backdrop {
     gap: 8px;
   }
 
-  .drive-search {
-    width: 100%;
-    max-width: none;
-    min-height: 42px;
-  }
-
+  .drive-search,
   .drive-new-menu,
   .drive-new-menu > .primary {
     width: 100%;
+    max-width: none;
+  }
+
+  .drive-search {
+    min-height: 42px;
   }
 
   .drive-new-dropdown {
-    left: 0;
     right: auto;
+    left: 0;
   }
 
   .drive-control-row {
     align-items: stretch;
     flex-direction: column;
-    gap: 10px;
+    gap: 9px;
   }
 
   .drive-controls {
@@ -2139,17 +2134,17 @@ dialog::backdrop {
   }
 
   .drive-file-list {
-    max-height: 300px;
+    max-height: 280px;
     border-right: 0;
     border-bottom: 1px solid var(--line);
   }
 
   .drive-preview {
-    min-height: 330px;
+    min-height: 300px;
   }
 
   .drive-preview iframe {
-    min-height: 300px;
+    min-height: 280px;
   }
 
   .form-grid {
@@ -2157,17 +2152,15 @@ dialog::backdrop {
     gap: 0;
   }
 
-  dialog {
+  dialog,
+  .lightbox {
     width: calc(100vw - 24px);
-    max-height: calc(100dvh - 24px);
+    max-width: calc(100vw - 24px);
+    max-height: calc(100vh - 24px);
   }
 
   .modal {
-    padding: 18px;
-  }
-
-  .modal-head {
-    margin-bottom: 17px;
+    padding: 17px;
   }
 
   .modal-actions {
@@ -2179,12 +2172,8 @@ dialog::backdrop {
     width: 100%;
   }
 
-  .lightbox {
-    width: calc(100vw - 24px);
-  }
-
   .startup-overlay {
-    padding: 14px;
+    padding: 12px;
   }
 
   .startup-card {
@@ -2192,11 +2181,11 @@ dialog::backdrop {
   }
 
   .startup-close {
-    top: -10px;
-    right: -10px;
-    width: 32px;
-    height: 32px;
-    font-size: 21px;
+    top: -9px;
+    right: -9px;
+    width: 31px;
+    height: 31px;
+    font-size: 20px;
   }
 
   .footer {
