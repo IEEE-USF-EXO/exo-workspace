@@ -958,49 +958,9 @@ td small {
   font-size: 22px;
   margin: 0;
 }
-.overview-stats {
-  display: grid;
-  grid-template-columns: repeat(2, 1fr);
-  gap: 14px;
-  margin-bottom: 22px;
-}
-.overview-stat {
-  display: flex;
-  flex-direction: column;
-  gap: 6px;
-  background: #fff;
-  border: 1px solid var(--line);
-  border-radius: 9px;
-  padding: 19px;
-  text-align: left;
-}
-.overview-stat:hover,
 .overview-action:hover {
   border-color: #aec4a4;
   box-shadow: 0 5px 18px rgb(34 62 50 / 7%);
-}
-.overview-stat span {
-  font-size: 9px;
-  letter-spacing: 1px;
-  color: #849875;
-  text-transform: uppercase;
-}
-.overview-stat b {
-  font-size: 27px;
-  display: block;
-  font-weight: 500;
-  margin: 0;
-}
-.overview-stat small {
-  display: block;
-  font-size: 10px;
-  color: #8c9f7c;
-}
-.overview-stat strong {
-  display: block;
-  margin-top: 8px;
-  color: var(--green);
-  font-size: 11px;
 }
 .overview-actions {
   display: grid;
@@ -1016,10 +976,17 @@ td small {
   text-align: left;
 }
 .overview-action b {
-  display: block;
+  display: flex;
+  align-items: center;
+  gap: 9px;
   font-size: 14px;
   font-weight: 500;
   margin-bottom: 7px;
+}
+.overview-action .nav-icon {
+  width: 22px;
+  height: 22px;
+  color: var(--green);
 }
 .overview-action p {
   font-size: 11px;
@@ -2041,7 +2008,6 @@ dialog::backdrop {
     min-width: 0;
   }
 
-  .overview-stats,
   .bom-stats {
     grid-template-columns: repeat(2, minmax(0, 1fr));
     gap: 8px;

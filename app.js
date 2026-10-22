@@ -726,6 +726,7 @@ const initial = () => ({
   ],
   files: [],
   projectDrawings: {},
+  groupUpdates: [],
   projectUpdates: {},
   resources: [],
   bom: {},
@@ -749,6 +750,9 @@ function normalizeWorkspaceState(data) {
     Array.isArray(next.projectUpdates)
   ) {
     next.projectUpdates = {};
+  }
+  if (!Array.isArray(next.groupUpdates)) {
+    next.groupUpdates = [];
   }
   if (next.tldrawSnapshot && !next.projectDrawings.exo) {
     next.projectDrawings.exo = next.tldrawSnapshot;
@@ -829,6 +833,7 @@ let state = initial(),
     { id: ROOT_DRIVE_FOLDER_ID, name: ROOT_DRIVE_FOLDER_NAME },
   ],
   driveExplorerFiles = [],
+  driveExplorerLoaded = false,
   driveExplorerSelected = null,
   driveExplorerLoading = false,
   driveExplorerError = "",
@@ -1842,10 +1847,139 @@ function deleteSelection() {
   tldrawEditor.deleteShapes(shapeIds);
 }
 function overviewHTML() {
-  const files = state.files.filter(inScope),
-    photos = files.filter(isPhoto),
-    updates = state.projectUpdates[scope] || [];
-  return `<section class="overview-updates panel"><div class="panel-head"><div><h2>Team updates</h2><p>Shared notes for everyone working on ${esc(nameOf(scope))}.</p></div></div><form id="update-composer" class="update-composer"><input name="message" maxlength="500" placeholder="Write an update and press Enter…" aria-label="Write a team update" required><span>Press Enter to post</span></form>${updates.length ? `<div class="updates-list">${updates.map((update) => `<article class="update-item"><div><strong>${esc(update.message)}</strong><small>${esc(update.author || "Team member")} · ${new Date(update.createdAt).toLocaleString()}</small></div><button class="update-remove" type="button" data-update-delete="${esc(update.id)}" aria-label="Remove update" title="Remove update">×</button></article>`).join("")}</div>` : `<div class="updates-empty"><p>No updates yet. Start writing above to let the team know what is happening.</p></div>`}</section><div class="overview-actions"><button class="overview-action" data-view="bom"><b>&#9783; Open the BOM</b><p>Search components and compare parts for this project.</p><span>Go to BOM &#8599;</span></button><button class="overview-action" data-view="canvas"><b>&#8599; Open the drawing board</b><p>Draw, arrange, and connect ideas with your team.</p><span>Go to drawing board &#8599;</span></button></div><div class="overview-stats"><button class="overview-stat" data-view="files"><span>Files</span><b>${files.length}</b><small>${sizeOf(files.reduce((s, f) => s + f.size, 0))} in Google Drive</small><strong>Open files &#8599;</strong></button><button class="overview-stat" data-view="gallery"><span>Gallery photos</span><b>${photos.length}</b><small>Project photos from Google Drive</small><strong>Open gallery &#8599;</strong></button></div>`;
+  const groupUpdates = state.groupUpdates || [];
+  const updates = state.projectUpdates[scope] || [];
+  const updateListMarkup = (items, emptyMessage) => items.length
+    ? `
+        <div class="updates-list">
+          ${items
+            .map(
+              (update) => `
+                <article class="update-item">
+                  <div>
+                    <strong>${esc(update.message)}</strong>
+                    <small>
+                      ${esc(update.author || "Team member")} ·
+                      ${new Date(update.createdAt).toLocaleString()}
+                    </small>
+                  </div>
+                  <button
+                    class="update-remove"
+                    type="button"
+                    data-update-delete="${esc(update.id)}"
+                    aria-label="Remove update"
+                    title="Remove update"
+                  >
+                    ×
+                  </button>
+                </article>
+              `,
+            )
+            .join("")}
+        </div>
+      `
+    : `
+        <div class="updates-empty">
+          <p>${emptyMessage}</p>
+        </div>
+      `;
+  const groupUpdatesMarkup = updateListMarkup(
+    groupUpdates,
+    "No group news yet. Share an update with everyone.",
+  );
+  const updatesMarkup = updateListMarkup(
+    updates,
+    "No updates yet. Start writing above to let the team know what is happening.",
+  );
+
+  return `
+    <section class="overview-updates panel">
+      <div class="panel-head">
+        <div>
+          <h2>Group news</h2>
+          <p>Updates shared with everyone across all projects.</p>
+        </div>
+      </div>
+
+      <form id="group-update-composer" class="update-composer">
+        <input
+          name="message"
+          maxlength="500"
+          placeholder="Share news with the whole group…"
+          aria-label="Share group news"
+          required
+        >
+        <span>Press Enter to post</span>
+      </form>
+
+      ${groupUpdatesMarkup}
+    </section>
+
+    <section class="overview-updates panel">
+      <div class="panel-head">
+        <div>
+          <h2>Project updates</h2>
+          <p>
+            Shared notes for everyone working on ${esc(nameOf(scope))}.
+          </p>
+        </div>
+      </div>
+
+      <form id="update-composer" class="update-composer">
+        <input
+          name="message"
+          maxlength="500"
+          placeholder="Write an update and press Enter…"
+          aria-label="Write a team update"
+          required
+        >
+        <span>Press Enter to post</span>
+      </form>
+
+      ${updatesMarkup}
+    </section>
+
+    <div class="overview-actions">
+      <button class="overview-action" data-view="bom">
+        <b>
+          <span class="nav-icon nav-icon-bom" aria-hidden="true"></span>
+          Open the BOM
+        </b>
+        <p>Search components and compare parts for this project.</p>
+        <span>Go to BOM &#8599;</span>
+      </button>
+
+      <button class="overview-action" data-view="files">
+        <b>
+          <span class="nav-icon nav-icon-files" aria-hidden="true"></span>
+          Open files
+        </b>
+        <p>Browse project folders and manage files in Google Drive.</p>
+        <span>Go to files &#8599;</span>
+      </button>
+
+      <button class="overview-action" data-view="canvas">
+        <b>
+          <span
+            class="nav-icon nav-icon-drawing-board"
+            aria-hidden="true"
+          ></span>
+          Open the drawing board
+        </b>
+        <p>Draw, arrange, and connect ideas with your team.</p>
+        <span>Go to drawing board &#8599;</span>
+      </button>
+
+      <button class="overview-action" data-view="gallery">
+        <b>
+          <span class="nav-icon nav-icon-gallery" aria-hidden="true"></span>
+          Open the photo gallery
+        </b>
+        <p>Review project photos and keep track of visual progress.</p>
+        <span>Go to gallery &#8599;</span>
+      </button>
+    </div>
+  `;
 }
 async function saveOverviewUpdate(event) {
   event.preventDefault();
@@ -1873,6 +2007,31 @@ async function saveOverviewUpdate(event) {
     notify("Update could not be saved: " + error.message);
   }
 }
+async function saveGroupUpdate(event) {
+  event.preventDefault();
+  const input = event.target.elements.message;
+  const message = input.value.trim();
+  if (!message) return;
+  const groupUpdates = [
+    {
+      id: uid(),
+      message,
+      author: tldrawPointerName,
+      createdAt: new Date().toISOString(),
+    },
+    ...(state.groupUpdates || []),
+  ];
+  input.disabled = true;
+  state = normalizeWorkspaceState({ ...state, groupUpdates });
+  try {
+    await persist();
+    render();
+    $("#group-update-composer input")?.focus();
+  } catch (error) {
+    input.disabled = false;
+    notify("Group news could not be saved: " + error.message);
+  }
+}
 function fileRows(files) {
   return files
     .map(
@@ -1898,17 +2057,21 @@ async function loadDriveExplorer(
   folderId = ROOT_DRIVE_FOLDER_ID,
   breadcrumb = [{ id: ROOT_DRIVE_FOLDER_ID, name: ROOT_DRIVE_FOLDER_NAME }],
 ) {
-  if (driveExplorerLoading) return;
   const requestId = ++driveExplorerRequestId;
   driveExplorerAbortController?.abort();
-  driveExplorerAbortController = new AbortController();
+  const abortController = new AbortController();
+  driveExplorerAbortController = abortController;
   driveExplorerFolder = folderId;
   driveExplorerBreadcrumbs = breadcrumb.map((crumb) => ({ ...crumb }));
+  driveExplorerLoaded = false;
   driveExplorerSelected = null;
   driveExplorerError = "";
   if (!googleAccessToken) {
     driveExplorerFiles = [];
-    driveExplorerAbortController = null;
+    driveExplorerLoading = false;
+    if (driveExplorerAbortController === abortController) {
+      driveExplorerAbortController = null;
+    }
     if (view === "files") render();
     return;
   }
@@ -1917,10 +2080,11 @@ async function loadDriveExplorer(
   try {
     const files = await listDriveFiles(
       folderId,
-      driveExplorerAbortController.signal,
+      abortController.signal,
     );
     if (requestId !== driveExplorerRequestId) return;
     driveExplorerFiles = files;
+    driveExplorerLoaded = true;
   } catch (error) {
     if (requestId !== driveExplorerRequestId) return;
     if (error?.name === "AbortError") return;
@@ -1930,7 +2094,9 @@ async function loadDriveExplorer(
   } finally {
     if (requestId !== driveExplorerRequestId) return;
     driveExplorerLoading = false;
-    driveExplorerAbortController = null;
+    if (driveExplorerAbortController === abortController) {
+      driveExplorerAbortController = null;
+    }
     if (view === "files") render();
   }
 }
@@ -2450,6 +2616,8 @@ function render() {
               ? bomHTML()
               : resourcesHTML();
   if (view === "overview") {
+    const groupUpdateComposer = $("#group-update-composer");
+    if (groupUpdateComposer) groupUpdateComposer.onsubmit = saveGroupUpdate;
     const updateComposer = $("#update-composer");
     if (updateComposer) updateComposer.onsubmit = saveOverviewUpdate;
   }
@@ -2461,7 +2629,7 @@ function render() {
   if (view === "files") {
     if (
       googleAccessToken &&
-      !driveExplorerFiles.length &&
+      !driveExplorerLoaded &&
       !driveExplorerLoading &&
       !driveExplorerError
     )
@@ -2573,17 +2741,20 @@ document.addEventListener("click", async (e) => {
     $("#dialog").classList.add("lightbox");
   }
   if (el.dataset.updateDelete) {
-    const update = (state.projectUpdates[scope] || []).find(
-      (item) => item.id === el.dataset.updateDelete,
-    );
+    const update = (state.groupUpdates || [])
+      .concat(state.projectUpdates[scope] || [])
+      .find((item) => item.id === el.dataset.updateDelete);
     if (update) {
+      const groupUpdates = (state.groupUpdates || []).filter(
+        (item) => item.id !== el.dataset.updateDelete,
+      );
       const projectUpdates = {
         ...state.projectUpdates,
         [scope]: (state.projectUpdates[scope] || []).filter(
-          (item) => item.id !== update.id,
+          (item) => item.id !== el.dataset.updateDelete,
         ),
       };
-      state = normalizeWorkspaceState({ ...state, projectUpdates });
+      state = normalizeWorkspaceState({ ...state, groupUpdates, projectUpdates });
       await persist();
       render();
     }
