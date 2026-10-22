@@ -2186,6 +2186,30 @@ dialog::backdrop {
     width: 100%;
     max-width: 100%;
     min-width: 0;
+    box-sizing: border-box;
+  }
+  #view {
+    overflow: hidden;
+  }
+  .drive-explorer.is-connected,
+  .drive-explorer.is-connected > *,
+  .drive-explorer.is-connected .drive-section,
+  .drive-explorer.is-connected .drive-section-head,
+  .drive-explorer.is-connected .drive-table-wrap {
+    min-width: 0;
+    max-width: 100%;
+  }
+  .drive-explorer.is-connected .drive-section,
+  .drive-explorer.is-connected .drive-folder-grid,
+  .drive-explorer.is-connected .drive-file-grid {
+    width: 100%;
+  }
+  .drive-explorer.is-connected .drive-table-wrap {
+    display: block;
+    width: 100%;
+    overflow-x: auto;
+    contain: inline-size;
+    isolation: isolate;
   }
   .drive-folder-grid,
   .drive-file-grid,
