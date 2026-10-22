@@ -89,6 +89,13 @@ Real-time collaboration uses two mechanisms:
 
 **1. Supabase Broadcast for live changes.** When a user edits the document, the store listener captures only user-originated changes and splits them into `added`, `updated`, and `removed` records. Local-only records (camera, pointer, instance, and instance page state) are filtered out. The remaining changes are broadcast over a shared channel, and other clients apply them to their own stores, including remote deletions.
 
+Every drawing update is also tagged with both its project ID and the active
+page ID. Records are filtered through their page-parent chain (including
+embedded assets) before they are broadcast or applied, so a drawing can only
+belong to its exact project/page container. Page records are handled as
+project-level collaboration events so page creation and renaming can sync
+within one project without sharing drawings between pages or projects.
+
 **2. Debounced database persistence.** Drawing edits are not written to Postgres on every pointer movement. The app waits one second after the most recent user change, then saves the full workspace state to Supabase. This keeps database traffic low and drawing responsive.
 
 **Viewport protection.** Camera and viewport records are excluded from remote updates, so another user's camera position, zoom, pointer, or page state never overrides your view. The app also avoids calling the global `render()` while the board is visible, which would otherwise unmount Tldraw and reset the camera.
@@ -99,6 +106,11 @@ Real-time collaboration uses two mechanisms:
 
 - Authenticate with Google Drive
 - Read the configured Drive folders and recursively list nested files
+- Treat folders directly under the configured Drive root as the source of
+  truth for project existence. The root is the only Drive location used for
+  project discovery and synchronization. If a project folder is deleted from
+  Drive, the matching project and its site data are removed during sync.
+  `board-backups` and `drawing-backups` are reserved folders, not projects.
 - Upload files, create folders, and upload whole folders with their contents
 - Associate file metadata with projects and teams
 - Open Drive previews and download files
@@ -127,7 +139,9 @@ Repository links and team Drive links. Each record has a title, team, project, U
 
 The Supabase schema contains the following application and collaboration tables:
 
-- `projects` — seeded project metadata and the foreign-key target for BOM rows.
+- `projects` — Drive-synchronized project registry and the foreign-key target
+  for BOM rows. Project existence is determined by folders directly under the
+  configured Drive root, not by this table.
 - `members` — authenticated users who have opened the workspace.
 - `project_members` — project-level membership and roles.
 - `global_admins` — global administrator roster.
@@ -137,6 +151,11 @@ The Supabase schema contains the following application and collaboration tables:
 - `workspace_state` — the shared dashboard document, including files, resources,
   drawing snapshots, project updates, and BOM selections.
 
+Projects created in the dashboard are also registered in `projects`, so their
+drawing view state can be saved without violating the project foreign key.
+Re-running `supabase-schema.sql` also backfills `projects` from any existing
+workspace projects.
+
 The main workspace object includes the current Tldraw document snapshot. Older fields (`nodes`, `edges`, `strokes`) remain because parts of the dashboard and the backup validation were originally built around the previous custom HTML/SVG board. That earlier board code still exists in `app.js`, but it is no longer the visible drawing surface.
 
 ## Backup and import
@@ -144,7 +163,11 @@ The main workspace object includes the current Tldraw document snapshot. Older f
 - Export the workspace as JSON, including local file data when available
 - Import a backup after confirmation, which replaces the current workspace state
 - The Files view starts at the configured `ROOT_DRIVE_FOLDER_ID` (`Projects-Testing-Folder`).
-- Automatic and manual Tldraw board backups are saved append-only in `board-backups/<project>/<page>/` folders created inside that root folder. Existing `drawing-backups` folders are also recognized for compatibility.
+- Automatic and manual Tldraw board backups are saved append-only in
+  `Projects-Testing-Folder/<project>/drawing-backups/<page> [<page-id>]/`
+  folders. The configured Drive root is the general workspace level; each
+  project owns its own drawing backup folder and each page owns a separate,
+  ID-qualified backup folder so duplicate page names can never share state.
 
 ## Known limitations
 

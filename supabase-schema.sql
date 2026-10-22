@@ -4,6 +4,7 @@
 -- Run it in the Supabase SQL editor. All statements are safe to re-run.
 
 create table if not exists public.projects (
+  -- The frontend synchronizes this registry from folders under its Drive root.
   id text primary key,
   name text not null,
   description text not null default '',
@@ -154,6 +155,11 @@ create policy "Authenticated users can read projects"
   on public.projects for select to authenticated
   using (true);
 
+drop policy if exists "Authenticated users can create projects" on public.projects;
+create policy "Authenticated users can create projects"
+  on public.projects for insert to authenticated
+  with check (true);
+
 drop policy if exists "Members can read the group roster" on public.members;
 create policy "Members can read the group roster"
   on public.members for select to authenticated
@@ -292,6 +298,28 @@ on conflict (id) do nothing;
 update public.workspace_state
 set data = data || jsonb_build_object('projectUpdates', '{}'::jsonb)
 where not (data ? 'projectUpdates');
+
+-- Register projects that were created by the dashboard before project-level
+-- metadata was stored in public.projects. This keeps board_view_state and BOM
+-- foreign keys valid when the schema is re-run against an existing workspace.
+insert into public.projects (id, name, description)
+select
+  project->>'id',
+  project->>'name',
+  coalesce(project->>'description', '')
+from public.workspace_state
+cross join lateral jsonb_array_elements(
+  case
+    when jsonb_typeof(data->'projects') = 'array' then data->'projects'
+    else '[]'::jsonb
+  end
+) as project
+where id = 1
+  and nullif(project->>'id', '') is not null
+  and nullif(project->>'name', '') is not null
+on conflict (id) do update
+set name = excluded.name,
+    description = excluded.description;
 
 -- app.js listens for workspace_state changes through Supabase Realtime.
 do $$

@@ -22,8 +22,7 @@ const supabaseClient = window.supabase.createClient(
 
 const ROOT_DRIVE_FOLDER_ID = "1kldWFbtd0S_Mr8zsrYBCrYiGJsc1zhl_";
 const ROOT_DRIVE_FOLDER_NAME = "Projects-Testing-Folder";
-const BOARD_BACKUPS_PARENT_FOLDER_ID = ROOT_DRIVE_FOLDER_ID;
-const BOARD_BACKUPS_FOLDER_NAMES = ["board-backups", "drawing-backups"];
+const DRAWING_BACKUPS_FOLDER_NAME = "drawing-backups";
 const GOOGLE_DRIVE_FOLDER_MIME = "application/vnd.google-apps.folder";
 let googleAccessToken = sessionStorage.getItem("google_provider_token");
 let sharedBOMRows = [];
@@ -33,12 +32,16 @@ let tldrawRoot = null;
 let tldrawImportPromise = null;
 let tldrawRenderToken = 0;
 let tldrawEditor = null;
+let tldrawEditorProjectId = null;
+const migratedPageIds = new Map();
 let tldrawUnlisten = null;
 let workspaceChannel = null;
+let tldrawChannel = null;
 let applyingTldrawSnapshot = false;
 let tldrawPersistTimer = null;
 let tldrawViewPersistTimer = null;
 let currentUserId = null;
+const registeredProjectIds = new Set();
 let tldrawLastCameraPageId = null;
 let tldrawLastCamera = null;
 let workspaceLoaded = false;
@@ -183,7 +186,7 @@ async function checkUserSession() {
     await ensureMemberProfile(session.user);
     await loadSharedBOM();
     try {
-      if (googleAccessToken) await syncDriveFiles();
+      if (googleAccessToken && workspaceLoaded) await syncDriveFiles();
     } catch (error) {
       driveSyncing = false;
       if (!isDriveAuthorizationError(error)) {
@@ -315,27 +318,37 @@ async function uploadFileToGoogleDrive(file, folderId) {
   return uploadFileToDrive(file, folderId || ROOT_DRIVE_FOLDER_ID);
 }
 
-async function boardBackupsFolder() {
+async function projectDriveFolder(projectId) {
+  const project = state.projects.find((item) => item.id === projectId);
+  if (!project?.driveFolderId) {
+    throw new Error(
+      `Project "${project?.name || projectId}" is not linked to a Drive folder.`,
+    );
+  }
+  return project.driveFolderId;
+}
+
+async function boardBackupsFolder(projectId) {
+  const projectFolderId = await projectDriveFolder(projectId);
   let folders;
   try {
-    folders = await listDriveFiles(BOARD_BACKUPS_PARENT_FOLDER_ID);
+    folders = await listDriveFiles(projectFolderId);
   } catch (error) {
     throw new Error(
-      "Google Drive cannot access the board backup parent folder. " +
+      "Google Drive cannot access the project's drawing backup folder. " +
         "Confirm the signed-in account has access, then reconnect Google Drive. " +
         `(${error.message})`,
     );
   }
-  const existing = folders.find((file) =>
-    file.mimeType === GOOGLE_DRIVE_FOLDER_MIME &&
-    BOARD_BACKUPS_FOLDER_NAMES.includes(file.name),
+  const existing = folders.find(
+    (file) =>
+      file.mimeType === GOOGLE_DRIVE_FOLDER_MIME &&
+      file.name === DRAWING_BACKUPS_FOLDER_NAME,
   );
   if (existing) return existing.id;
-  const created = await createSubfolder(
-    "board-backups",
-    BOARD_BACKUPS_PARENT_FOLDER_ID,
-  );
-  return created.id;
+  return (
+    await createSubfolder(DRAWING_BACKUPS_FOLDER_NAME, projectFolderId)
+  ).id;
 }
 
 function boardBackupSnapshot(projectId) {
@@ -372,6 +385,10 @@ function boardPages(snapshot) {
   );
 }
 
+function pageBackupFolderName(page) {
+  return driveFolderName(`${page.name} [${page.id}]`, page.id);
+}
+
 function pageSnapshot(snapshot, page) {
   const records = Object.values(snapshot.store || {}).filter(
     (record) => !tldrawInstanceRecordTypes.has(record.typeName),
@@ -404,6 +421,12 @@ function pageSnapshot(snapshot, page) {
 function replacePageInSnapshot(currentSnapshot, incomingSnapshot, pageId) {
   const currentRecords = Object.values(currentSnapshot?.store || {});
   const incomingRecords = Object.values(incomingSnapshot?.store || {});
+  const incomingPage = incomingRecords.find(
+    (record) => record.typeName === "page" && record.id === pageId,
+  );
+  if (!incomingPage) {
+    throw new Error("The backup does not contain the requested page.");
+  }
   const removedIds = new Set([pageId]);
   let changed = true;
   while (changed) {
@@ -413,6 +436,21 @@ function replacePageInSnapshot(currentSnapshot, incomingSnapshot, pageId) {
         removedIds.add(record.id);
         changed = true;
       }
+    }
+  }
+  const removedAssetIds = new Set(
+    currentRecords
+      .filter(
+        (record) =>
+          removedIds.has(record.id) &&
+          record.typeName === "shape" &&
+          record.props?.assetId,
+      )
+      .map((record) => record.props.assetId),
+  );
+  for (const record of currentRecords) {
+    if (record.typeName === "asset" && removedAssetIds.has(record.id)) {
+      removedIds.add(record.id);
     }
   }
   return {
@@ -448,12 +486,8 @@ async function backupBoardToDrive(projectId) {
   if (!snapshot || !boardBackupHasShapes(snapshot)) {
     return "skipped: board has no shapes";
   }
-  const backupRootId = await boardBackupsFolder();
+  const backupRootId = await boardBackupsFolder(projectId);
   const project = state.projects.find((item) => item.id === projectId);
-  const projectFolderId = await findOrCreateDriveFolder(
-    driveFolderName(project?.name, projectId),
-    backupRootId,
-  );
   const pages = boardPages(snapshot);
   if (!pages.length) return "skipped: board has no pages";
   const timestamp = new Date().toISOString().replace(/[.:]/g, "-");
@@ -467,7 +501,7 @@ async function backupBoardToDrive(projectId) {
     pages: pages.map((page) => ({
       id: page.id,
       name: page.name,
-      folderName: driveFolderName(page.name, page.id),
+      folderName: pageBackupFolderName(page),
     })),
   };
   const manifestFile = new File(
@@ -475,11 +509,11 @@ async function backupBoardToDrive(projectId) {
     `project-backup_${projectId}_${timestamp}.json`,
     { type: "application/json" },
   );
-  await uploadFileToDrive(manifestFile, projectFolderId);
+  await uploadFileToDrive(manifestFile, backupRootId);
   for (const page of pages) {
     const pageFolderId = await findOrCreateDriveFolder(
-      driveFolderName(page.name, page.id),
-      projectFolderId,
+      pageBackupFolderName(page),
+      backupRootId,
     );
     const payload = {
       type: "exo-tldraw-page-backup",
@@ -606,6 +640,9 @@ async function listDriveChildren(parentId) {
     const params = new URLSearchParams({
       q: `'${parentId}' in parents and trashed = false`,
       pageSize: "1000",
+      orderBy: "folder,name",
+      supportsAllDrives: "true",
+      includeItemsFromAllDrives: "true",
       fields:
         "nextPageToken,files(id,name,mimeType,size,modifiedTime,webViewLink,thumbnailLink,parents)",
     });
@@ -628,54 +665,121 @@ async function listDriveChildren(parentId) {
   return children;
 }
 
+function driveProjectId(folder, existingProjects) {
+  const normalizedName = folder.name.trim().toLowerCase();
+  const existing = existingProjects.find(
+    (project) =>
+      project.driveFolderId === folder.id ||
+      project.name.trim().toLowerCase() === normalizedName,
+  );
+  return existing?.id || uid();
+}
+
+function driveTeamFromPath(path) {
+  const firstFolder = String(path).split("/").filter(Boolean)[0]?.toLowerCase();
+  if (firstFolder === "controls") return "Controls";
+  if (firstFolder === "electrical") return "Electrical";
+  if (firstFolder === "mechanical" || firstFolder === "cad") return "Mechanical";
+  return "Shared";
+}
+
+function isDriveProjectFolder(folder) {
+  return (
+    folder.mimeType === GOOGLE_DRIVE_FOLDER_MIME &&
+    !["board-backups", "drawing-backups"].includes(
+      folder.name.trim().toLowerCase(),
+    )
+  );
+}
+
 async function syncDriveFiles() {
-  if (!googleAccessToken) return;
+  if (!googleAccessToken || !workspaceLoaded) return;
   if (driveSyncing) return;
   driveSyncing = true;
-  const driveFiles = [];
-  const folders = [];
-  const visited = new Set();
-  for (const [project, team, folderId] of folderIds) {
-    const walk = async (parentId, path) => {
-      if (visited.has(parentId)) return;
-      visited.add(parentId);
-      folders.push({ id: parentId, project, team, path });
-      for (const file of await listDriveChildren(parentId)) {
-        if (file.mimeType === "application/vnd.google-apps.folder") {
-          await walk(file.id, `${path}/${file.name}`);
-          continue;
+  try {
+    const driveFiles = [];
+    const folders = [];
+    const rootChildren = await listDriveChildren(ROOT_DRIVE_FOLDER_ID);
+    const projectFolders = rootChildren.filter(isDriveProjectFolder);
+    const previousProjects = state.projects;
+    const projects = projectFolders.map((folder) => ({
+      id: driveProjectId(folder, previousProjects),
+      name: folder.name,
+      description:
+        previousProjects.find((project) => project.driveFolderId === folder.id)
+          ?.description || "",
+      driveFolderId: folder.id,
+    }));
+    const projectByFolderId = new Map(
+      projects.map((project, index) => [projectFolders[index].id, project]),
+    );
+    for (const folder of projectFolders) {
+      const project = projectByFolderId.get(folder.id);
+      const walk = async (parentId, path) => {
+        folders.push({
+          id: parentId,
+          project: project.id,
+          team: driveTeamFromPath(path),
+          path,
+        });
+        for (const file of await listDriveChildren(parentId)) {
+          if (file.mimeType === GOOGLE_DRIVE_FOLDER_MIME) {
+            await walk(file.id, `${path}/${file.name}`);
+            continue;
+          }
+          driveFiles.push({
+            id: `drive-${file.id}`,
+            driveId: file.id,
+            driveUrl:
+              file.webViewLink ||
+              `https://drive.google.com/open?id=${encodeURIComponent(file.id)}`,
+            thumbnailUrl:
+              file.thumbnailLink ||
+              `https://drive.google.com/thumbnail?id=${encodeURIComponent(file.id)}&sz=w1200`,
+            name: file.name,
+            type: file.mimeType || "application/octet-stream",
+            size: Number(file.size || 0),
+            project: project.id,
+            team: driveTeamFromPath(path),
+            folderId: parentId,
+            folderPath: path,
+            note: "",
+            created: file.modifiedTime || new Date().toISOString(),
+          });
         }
-      driveFiles.push({
-        id: `drive-${file.id}`,
-        driveId: file.id,
-        driveUrl:
-          file.webViewLink ||
-          `https://drive.google.com/open?id=${encodeURIComponent(file.id)}`,
-        thumbnailUrl:
-          file.thumbnailLink ||
-          `https://drive.google.com/thumbnail?id=${encodeURIComponent(file.id)}&sz=w1200`,
-        name: file.name,
-        type: file.mimeType || "application/octet-stream",
-        size: Number(file.size || 0),
-        project,
-        team,
-        folderId: parentId,
-        folderPath: path,
-        note: "",
-        created: file.modifiedTime || new Date().toISOString(),
-      });
-      }
-    };
-    await walk(folderId, "");
+      };
+      await walk(folder.id, "");
+    }
+    driveFolders = folders;
+    const projectIds = new Set(projects.map((project) => project.id));
+    const projectDrawings = Object.fromEntries(
+      Object.entries(state.projectDrawings).filter(([id]) => projectIds.has(id)),
+    );
+    const projectUpdates = Object.fromEntries(
+      Object.entries(state.projectUpdates).filter(([id]) => projectIds.has(id)),
+    );
+    state = normalizeWorkspaceState({
+      ...state,
+      projects,
+      files: driveFiles,
+      resources: state.resources.filter((resource) => projectIds.has(resource.project)),
+      projectDrawings,
+      projectUpdates,
+      bom: Object.fromEntries(
+        Object.entries(state.bom).filter(([id]) => projectIds.has(id)),
+      ),
+    });
+    const nextScope = projectIds.has(scope) ? scope : projects[0]?.id || "";
+    if (nextScope !== scope && view === "canvas") {
+      disposeTldrawBoard();
+    }
+    scope = nextScope;
+    for (const project of projects) await ensureProjectRecord(project);
+    await persist();
+    render();
+  } finally {
+    driveSyncing = false;
   }
-  driveFolders = folders;
-  const localOnly = state.files.filter(
-    (file) => !file.driveId && !driveFiles.some((drive) => drive.name === file.name),
-  );
-  state.files = [...localOnly, ...driveFiles];
-  await persist();
-  driveSyncing = false;
-  if (view === "files" || view === "gallery" || view === "bom") render();
 }
 
 // ==========================================
@@ -720,16 +824,7 @@ const teamColors = {
 };
 const initial = () => ({
   version: 1,
-  projects: [
-    { id: "exo",
-      name: "exo-leg",
-      description: "Lower-limb exoskeleton" },
-    {
-      id: "pid-spoon",
-      name: "PID-spoon",
-      description: "Stabilized assistive utensil",
-    },
-  ],
+  projects: [],
   files: [],
   projectDrawings: {},
   groupUpdates: [],
@@ -738,6 +833,129 @@ const initial = () => ({
   bom: {},
   bomEntries: [],
 });
+function projectPageId(projectId, name, stable = false) {
+  const slug = String(name || "page")
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, "_")
+    .replace(/^_|_$/g, "")
+    .slice(0, 48) || "page";
+  return `page:${projectId}_${stable ? slug : uid().replace(/[^a-zA-Z0-9]/g, "")}`;
+}
+
+function migrateProjectDrawings(projectDrawings) {
+  const migrated = {};
+  for (const [projectId, snapshot] of Object.entries(projectDrawings || {})) {
+    const container = snapshot?.document ? snapshot.document : snapshot;
+    const source = container?.store;
+    if (!source || typeof source !== "object") {
+      migrated[projectId] = snapshot;
+      continue;
+    }
+    const records = Object.values(source).filter(
+      (record) => !tldrawInstanceRecordTypes.has(record.typeName),
+    );
+    const pages = records.filter((record) => record.typeName === "page");
+    const names = pages.map((page) => page.name);
+    const uniqueNames = new Set(names).size === names.length;
+    const pageIds = new Map(
+      pages.map((page) => [
+        page.id,
+        projectPageId(projectId, page.name, uniqueNames),
+      ]),
+    );
+    for (const [oldId, newId] of pageIds) {
+      migratedPageIds.set(`${projectId}:${oldId}`, newId);
+    }
+    const remap = (value) =>
+      typeof value === "string" && pageIds.has(value) ? pageIds.get(value) : value;
+    const remapReferences = (value) => {
+      if (Array.isArray(value)) return value.map(remapReferences);
+      if (!value || typeof value !== "object") return remap(value);
+      return Object.fromEntries(
+        Object.entries(value).map(([key, item]) => [
+          key,
+          key === "id" ? item : remapReferences(item),
+        ]),
+      );
+    };
+    const migratedRecords = records.map((record) => {
+      const next = remapReferences(record);
+      next.meta = { ...(record.meta || {}) };
+      if (record.typeName === "page") {
+        next.id = remap(record.id);
+        next.meta.projectId = projectId;
+        if (
+          next.name === "Main Architecture" ||
+          next.name === "Controls Breakout Room"
+        )
+          next.name = next.name === "Main Architecture" ? "Controls" : "Electrical";
+        if (next.name === "Electrical Breakout Room") next.name = "Mechanical";
+      } else {
+        if (next.parentId) next.parentId = remap(next.parentId);
+        if (record.typeName === "shape") next.meta.projectId = projectId;
+      }
+      return next;
+    });
+    const byId = new Map(migratedRecords.map((record) => [record.id, record]));
+    const pageFor = (record, visited = new Set()) => {
+      if (!record || visited.has(record.id)) return null;
+      visited.add(record.id);
+      if (record.typeName === "page") return record.id;
+      return record.parentId ? pageFor(byId.get(record.parentId), visited) : null;
+    };
+    const validShapes = migratedRecords.filter(
+      (record) => record.typeName === "shape" && pageFor(record),
+    );
+    const validIds = new Set([
+      ...migratedRecords
+        .filter((record) => record.typeName === "page" || pageFor(record))
+        .map((record) => record.id),
+      ...validShapes.flatMap((shape) =>
+        shape.props?.assetId ? [shape.props.assetId] : [],
+      ),
+    ]);
+    const output = migratedRecords.filter(
+      (record) => validIds.has(record.id) || record.typeName === "page",
+    );
+    const orphanCount = records.filter(
+      (record) => record.typeName === "shape" && !pageFor(record),
+    ).length;
+    console.info(
+      `[drawing migration] ${projectId}: pages ${pages.length}->${pages.length}, ` +
+        `shapes ${records.filter((record) => record.typeName === "shape").length}->` +
+        `${validShapes.length}, orphans dropped ${orphanCount}`,
+    );
+    const store = Object.fromEntries(output.map((record) => [record.id, record]));
+    migrated[projectId] = snapshot?.document
+      ? { ...snapshot, document: { ...snapshot.document, store } }
+      : { ...snapshot, store };
+  }
+  if (Object.keys(projectDrawings || {}).length) {
+    download(
+      new Blob([JSON.stringify(projectDrawings, null, 2)], {
+        type: "application/json",
+      }),
+      `exo-drawing-migration-backup_${new Date().toISOString().replace(/[.:]/g, "-")}.json`,
+    );
+  }
+  return migrated;
+}
+
+async function remapSavedTldrawViews() {
+  for (const [key, pageId] of migratedPageIds) {
+    const separator = key.indexOf(":");
+    const projectId = key.slice(0, separator);
+    const oldPageId = key.slice(separator + 1);
+    const { error } = await supabaseClient
+      .from("board_view_state")
+      .update({ page_id: pageId })
+      .eq("project_id", projectId)
+      .eq("page_id", oldPageId);
+    if (error && error.code !== "42P01") {
+      console.warn(`Could not migrate saved view for ${projectId}/${oldPageId}:`, error);
+    }
+  }
+}
 function normalizeWorkspaceState(data) {
   const next = { ...initial(), ...(data || {}) };
   delete next.nodes;
@@ -764,6 +982,10 @@ function normalizeWorkspaceState(data) {
     next.projectDrawings.exo = next.tldrawSnapshot;
   }
   delete next.tldrawSnapshot;
+  if (Number(next.drawingSchemaVersion || 0) < 2) {
+    next.projectDrawings = migrateProjectDrawings(next.projectDrawings);
+    next.drawingSchemaVersion = 2;
+  }
   return next;
 }
 document.addEventListener("input", (event) => {
@@ -822,7 +1044,7 @@ function setView(viewName, updateHash = true) {
 }
 let state = initial(),
   view = viewFromLocation(),
-  scope = "exo",
+  scope = "",
   search = "",
   fileTeam = "all",
   bomSearch = "",
@@ -874,7 +1096,13 @@ function cameraForStorage(camera) {
 }
 
 async function saveTldrawView(projectId, pageId, camera) {
-  if (!currentUserId || !projectId || !pageId) return;
+  if (
+    !currentUserId ||
+    !projectId ||
+    !pageId ||
+    !registeredProjectIds.has(projectId)
+  )
+    return;
   const normalizedCamera = cameraForStorage(camera);
   if (!normalizedCamera) return;
   const { error } = await supabaseClient.from("board_view_state").upsert(
@@ -893,6 +1121,26 @@ async function saveTldrawView(projectId, pageId, camera) {
   if (error) {
     notify("Board view size could not be saved: " + error.message);
   }
+}
+
+async function ensureProjectRecord(project) {
+  if (!project?.id || !project.name) return;
+  const { error } = await supabaseClient.from("projects").insert(
+    {
+      id: project.id,
+      name: project.name,
+      description: project.description || "",
+    },
+  );
+  if (
+    error &&
+    error.code !== "42P01" &&
+    error.code !== "23505" &&
+    error.status !== 409
+  ) {
+    throw error;
+  }
+  registeredProjectIds.add(project.id);
 }
 
 async function restoreTldrawView(editor, projectId, pageId) {
@@ -941,17 +1189,91 @@ function documentUpdates(updates) {
     ),
   );
 }
+
+function changedRecords(changes) {
+  return Object.values(changes || {}).map((change) =>
+    Array.isArray(change) ? change[1] : change,
+  );
+}
+
+function isPageRecord(record) {
+  return record?.typeName === "page";
+}
+
+function recordPageId(record, recordsById, visited = new Set()) {
+  if (!record || visited.has(record.id)) return null;
+  visited.add(record.id);
+  if (record.typeName === "page") return record.id;
+  if (!record.parentId) return null;
+  return recordPageId(recordsById.get(record.parentId), recordsById, visited);
+}
+
+function recordsForPage(records, pageId, currentRecords = []) {
+  const allRecords = new Map(
+    [...currentRecords, ...records].map((record) => [record.id, record]),
+  );
+  const pageRecords = records.filter(
+    (record) =>
+      recordPageId(record, allRecords) === pageId ||
+      (record.typeName === "asset" &&
+        [...allRecords.values()].some(
+          (candidate) =>
+            candidate.typeName === "shape" &&
+            candidate.props?.assetId === record.id &&
+            recordPageId(candidate, allRecords) === pageId,
+        )),
+  );
+  return Object.fromEntries(pageRecords.map((record) => [record.id, record]));
+}
+
+function recordBelongsToProject(record, projectId) {
+  if (
+    (record?.typeName === "page" || record?.typeName === "shape") &&
+    !record?.meta?.projectId
+  )
+    return false;
+  return !record?.meta?.projectId || record.meta.projectId === projectId;
+}
+
+function removedRecordsForPage(records, pageId, currentRecords) {
+  return recordsForPage(records, pageId, currentRecords);
+}
+
 function snapshotTldrawStore(store) {
-  return store.getStoreSnapshot();
+  const snapshot = store.getStoreSnapshot();
+  const records = Object.values(snapshot.store || {});
+  const defaultPageIds = new Set(
+    records
+      .filter((record) => record.typeName === "page" && record.id === "page:page")
+      .map((record) => record.id),
+  );
+  let changed = true;
+  while (changed) {
+    changed = false;
+    for (const record of records) {
+      if (record.parentId && defaultPageIds.has(record.parentId) && !defaultPageIds.has(record.id)) {
+        defaultPageIds.add(record.id);
+        changed = true;
+      }
+    }
+  }
+  return {
+    ...snapshot,
+    store: Object.fromEntries(
+      records
+        .filter((record) => !defaultPageIds.has(record.id))
+        .map((record) => [record.id, record]),
+    ),
+  };
 }
 
 function broadcastTldrawPointer(point, active) {
-  if (!workspaceChannel) return;
-  const message = workspaceChannel.send({
+  if (!tldrawChannel || !tldrawEditorProjectId) return;
+  const message = tldrawChannel.send({
     type: "broadcast",
     event: "tldraw-pointer",
     payload: {
-      projectId: scope,
+      projectId: tldrawEditorProjectId,
       pageId: tldrawEditor?.getCurrentPageId() ?? null,
       clientId: tldrawClientId,
       point,
@@ -1061,21 +1383,78 @@ function bindTldrawPointerPresence(container, editor, projectId) {
 }
 
 function applyTldrawChanges(payload) {
-  if (!tldrawEditor || !payload || payload.projectId !== scope) return;
-  const added = documentRecords(payload.added);
-  const updated = documentUpdates(payload.updated);
+  if (
+    !tldrawEditor ||
+    !tldrawEditorProjectId ||
+    !payload ||
+    payload.projectId !== tldrawEditorProjectId
+  )
+    return;
+  const currentRecords = Object.values(
+    tldrawEditor.store.getStoreSnapshot().store || {},
+  ).filter((record) => !tldrawInstanceRecordTypes.has(record.typeName));
+  const addedRecords = changedRecords(payload.added);
+  const updatedRecords = changedRecords(payload.updated);
+  const removedRecords = changedRecords(payload.removed);
+  const currentPageId = tldrawEditor.getCurrentPageId();
+  const pageChanges = [
+    ...addedRecords,
+    ...updatedRecords,
+    ...removedRecords,
+  ].filter(
+    (record) =>
+      isPageRecord(record) &&
+      recordBelongsToProject(record, tldrawEditorProjectId),
+  );
+  const drawingAdded = addedRecords.filter(
+    (record) =>
+      !isPageRecord(record) &&
+      recordBelongsToProject(record, tldrawEditorProjectId),
+  );
+  const drawingUpdated = updatedRecords.filter(
+    (record) =>
+      !isPageRecord(record) &&
+      recordBelongsToProject(record, tldrawEditorProjectId),
+  );
+  const drawingRemoved = removedRecords.filter(
+    (record) =>
+      !isPageRecord(record) &&
+      recordBelongsToProject(record, tldrawEditorProjectId),
+  );
+  const activePageChanges =
+    payload.pageId && payload.pageId === currentPageId
+      ? {
+          added: recordsForPage(drawingAdded, currentPageId, currentRecords),
+          updated: recordsForPage(
+            drawingUpdated,
+            currentPageId,
+            currentRecords,
+          ),
+          removed: removedRecordsForPage(
+            drawingRemoved,
+            currentPageId,
+            currentRecords,
+          ),
+        }
+      : { added: {}, updated: {}, removed: {} };
   applyingTldrawSnapshot = true;
   try {
     tldrawEditor.store.mergeRemoteChanges(() => {
-      tldrawEditor.store.put(Object.values(added));
-      tldrawEditor.store.put(Object.values(updated).map((change) => change[1]));
-      tldrawEditor.store.remove(Object.keys(payload.removed || {}));
+      tldrawEditor.store.put(pageChanges.filter(Boolean));
+      tldrawEditor.store.put(Object.values(activePageChanges.added));
+      tldrawEditor.store.put(Object.values(activePageChanges.updated));
+      tldrawEditor.store.remove([
+        ...removedRecords
+          .filter(isPageRecord)
+          .map((record) => record.id),
+        ...Object.keys(activePageChanges.removed),
+      ]);
     });
     state = {
       ...state,
       projectDrawings: {
         ...state.projectDrawings,
-        [scope]: snapshotTldrawStore(tldrawEditor.store),
+        [tldrawEditorProjectId]: snapshotTldrawStore(tldrawEditor.store),
       },
     };
   } finally {
@@ -1084,42 +1463,72 @@ function applyTldrawChanges(payload) {
 }
 
 function saveActiveTldrawSnapshot() {
-  if (!tldrawEditor) return;
+  if (!tldrawEditor || !tldrawEditorProjectId) return;
+  if (tldrawEditorProjectId !== scope) {
+    console.warn("Skipped drawing save for a project that is no longer active.");
+    return;
+  }
   state = {
     ...state,
     projectDrawings: {
       ...state.projectDrawings,
-      [scope]: snapshotTldrawStore(tldrawEditor.store),
+      [tldrawEditorProjectId]: snapshotTldrawStore(tldrawEditor.store),
     },
   };
 }
 
 function loadProjectTldrawSnapshot(snapshot) {
-  if (!tldrawEditor) return;
+  if (!tldrawEditor || !tldrawEditorProjectId) return;
+  const projectId = tldrawEditorProjectId;
   const doc = snapshot?.document ?? snapshot;
   const records = Object.values(doc?.store || {}).filter(
-    (record) => !tldrawInstanceRecordTypes.has(record.typeName),
+    (record) =>
+      !tldrawInstanceRecordTypes.has(record.typeName) &&
+      recordBelongsToProject(record, projectId),
   ).map((record) => {
-    if (record.typeName !== "page") return record;
+    if (record.typeName !== "page" && record.typeName !== "shape") return record;
     const pageNameMigration = {
       "Main Architecture": "Controls",
       "Controls Breakout Room": "Electrical",
       "Electrical Breakout Room": "Mechanical",
     };
     const nextName = pageNameMigration[record.name];
-    return nextName ? { ...record, name: nextName } : record;
+    return {
+      ...(nextName ? { ...record, name: nextName } : record),
+      ...(record.typeName === "page" || record.typeName === "shape"
+        ? { meta: { ...(record.meta || {}), projectId } }
+        : {}),
+    };
   });
   applyingTldrawSnapshot = true;
   try {
     tldrawEditor.store.mergeRemoteChanges(() => {
+      const currentRecords = Object.values(
+        tldrawEditor.store.getStoreSnapshot().store || {},
+      );
+      const staleRecords = currentRecords.filter(
+        (record) => !tldrawInstanceRecordTypes.has(record.typeName),
+      );
+      if (staleRecords.length) {
+        tldrawEditor.store.remove(staleRecords.map((record) => record.id));
+      }
       tldrawEditor.store.put(records);
-    });
-    const pages = tldrawEditor.getPages();
-    if (!records.length && pages.length === 1 && pages[0].name === "Page 1") {
-      tldrawEditor.renamePage(pages[0].id, "Controls");
-      tldrawEditor.createPage({ name: "Electrical" });
-      tldrawEditor.createPage({ name: "Mechanical" });
-      tldrawEditor.setCurrentPage(pages[0].id);
+      });
+      const pages = tldrawEditor.getPages();
+      if (!records.length) {
+        if (pages.length) tldrawEditor.store.remove(pages.map((page) => page.id));
+        const defaults = ["Controls", "Electrical", "Mechanical"].map((name) =>
+          tldrawEditor.createPage({
+            id: projectPageId(projectId, name, true),
+            name,
+            meta: { projectId },
+          }),
+        );
+        const recreatedDefault = tldrawEditor
+          .getPages()
+          .find((page) => page.id === "page:page");
+        if (recreatedDefault) tldrawEditor.store.remove([recreatedDefault.id]);
+        tldrawEditor.setCurrentPage(defaults[0].id);
     } else if (pages.length) {
       const incomingIds = new Set(records.map((record) => record.id));
       const currentPage = pages.find((page) => incomingIds.has(page.id));
@@ -1135,7 +1544,7 @@ function loadProjectTldrawSnapshot(snapshot) {
       ...state,
       projectDrawings: {
         ...state.projectDrawings,
-        [scope]: snapshotTldrawStore(tldrawEditor.store),
+        [projectId]: snapshotTldrawStore(tldrawEditor.store),
       },
     };
   } finally {
@@ -1145,26 +1554,32 @@ function loadProjectTldrawSnapshot(snapshot) {
 
 function disposeTldrawBoard() {
   tldrawRenderToken += 1;
+  const projectId = scope;
   saveActiveTldrawSnapshot();
   clearTimeout(tldrawViewPersistTimer);
   tldrawViewPersistTimer = null;
   if (tldrawEditor && tldrawLastCameraPageId && tldrawLastCamera) {
     saveTldrawView(
-      scope,
+      projectId,
       tldrawLastCameraPageId,
       tldrawLastCamera,
     );
   }
   tldrawLastCameraPageId = null;
   tldrawLastCamera = null;
-  tldrawUnlisten?.();
+  if (typeof tldrawUnlisten === "function") tldrawUnlisten();
   tldrawUnlisten = null;
+  if (tldrawChannel) {
+    supabaseClient.removeChannel(tldrawChannel);
+    tldrawChannel = null;
+  }
   remoteTldrawPointers.clear();
   $("#tldraw-pointer-overlay")?.replaceChildren();
   tldrawEditor = null;
+  tldrawEditorProjectId = null;
   if (!tldrawRoot) return;
   try {
-    tldrawRoot.unmount();
+    if (typeof tldrawRoot.unmount === "function") tldrawRoot.unmount();
   } catch (error) {
     tldrawRoot = null;
     notify("The drawing board could not be closed cleanly: " + error.message);
@@ -1197,32 +1612,55 @@ async function initTldrawBoard() {
     tldrawRoot = createRoot(container);
     tldrawRoot.render(
       React.createElement(Tldraw, {
-        onMount: async (editor) => {
+        onMount: (editor) => {
           if (renderToken !== tldrawRenderToken || view !== "canvas") {
             return;
           }
           tldrawEditor = editor;
+          tldrawEditorProjectId = projectId;
+          editor.sideEffects.registerBeforeCreateHandler("page", (record) => ({
+            ...record,
+            meta: { ...(record.meta || {}), projectId },
+          }));
+          editor.sideEffects.registerBeforeChangeHandler(
+            "page",
+            (_prev, record) => ({
+              ...record,
+              meta: { ...(record.meta || {}), projectId },
+            }),
+          );
+          editor.sideEffects.registerBeforeCreateHandler("shape", (record) => ({
+            ...record,
+            meta: { ...(record.meta || {}), projectId },
+          }));
+          editor.sideEffects.registerBeforeChangeHandler(
+            "shape",
+            (_prev, record) => ({
+              ...record,
+              meta: { ...(record.meta || {}), projectId },
+            }),
+          );
+          tldrawChannel = supabaseClient
+            .channel(`tldraw:${projectId}`)
+            .on("broadcast", { event: "tldraw-changes" }, ({ payload }) => {
+              applyTldrawChanges(payload);
+            })
+            .on("broadcast", { event: "tldraw-pointer" }, ({ payload }) => {
+              handleTldrawPointer(payload);
+            })
+            .subscribe();
           loadProjectTldrawSnapshot(state.projectDrawings[projectId]);
           tldrawLastCameraPageId = editor.getCurrentPageId();
           tldrawLastCamera = editor.getCamera();
-        try {
-          await restoreTldrawView(
-            editor,
-            projectId,
-            tldrawLastCameraPageId,
-          );
-        } finally {
-          if (tldrawEditor === editor) {
-            tldrawLastCamera = editor.getCamera();
-            container.parentElement?.setAttribute(
-              "data-camera-ready",
-              "true",
-            );
-            container.parentElement?.setAttribute("aria-busy", "false");
-          }
-        }
-        if (tldrawEditor !== editor || view !== "canvas") return;
-        const unbindPointerPresence = bindTldrawPointerPresence(
+          void (async () => {
+            try {
+              await restoreTldrawView(
+                editor,
+                projectId,
+                tldrawLastCameraPageId,
+              );
+              if (tldrawEditor !== editor || view !== "canvas") return;
+              const unbindPointerPresence = bindTldrawPointerPresence(
             container,
             editor,
             projectId,
@@ -1232,7 +1670,7 @@ async function initTldrawBoard() {
               if (
                 applyingTldrawSnapshot ||
                 tldrawEditor !== editor ||
-                scope !== projectId
+                tldrawEditorProjectId !== projectId
               )
                 return;
               state = {
@@ -1251,10 +1689,60 @@ async function initTldrawBoard() {
                     !tldrawInstanceRecordTypes.has(record.typeName),
                 ),
               );
-              const broadcast = workspaceChannel?.send({
+              const currentDocumentRecords = Object.values(
+                editor.store.getStoreSnapshot().store || {},
+              ).filter(
+                (record) => !tldrawInstanceRecordTypes.has(record.typeName),
+              );
+              const currentPageId = editor.getCurrentPageId();
+              const addedRecords = Object.values(added);
+              const updatedRecords = Object.values(updated).map(
+                (change) => change[1],
+              );
+              const removedRecords = Object.values(removed);
+              const broadcast = tldrawChannel?.send({
                 type: "broadcast",
                 event: "tldraw-changes",
-                payload: { projectId, added, updated, removed },
+                payload: {
+                    projectId,
+                    pageId: currentPageId,
+                    added: [
+                      ...addedRecords.filter(isPageRecord),
+                      ...Object.values(
+                        recordsForPage(
+                          addedRecords.filter(
+                            (record) => !isPageRecord(record),
+                          ),
+                          currentPageId,
+                          currentDocumentRecords,
+                        ),
+                      ),
+                    ],
+                    updated: [
+                      ...updatedRecords.filter(isPageRecord),
+                      ...Object.values(
+                        recordsForPage(
+                          updatedRecords.filter(
+                            (record) => !isPageRecord(record),
+                          ),
+                          currentPageId,
+                          currentDocumentRecords,
+                        ),
+                      ),
+                    ],
+                    removed: [
+                      ...removedRecords.filter(isPageRecord),
+                      ...Object.values(
+                        removedRecordsForPage(
+                          removedRecords.filter(
+                            (record) => !isPageRecord(record),
+                          ),
+                          currentPageId,
+                          currentDocumentRecords,
+                        ),
+                      ),
+                    ],
+                },
               });
               broadcast?.catch((error) =>
                 notify("Live drawing update failed: " + error.message),
@@ -1265,7 +1753,7 @@ async function initTldrawBoard() {
           );
           const unlistenCamera = editor.store.listen(
             () => {
-              if (tldrawEditor !== editor || scope !== projectId) return;
+              if (tldrawEditor !== editor || tldrawEditorProjectId !== projectId) return;
               const pageId = editor.getCurrentPageId();
               const camera = editor.getCamera();
               if (
@@ -1288,11 +1776,26 @@ async function initTldrawBoard() {
           );
           const previousUnlisten = tldrawUnlisten;
           tldrawUnlisten = () => {
-            previousUnlisten();
+            if (typeof previousUnlisten === "function") previousUnlisten();
             unlistenCamera();
             unbindPointerPresence();
           };
           renderRemoteTldrawPointers();
+            } catch (error) {
+              if (tldrawEditor === editor) {
+                notify("The drawing board could not be loaded: " + error.message);
+              }
+            } finally {
+              if (tldrawEditor === editor) {
+                tldrawLastCamera = editor.getCamera();
+                container.parentElement?.setAttribute(
+                  "data-camera-ready",
+                  "true",
+                );
+                container.parentElement?.setAttribute("aria-busy", "false");
+              }
+            }
+          })();
         },
       }),
     );
@@ -1303,20 +1806,11 @@ async function initTldrawBoard() {
   }
 }
 
-const folderIds = [
-  ["exo", "Controls", "1Pdx0N6EHctdZKqb7P29tVHuNVr8v8yrN"],
-  ["exo", "Electrical", "1WLCSZ5bMisg1GjJH-oVJhsXjM938elaR"],
-  ["exo", "Mechanical", "1sMgbFofCqB6DEapmZF6tF5tD1TZEUM76"],
-  ["pid-spoon", "Controls", "1jie8n23dzmk5Pc_jcJEEmj1bJYQxc9Tl"],
-  ["pid-spoon", "Electrical", "16DcGIMgwtcuZrYI7QaQJs6lVmQ6q1_ZE"],
-  ["pid-spoon", "Mechanical", "1a1LPEQUeCjfbkV6nDJag9Hsq55-Go0J8"],
-];
 const driveTestFolderId = ROOT_DRIVE_FOLDER_ID;
 const teamLabel = (project, team) =>
   project === "pid-spoon" && team === "Mechanical" ? "CAD" : team;
 const driveFolderFor = (project, team) =>
-  folderIds.find(([folderProject, folderTeam]) =>
-    folderProject === project && folderTeam === team)?.[2] || null;
+  state.projects.find((item) => item.id === project)?.driveFolderId || null;
 const driveFoldersFor = (project, team) =>
   driveFolders.filter(
     (folder) => folder.project === project && folder.team === team,
@@ -1336,20 +1830,27 @@ const driveFolderOptions = (project, team, selectedId = "") => {
     })
     .join("");
 };
-const knownResources = folderIds.map(([project, team, id]) => ({
-    id,
-    project,
-    team,
-    title: teamLabel(project, team) + " Drive folder",
-    url: "https://drive.google.com/drive/folders/" + id,
-  }));
+const knownResources = () =>
+  state.projects
+    .filter((project) => project.driveFolderId)
+    .map((project) => ({
+      id: project.driveFolderId,
+      project: project.id,
+      team: "Shared",
+      title: "Project Drive folder",
+      url: "https://drive.google.com/drive/folders/" + project.driveFolderId,
+    }));
 const nameOf = (id) =>
   state.projects.find((p) => p.id === id)?.name || "Unknown project";
 const inScope = (item) => item.project === scope;
 const currentProject = () => scope;
 function switchProject(projectId) {
   if (!projectId || projectId === scope) return;
-  saveActiveTldrawSnapshot();
+  if (view === "canvas") {
+    disposeTldrawBoard();
+  } else {
+    saveActiveTldrawSnapshot();
+  }
   persist();
   scope = projectId;
   search = "";
@@ -1361,12 +1862,7 @@ function switchProject(projectId) {
   render();
 }
 const teamOptions = (value, project = null) =>
-  (project
-    ? folderIds
-        .filter(([folderProject]) => folderProject === project)
-        .map(([, team]) => team)
-    : teams
-  )
+  teams
     .map(
       (t) =>
         `<option value="${esc(t)}" ${value === t ? "selected" : ""}>${esc(teamLabel(project, t))}</option>`,
@@ -1519,20 +2015,36 @@ function projectForm() {
       notify("A project with that name already exists.");
       return;
     }
-    const p = { id: uid(), name, description: String(form.get("description")) };
-    state.projects.push(p);
-    scope = p.id;
-    await persist();
-    $("#dialog").close();
-    render();
+    try {
+      if (!googleAccessToken) {
+        throw new Error("Reconnect Google Drive before creating a project.");
+      }
+      const folder = await createDriveFolder(name, ROOT_DRIVE_FOLDER_ID);
+      await syncDriveFiles();
+      const project = state.projects.find(
+        (item) => item.driveFolderId === folder.id,
+      );
+      if (!project) {
+        throw new Error("The new Drive folder was not found after refreshing projects.");
+      }
+      const description = String(form.get("description") || "").trim();
+      if (description) {
+        project.description = description;
+      }
+      scope = project.id;
+      await persist();
+      $("#dialog").close();
+      render();
+    } catch (error) {
+      notify("Project could not be created: " + error.message);
+    }
   };
 }
 
 // Save locally in IndexedDB and upload to the selected Google Drive folder.
 function showUpload(photos = false) {
   const initialProject = currentProject();
-  const initialTeam =
-    folderIds.find(([project]) => project === initialProject)?.[1] || "";
+  const initialTeam = teams[0];
   const initialFolder = driveFoldersFor(initialProject, initialTeam)[0]?.id ||
     driveFolderFor(initialProject, initialTeam);
   const accept = photos
@@ -2493,7 +3005,7 @@ async function previewBOM() {
   }
 }
 function resourcesHTML() {
-  const links = [...knownResources, ...state.resources].filter(inScope);
+  const links = [...knownResources(), ...state.resources].filter(inScope);
   return `<section class="panel"><div class="panel-head"><div><h2>Repositories & links</h2><p>Open project Google Drive folders and other project references.</p></div></div><div class="resource-grid">${links.map((r) => `<a class="resource" href="${esc(r.url)}" target="_blank" rel="noopener noreferrer"><div><b>${esc(r.title)}</b><small>${esc(nameOf(r.project))} · ${esc(r.team)}</small></div><span>↗</span></a>`).join("")}</div>${!links.length ? empty("↗", "Connect your project.", "Add a Drive folder or reference link.") : ""}</section>`;
 }
 function resourceForm() {
@@ -2992,9 +3504,9 @@ document.addEventListener("visibilitychange", () => {
   clearTimeout(tldrawViewPersistTimer);
   tldrawViewPersistTimer = null;
   saveActiveTldrawSnapshot();
-  if (tldrawEditor) {
+  if (tldrawEditor && tldrawEditorProjectId === scope) {
     saveTldrawView(
-      scope,
+      tldrawEditorProjectId,
       tldrawEditor.getCurrentPageId(),
       tldrawEditor.getCamera(),
     );
@@ -3028,21 +3540,22 @@ $("#tldraw-board-restore-input").onchange = async (event) => {
     ) {
       throw new Error("That file is not a valid Tldraw page backup.");
     }
-    const projectName = nameOf(scope);
-    const projectNote =
-      parsed.projectId !== scope
-        ? ` It was exported from ${parsed.projectName || parsed.projectId}.`
-        : "";
+    if (parsed.projectId !== tldrawEditorProjectId || tldrawEditorProjectId !== scope) {
+      throw new Error(
+        `This backup belongs to ${parsed.projectName || parsed.projectId}, not ${nameOf(scope)}.`,
+      );
+    }
+    const projectName = nameOf(tldrawEditorProjectId);
     if (
       !confirm(
-        `Restore the "${parsed.pageName || parsed.pageId}" page in ${projectName}?${projectNote} The current page content will be replaced for everyone.`,
+        `Restore the "${parsed.pageName || parsed.pageId}" page in ${projectName}? The current page content will be replaced for everyone.`,
       )
     ) {
       return;
     }
     if (googleAccessToken) {
       try {
-        await backupBoardToDrive(scope);
+        await backupBoardToDrive(tldrawEditorProjectId);
       } catch (error) {
         warn("Safety backup failed: " + error.message);
       }
@@ -3052,8 +3565,8 @@ $("#tldraw-board-restore-input").onchange = async (event) => {
       ...state,
       projectDrawings: {
         ...state.projectDrawings,
-        [scope]: replacePageInSnapshot(
-          boardBackupSnapshot(scope) || { store: {} },
+        [tldrawEditorProjectId]: replacePageInSnapshot(
+          boardBackupSnapshot(tldrawEditorProjectId) || { store: {} },
           snapshot,
           parsed.pageId,
         ),
@@ -3076,18 +3589,30 @@ $("#tldraw-board-restore-input").onchange = async (event) => {
       .single();
 
     if (error || !data?.data) throw error || new Error("Workspace row was not found.");
+    const needsDrawingMigration =
+      Number(data.data.drawingSchemaVersion || 0) < 2;
     state = normalizeWorkspaceState(data?.data);
+    if (migratedPageIds.size) await remapSavedTldrawViews();
     workspaceLoaded = true;
     storageAvailable = true;
+    if (needsDrawingMigration) await persist();
+    for (const project of state.projects) {
+      try {
+        await ensureProjectRecord(project);
+      } catch (error) {
+        if (error?.code === "42501" || error?.status === 403) {
+          console.warn(
+            `Project registration is blocked by RLS for ${project.name}. ` +
+              "Apply the projects insert policy from supabase-schema.sql.",
+          );
+        } else {
+          console.warn(`Project registration failed for ${project.name}:`, error);
+        }
+      }
+    }
     // Listen for live updates from other team members
     workspaceChannel = supabaseClient
       .channel("workspace-updates")
-      .on("broadcast", { event: "tldraw-changes" }, ({ payload }) => {
-        applyTldrawChanges(payload);
-      })
-      .on("broadcast", { event: "tldraw-pointer" }, ({ payload }) => {
-        handleTldrawPointer(payload);
-      })
       .on(
         "postgres_changes",
         {
@@ -3098,7 +3623,22 @@ $("#tldraw-board-restore-input").onchange = async (event) => {
         },
         (payload) => {
           if (payload.new && payload.new.data) {
-            state = normalizeWorkspaceState(payload.new.data);
+            const nextState = normalizeWorkspaceState(payload.new.data);
+            const activeDrawing =
+              view === "canvas" &&
+              tldrawEditor &&
+              tldrawEditorProjectId &&
+              tldrawEditorProjectId === scope &&
+              snapshotTldrawStore(tldrawEditor.store);
+            state = activeDrawing
+              ? {
+                  ...nextState,
+                  projectDrawings: {
+                    ...nextState.projectDrawings,
+                    [tldrawEditorProjectId]: activeDrawing,
+                  },
+                }
+              : nextState;
 
             if (view !== "canvas") {
               render();
