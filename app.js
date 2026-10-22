@@ -827,7 +827,7 @@ const initial = () => ({
   projects: [],
   files: [],
   projectDrawings: {},
-  groupUpdates: [],
+  groups: [],
   projectUpdates: {},
   resources: [],
   bom: {},
@@ -975,9 +975,17 @@ function normalizeWorkspaceState(data) {
   ) {
     next.projectUpdates = {};
   }
-  if (!Array.isArray(next.groupUpdates)) {
-    next.groupUpdates = [];
+  delete next.groupUpdates;
+  if (!Array.isArray(next.groups)) {
+    next.groups = [];
   }
+  next.groups = next.groups
+    .filter((group) => group && typeof group === "object")
+    .map((group) => ({
+      id: String(group.id || uid()),
+      name: String(group.name || "Unnamed group").trim() || "Unnamed group",
+      updates: Array.isArray(group.updates) ? group.updates : [],
+    }));
   if (next.tldrawSnapshot && !next.projectDrawings.exo) {
     next.projectDrawings.exo = next.tldrawSnapshot;
   }
@@ -1045,12 +1053,14 @@ function setView(viewName, updateHash = true) {
 let state = initial(),
   view = viewFromLocation(),
   scope = "",
+  selectedGroupId = localStorage.getItem("exo_selected_group") || "",
   search = "",
   fileTeam = "all",
   bomSearch = "",
   bomTeam = "all",
   bomStage = "all",
   bomPrice = "all",
+  showAllGroupUpdates = false,
   storageAvailable = false,
   saving = Promise.resolve(),
   urls = new Map(),
@@ -1072,6 +1082,25 @@ let state = initial(),
   driveExplorerAbortController = null;
 function firstName(value) {
   return String(value || "Collaborator").trim().split(/\s+/)[0] || "Collaborator";
+}
+function initials(value) {
+  return String(value || "C")
+    .trim()
+    .split(/\s+/)
+    .map((part) => part[0])
+    .join("")
+    .slice(0, 2)
+    .toUpperCase() || "C";
+}
+function relativeTime(value) {
+  const seconds = Math.max(0, Math.floor((Date.now() - new Date(value).getTime()) / 1000));
+  if (seconds < 60) return "just now";
+  const minutes = Math.floor(seconds / 60);
+  if (minutes < 60) return `${minutes}m ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours}h ago`;
+  const days = Math.floor(hours / 24);
+  return days < 7 ? `${days}d ago` : new Date(value).toLocaleDateString();
 }
 
 function scheduleTldrawPersist() {
@@ -1844,6 +1873,41 @@ const nameOf = (id) =>
   state.projects.find((p) => p.id === id)?.name || "Unknown project";
 const inScope = (item) => item.project === scope;
 const currentProject = () => scope;
+function currentGroup() {
+  return (
+    state.groups.find((group) => group.id === selectedGroupId) ||
+    state.groups[0] ||
+    null
+  );
+}
+function selectGroup(groupId) {
+  if (groupId === "__new-group__") {
+    groupForm();
+    return;
+  }
+  const group = state.groups.find((item) => item.id === groupId);
+  if (!group) return;
+  selectedGroupId = group.id;
+  localStorage.setItem("exo_selected_group", selectedGroupId);
+  render();
+}
+async function removeGroup(groupId) {
+  const group = state.groups.find((item) => item.id === groupId);
+  if (!group) return;
+  if (!confirm(`Remove "${group.name}" and all of its updates?`)) return;
+  const groups = state.groups.filter((item) => item.id !== groupId);
+  state = normalizeWorkspaceState({ ...state, groups });
+  if (selectedGroupId === groupId) {
+    selectedGroupId = groups[0]?.id || "";
+    if (selectedGroupId) {
+      localStorage.setItem("exo_selected_group", selectedGroupId);
+    } else {
+      localStorage.removeItem("exo_selected_group");
+    }
+  }
+  await persist();
+  render();
+}
 function switchProject(projectId) {
   if (!projectId || projectId === scope) return;
   if (view === "canvas") {
@@ -1998,6 +2062,40 @@ function openModal(title, html) {
 }
 const actions = (label) =>
   `<div class="modal-actions"><button type="button" class="secondary" data-close>Cancel</button><button type="submit" class="primary">${label}</button></div>`;
+
+function groupForm() {
+  openModal(
+    "Create a group",
+    `<form id="group-form"><label class="field">Group name<input name="name" maxlength="80" placeholder="Name your group" required autofocus></label>${actions("Create group")}</form>`,
+  );
+  $("#group-form").onsubmit = async (event) => {
+    event.preventDefault();
+    const name = String(new FormData(event.target).get("name") || "").trim();
+    if (!name) return;
+    if (
+      state.groups.some(
+        (group) => group.name.toLowerCase() === name.toLowerCase(),
+      )
+    ) {
+      notify("A group with that name already exists.");
+      return;
+    }
+    const group = { id: uid(), name, updates: [] };
+    state = normalizeWorkspaceState({
+      ...state,
+      groups: [...state.groups, group],
+    });
+    selectedGroupId = group.id;
+    localStorage.setItem("exo_selected_group", selectedGroupId);
+    try {
+      await persist();
+      $("#dialog").close();
+      render();
+    } catch (error) {
+      notify("Group could not be saved: " + error.message);
+    }
+  };
+}
 
 function projectForm() {
   openModal(
@@ -2499,21 +2597,23 @@ function deleteSelection() {
   tldrawEditor.deleteShapes(shapeIds);
 }
 function overviewHTML() {
-  const groupUpdates = state.groupUpdates || [];
-  const updates = state.projectUpdates[scope] || [];
+  const group = currentGroup();
+  const updates = group?.updates || [];
   const updateListMarkup = (items, emptyMessage) => items.length
     ? `
         <div class="updates-list">
           ${items
+            .slice(0, showAllGroupUpdates ? items.length : 3)
             .map(
               (update) => `
                 <article class="update-item">
-                  <div>
-                    <strong>${esc(update.message)}</strong>
-                    <small>
-                      ${esc(update.author || "Team member")} ·
-                      ${new Date(update.createdAt).toLocaleString()}
-                    </small>
+                  <span class="update-avatar">${esc(initials(update.author))}</span>
+                  <div class="update-content">
+                    <div class="update-meta">
+                      <strong>${esc(update.author || "Team member")}</strong>
+                      <small>${esc(relativeTime(update.createdAt))}</small>
+                    </div>
+                    <p>${esc(update.message)}</p>
                   </div>
                   <button
                     class="update-remove"
@@ -2521,24 +2621,21 @@ function overviewHTML() {
                     data-update-delete="${esc(update.id)}"
                     aria-label="Remove update"
                     title="Remove update"
-                  >
-                    ×
-                  </button>
+                  >×</button>
                 </article>
               `,
             )
             .join("")}
+          ${items.length > 3 && !showAllGroupUpdates ? `<button class="show-earlier-updates" type="button" data-group-show-earlier>Show earlier updates</button>` : ""}
         </div>
       `
     : `
         <div class="updates-empty">
-          <p>${emptyMessage}</p>
+          <span class="updates-empty-icon" aria-hidden="true">✦</span>
+          <strong>${emptyMessage}</strong>
+          <p>Post the first one to let the group know what’s happening.</p>
         </div>
       `;
-  const groupUpdatesMarkup = updateListMarkup(
-    groupUpdates,
-    "No group news yet. Share an update with everyone.",
-  );
   const updatesMarkup = updateListMarkup(
     updates,
     "No updates yet. Start writing above to let the team know what is happening.",
@@ -2548,47 +2645,74 @@ function overviewHTML() {
     <section class="overview-updates panel">
       <div class="panel-head">
         <div>
-          <h2>Group news</h2>
-          <p>Updates shared with everyone across all projects.</p>
+          <h2>Group Updates</h2>
+          <p>Shared notes for small teams and groups</p>
+        </div>
+        <div class="group-picker">
+          <span class="group-picker-label">Posting to</span>
+          <button
+            id="group-context"
+            class="group-picker-button"
+            type="button"
+            aria-haspopup="menu"
+            aria-expanded="false"
+          >
+            <span class="group-picker-name"><i aria-hidden="true"></i>${esc(group?.name || "Select a group")}</span>
+            <span class="group-picker-chevron" aria-hidden="true">⌄</span>
+          </button>
+          <small>${group?.memberCount || group?.members?.length || 0} members</small>
+          <div class="group-picker-menu" role="menu" hidden>
+            ${state.groups
+              .map(
+                (item) => `
+                  <div class="group-picker-option" role="menuitem">
+                    <button type="button" data-group-select="${esc(item.id)}">
+                      ${esc(item.name)}
+                    </button>
+                    <button
+                      type="button"
+                      class="group-picker-remove"
+                      data-group-delete="${esc(item.id)}"
+                      aria-label="Remove ${esc(item.name)}"
+                      title="Remove group"
+                    >×</button>
+                  </div>
+                `,
+              )
+              .join("")}
+            <button type="button" class="group-picker-add" data-group-select="__new-group__">
+              + Add New Group
+            </button>
+          </div>
         </div>
       </div>
 
-      <form id="group-update-composer" class="update-composer">
-        <input
-          name="message"
-          maxlength="500"
-          placeholder="Share news with the whole group…"
-          aria-label="Share group news"
-          required
-        >
-        <span>Press Enter to post</span>
-      </form>
-
-      ${groupUpdatesMarkup}
-    </section>
-
-    <section class="overview-updates panel">
-      <div class="panel-head">
-        <div>
-          <h2>Project updates</h2>
-          <p>
-            Shared notes for everyone working on ${esc(nameOf(scope))}.
-          </p>
+      ${
+        group
+          ? `<form id="update-composer" class="update-composer">
+        <span class="composer-avatar">${esc(initials(tldrawPointerName))}</span>
+        <div class="composer-box">
+          <textarea
+            name="message"
+            maxlength="500"
+            placeholder="Write an update for ${esc(group.name)}…"
+            aria-label="Write a group update"
+            rows="2"
+            required
+          ></textarea>
+          <div class="composer-footer">
+            <span>Enter to post · Shift+Enter for a new line</span>
+            <button type="submit" class="primary" disabled>Post</button>
+          </div>
         </div>
-      </div>
-
-      <form id="update-composer" class="update-composer">
-        <input
-          name="message"
-          maxlength="500"
-          placeholder="Write an update and press Enter…"
-          aria-label="Write a team update"
-          required
-        >
-        <span>Press Enter to post</span>
       </form>
 
-      ${updatesMarkup}
+      ${updateListMarkup(
+        updates,
+        `No updates for ${esc(group.name)} yet`,
+      )}`
+          : `<div class="updates-empty"><p>Create a group to start sharing updates.</p></div>`
+      }
     </section>
 
     <div class="overview-actions">
@@ -2638,50 +2762,33 @@ async function saveOverviewUpdate(event) {
   const input = event.target.elements.message;
   const message = input.value.trim();
   if (!message) return;
-  const projectUpdates = { ...state.projectUpdates };
-  projectUpdates[scope] = [
-    {
-      id: uid(),
-      message,
-      author: tldrawPointerName,
-      createdAt: new Date().toISOString(),
-    },
-    ...(projectUpdates[scope] || []),
-  ];
+  const group = currentGroup();
+  if (!group) return;
+  const groups = state.groups.map((item) =>
+    item.id === group.id
+      ? {
+          ...item,
+          updates: [
+            {
+              id: uid(),
+              message,
+              author: tldrawPointerName,
+              createdAt: new Date().toISOString(),
+            },
+            ...(item.updates || []),
+          ],
+        }
+      : item,
+  );
   input.disabled = true;
-  state = normalizeWorkspaceState({ ...state, projectUpdates });
+  state = normalizeWorkspaceState({ ...state, groups });
   try {
     await persist();
     render();
-    $("#update-composer input")?.focus();
+    $("#update-composer textarea")?.focus();
   } catch (error) {
     input.disabled = false;
-    notify("Update could not be saved: " + error.message);
-  }
-}
-async function saveGroupUpdate(event) {
-  event.preventDefault();
-  const input = event.target.elements.message;
-  const message = input.value.trim();
-  if (!message) return;
-  const groupUpdates = [
-    {
-      id: uid(),
-      message,
-      author: tldrawPointerName,
-      createdAt: new Date().toISOString(),
-    },
-    ...(state.groupUpdates || []),
-  ];
-  input.disabled = true;
-  state = normalizeWorkspaceState({ ...state, groupUpdates });
-  try {
-    await persist();
-    render();
-    $("#group-update-composer input")?.focus();
-  } catch (error) {
-    input.disabled = false;
-    notify("Group news could not be saved: " + error.message);
+    notify("Group update could not be saved: " + error.message);
   }
 }
 function fileRows(files) {
@@ -3268,10 +3375,30 @@ function render() {
               ? bomHTML()
               : resourcesHTML();
   if (view === "overview") {
-    const groupUpdateComposer = $("#group-update-composer");
-    if (groupUpdateComposer) groupUpdateComposer.onsubmit = saveGroupUpdate;
     const updateComposer = $("#update-composer");
-    if (updateComposer) updateComposer.onsubmit = saveOverviewUpdate;
+    if (updateComposer) {
+      updateComposer.onsubmit = saveOverviewUpdate;
+      const messageInput = updateComposer.elements.message;
+      const postButton = updateComposer.querySelector('button[type="submit"]');
+      messageInput.oninput = () => {
+        postButton.disabled = !messageInput.value.trim();
+      };
+      messageInput.onkeydown = (event) => {
+        if (event.key === "Enter" && !event.shiftKey) {
+          event.preventDefault();
+          if (messageInput.value.trim()) updateComposer.requestSubmit();
+        }
+      };
+    }
+    const groupContext = $("#group-context");
+    if (groupContext) {
+      groupContext.onclick = () => {
+        const menu = groupContext.parentElement.querySelector(".group-picker-menu");
+        const expanded = groupContext.getAttribute("aria-expanded") === "true";
+        groupContext.setAttribute("aria-expanded", String(!expanded));
+        menu.hidden = expanded;
+      };
+    }
   }
   if (view === "canvas") {
     initTldrawBoard();
@@ -3318,6 +3445,15 @@ window.addEventListener("hashchange", () => {
   render();
 });
 document.addEventListener("click", async (e) => {
+  const picker = e.target.closest(".group-picker");
+  if (!picker) {
+    $$(".group-picker-menu").forEach((menu) => {
+      menu.hidden = true;
+    });
+    $$(".group-picker-button").forEach((button) => {
+      button.setAttribute("aria-expanded", "false");
+    });
+  }
   const el = e.target.closest("button,a,tr");
   if (!el) return;
   if (el.dataset.view) {
@@ -3392,21 +3528,36 @@ document.addEventListener("click", async (e) => {
     );
     $("#dialog").classList.add("lightbox");
   }
+  if (el.dataset.groupSelect) {
+    selectGroup(el.dataset.groupSelect);
+    return;
+  }
+  if (el.dataset.groupDelete) {
+    await removeGroup(el.dataset.groupDelete);
+    return;
+  }
+  if (el.dataset.groupShowEarlier !== undefined) {
+    showAllGroupUpdates = true;
+    render();
+    return;
+  }
   if (el.dataset.updateDelete) {
-    const update = (state.groupUpdates || [])
-      .concat(state.projectUpdates[scope] || [])
-      .find((item) => item.id === el.dataset.updateDelete);
+    const group = currentGroup();
+    const update = group?.updates.find(
+      (item) => item.id === el.dataset.updateDelete,
+    );
     if (update) {
-      const groupUpdates = (state.groupUpdates || []).filter(
-        (item) => item.id !== el.dataset.updateDelete,
+      const groups = state.groups.map((item) =>
+        item.id === group.id
+          ? {
+              ...item,
+              updates: item.updates.filter(
+                (item) => item.id !== el.dataset.updateDelete,
+              ),
+            }
+          : item,
       );
-      const projectUpdates = {
-        ...state.projectUpdates,
-        [scope]: (state.projectUpdates[scope] || []).filter(
-          (item) => item.id !== el.dataset.updateDelete,
-        ),
-      };
-      state = normalizeWorkspaceState({ ...state, groupUpdates, projectUpdates });
+      state = normalizeWorkspaceState({ ...state, groups });
       await persist();
       render();
     }
@@ -3592,6 +3743,14 @@ $("#tldraw-board-restore-input").onchange = async (event) => {
     const needsDrawingMigration =
       Number(data.data.drawingSchemaVersion || 0) < 2;
     state = normalizeWorkspaceState(data?.data);
+    if (!state.groups.some((group) => group.id === selectedGroupId)) {
+      selectedGroupId = state.groups[0]?.id || "";
+      if (selectedGroupId) {
+        localStorage.setItem("exo_selected_group", selectedGroupId);
+      } else {
+        localStorage.removeItem("exo_selected_group");
+      }
+    }
     if (migratedPageIds.size) await remapSavedTldrawViews();
     workspaceLoaded = true;
     storageAvailable = true;
@@ -3624,6 +3783,14 @@ $("#tldraw-board-restore-input").onchange = async (event) => {
         (payload) => {
           if (payload.new && payload.new.data) {
             const nextState = normalizeWorkspaceState(payload.new.data);
+            if (!nextState.groups.some((group) => group.id === selectedGroupId)) {
+              selectedGroupId = nextState.groups[0]?.id || "";
+              if (selectedGroupId) {
+                localStorage.setItem("exo_selected_group", selectedGroupId);
+              } else {
+                localStorage.removeItem("exo_selected_group");
+              }
+            }
             const activeDrawing =
               view === "canvas" &&
               tldrawEditor &&
