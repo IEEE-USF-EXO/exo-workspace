@@ -2018,6 +2018,67 @@ dialog::backdrop {
 @media (max-width: 768px) {
   html,
   body,
+  main,
+  .app {
+    width: 100%;
+    max-width: 100vw;
+    overflow-x: hidden;
+  }
+  .app[data-view="files"] .drive-explorer,
+  .app[data-view="files"] .drive-toolbar,
+  .app[data-view="files"] .drive-toolbar-location,
+  .app[data-view="files"] .drive-toolbar-actions,
+  .app[data-view="files"] .drive-breadcrumbs,
+  .app[data-view="files"] .drive-control-row,
+  .app[data-view="files"] .drive-controls,
+  .app[data-view="files"] .drive-section,
+  .app[data-view="files"] .drive-section-head,
+  .app[data-view="files"] .drive-folder-grid,
+  .app[data-view="files"] .drive-files-section,
+  .app[data-view="files"] .drive-file-grid,
+  .app[data-view="files"] .drive-file-card,
+  .app[data-view="files"] .drive-file,
+  .app[data-view="files"] .drive-name,
+  .app[data-view="files"] .drive-empty,
+  .app[data-view="files"] .drive-reconnect {
+    width: 100% !important;
+    max-width: 100% !important;
+    min-width: 0 !important;
+    box-sizing: border-box;
+  }
+  .app[data-view="files"] .drive-explorer {
+    overflow-x: hidden;
+  }
+  .app[data-view="files"] .drive-toolbar,
+  .app[data-view="files"] .drive-control-row,
+  .app[data-view="files"] .drive-controls {
+    flex-wrap: wrap;
+  }
+  .app[data-view="files"] .drive-toolbar-actions,
+  .app[data-view="files"] .drive-search {
+    flex: 1 1 100%;
+  }
+  .app[data-view="files"] .drive-search input,
+  .app[data-view="files"] .drive-file-card b,
+  .app[data-view="files"] .drive-file-card small,
+  .app[data-view="files"] .drive-folder-card b {
+    min-width: 0;
+    max-width: 100%;
+    white-space: normal;
+    overflow-wrap: anywhere;
+  }
+  .app[data-view="files"] .drive-table-wrap {
+    width: 100%;
+    max-width: 100%;
+    min-width: 0;
+    overflow-x: auto;
+  }
+  .app[data-view="files"] .drive-table {
+    width: max-content;
+    min-width: 680px;
+  }
+  html,
+  body,
   *,
   .app,
   .content,
