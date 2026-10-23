@@ -702,7 +702,7 @@ async function syncDriveFiles() {
     const rootChildren = await listDriveChildren(ROOT_DRIVE_FOLDER_ID);
     const projectFolders = rootChildren.filter(isDriveProjectFolder);
     const previousProjects = state.projects;
-    const projects = projectFolders.map((folder) => ({
+    const linkedProjects = projectFolders.map((folder) => ({
       id: driveProjectId(folder, previousProjects),
       name: folder.name,
       description:
@@ -710,6 +710,11 @@ async function syncDriveFiles() {
           ?.description || "",
       driveFolderId: folder.id,
     }));
+    const linkedProjectIds = new Set(linkedProjects.map((project) => project.id));
+    const projects = [
+      ...linkedProjects,
+      ...previousProjects.filter((project) => !linkedProjectIds.has(project.id)),
+    ];
     const projectByFolderId = new Map(
       projects.map((project, index) => [projectFolders[index].id, project]),
     );
@@ -752,29 +757,19 @@ async function syncDriveFiles() {
     }
     driveFolders = folders;
     const projectIds = new Set(projects.map((project) => project.id));
-    const projectDrawings = Object.fromEntries(
-      Object.entries(state.projectDrawings).filter(([id]) => projectIds.has(id)),
-    );
-    const projectUpdates = Object.fromEntries(
-      Object.entries(state.projectUpdates).filter(([id]) => projectIds.has(id)),
-    );
+    // Drive is an integration, not the source of truth for workspace data.
+    // Keep records for projects that are temporarily absent or renamed in Drive.
     state = normalizeWorkspaceState({
       ...state,
       projects,
       files: driveFiles,
-      resources: state.resources.filter((resource) => projectIds.has(resource.project)),
-      projectDrawings,
-      projectUpdates,
-      bom: Object.fromEntries(
-        Object.entries(state.bom).filter(([id]) => projectIds.has(id)),
-      ),
     });
     const nextScope = projectIds.has(scope) ? scope : projects[0]?.id || "";
     if (nextScope !== scope && view === "canvas") {
       disposeTldrawBoard();
     }
     scope = nextScope;
-    for (const project of projects) await ensureProjectRecord(project);
+    for (const project of linkedProjects) await ensureProjectRecord(project);
     await persist();
     render();
   } finally {
@@ -2293,10 +2288,58 @@ function centerCard() {
     v ? (v.scrollTop + v.clientHeight / 2) / zoom - 60 : 100,
   );
 }
-function showStorage() {
+async function exportWorkspaceState() {
+  if (!currentUserId) {
+    notify("Sign in as an administrator to export workspace state.");
+    return;
+  }
+  const { data: admin, error: adminError } = await supabaseClient
+    .from("global_admins")
+    .select("user_id")
+    .eq("user_id", currentUserId)
+    .maybeSingle();
+  if (adminError) {
+    notify("Administrator check failed: " + adminError.message);
+    return;
+  }
+  if (!admin) {
+    notify("Only administrators can export workspace state.");
+    return;
+  }
+  const { data, error } = await supabaseClient
+    .from("workspace_state")
+    .select("data")
+    .eq("id", 1)
+    .single();
+  if (error) {
+    notify("Workspace export failed: " + error.message);
+    return;
+  }
+  download(
+    new Blob([JSON.stringify(data.data, null, 2)], {
+      type: "application/json",
+    }),
+    `workspace_state_${new Date().toISOString().replace(/[:.]/g, "-")}.json`,
+  );
+  notify("Workspace state exported.");
+}
+
+async function showStorage() {
+  let adminExport = "";
+  if (currentUserId) {
+    const { data } = await supabaseClient
+      .from("global_admins")
+      .select("user_id")
+      .eq("user_id", currentUserId)
+      .maybeSingle();
+    if (data) {
+      adminExport =
+        '<button class="secondary" data-action="export-workspace">Export everything</button>';
+    }
+  }
   openModal(
     "Your workspace storage",
-    `<p class="hint">This workspace stores drawing state and Drive file metadata in the cloud. File contents are uploaded to Google Drive.</p><ul class="storage-list"><li><b>Google Drive</b>Large files are uploaded directly to the selected project/team folder using resumable uploads.</li><li><b>Cloud workspace</b>Projects, drawings, relationships, BOM selections, and Drive file links are stored in Supabase.</li><li><b>Share or back up</b>Import a JSON backup containing workspace data and Drive-backed file metadata. The backup does not duplicate large Drive files.</li></ul><div class="row"><button class="secondary" data-action="import">↑ Import backup</button><button class="secondary" data-action="backup-boards">Back up boards to Drive now</button><button class="secondary" data-action="restore-board">Restore current board from backup file…</button></div>`,
+    `<p class="hint">This workspace stores drawing state and Drive file metadata in the cloud. File contents are uploaded to Google Drive.</p><ul class="storage-list"><li><b>Google Drive</b>Large files are uploaded directly to the selected project/team folder using resumable uploads.</li><li><b>Cloud workspace</b>Projects, drawings, relationships, BOM selections, and Drive file links are stored in Supabase.</li><li><b>Share or back up</b>Import a JSON backup containing workspace data and Drive-backed file metadata. The backup does not duplicate large Drive files.</li></ul><div class="row"><button class="secondary" data-action="import">↑ Import backup</button><button class="secondary" data-action="backup-boards">Back up boards to Drive now</button><button class="secondary" data-action="restore-board">Restore current board from backup file…</button>${adminExport}</div>`,
   );
 }
 function toolHint() {
@@ -3639,6 +3682,7 @@ document.addEventListener("click", async (e) => {
     $("#tldraw-board-restore-input").click();
   }
   if (action === "export") exportBackup();
+  if (action === "export-workspace") exportWorkspaceState();
   if (action === "import") $("#backup-input").click();
   if (action === "delete-selection") deleteSelection();
   if (action === "add-bom-row") addBOMRow();
@@ -3822,18 +3866,4 @@ $("#tldraw-board-restore-input").onchange = async (event) => {
   await checkUserSession();
   setView(view);
   render();
-  if (workspaceLoaded && googleAccessToken) {
-    (async () => {
-      for (const project of state.projects) {
-        try {
-          await backupBoardToDrive(project.id);
-        } catch (error) {
-          console.warn(
-            `Automatic board backup failed for ${project.name}:`,
-            error,
-          );
-        }
-      }
-    })();
-  }
 })();
