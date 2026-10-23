@@ -362,13 +362,6 @@ window.ExoBoard = (function () {
     return entry && entry.assignee ? entry.assignee : "";
   }
 
-  // The Assigned to column doubles as a placeholder: sub-team packages carry
-  // "Assign at kickoff" rather than a name. Render that as the pending state it
-  // is instead of "Assigned to Assign at kickoff".
-  function assigneeIsPlaceholder(value) {
-    return /^assign\b/i.test(value);
-  }
-
   /* ---------- filtering and grouping ---------- */
 
   function isOpen(row) {
@@ -451,9 +444,7 @@ window.ExoBoard = (function () {
         ${body ? `<p class="board-item-body">${esc(body)}</p>` : ""}
         ${
           assignee
-            ? assigneeIsPlaceholder(assignee)
-              ? `<p class="board-item-assignee board-item-unassigned">${esc(assignee)}</p>`
-              : `<p class="board-item-assignee">Assigned to <b>${esc(assignee)}</b></p>`
+            ? `<p class="board-item-assignee">Assigned to <b>${esc(assignee)}</b></p>`
             : ""
         }
         ${meta.length ? `<div class="board-item-meta">${meta.join("")}</div>` : ""}

@@ -2498,10 +2498,6 @@ a.board-item-title:hover {
   font-weight: 500;
   color: var(--green);
 }
-.board-item-unassigned {
-  font-style: italic;
-  color: #97a98a;
-}
 .board-item-meta {
   display: flex;
   flex-wrap: wrap;
