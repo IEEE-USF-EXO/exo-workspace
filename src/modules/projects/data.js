@@ -1,5 +1,4 @@
-import { ROOT_DRIVE_FOLDER_ID } from "../../core/config.js";
-import { DriveAuthError, DriveRequestError } from "../../services/drive/index.js";
+import { PROJECTS_DRIVE_FOLDER_ID } from "../../core/config.js";
 
 export function projectSlug(project) {
   return String(project?.name || project?.id || "")
@@ -47,19 +46,25 @@ export function resolveProject(projects, route) {
   return { project: saved || active[0] || null, source: saved ? "storage" : "fallback" };
 }
 
-export async function listProjects(supabase, includeArchived = false) {
-  let query = supabase
-    .from("projects")
-    .select("id, name, description, status, drive_folder_id, archived_at, created_at")
-    .order("name");
-  if (!includeArchived) query = query.is("archived_at", null);
-  const { data, error } = await query;
-  if (error) throw error;
-  return data || [];
+export async function listProjects(drive) {
+  const folders = await drive.list(
+    PROJECTS_DRIVE_FOLDER_ID,
+    "mimeType = 'application/vnd.google-apps.folder'",
+    { bypassCache: true },
+  );
+  return folders.map((folder) => ({
+    id: folder.id,
+    name: folder.name,
+    description: "",
+    status: "active",
+    drive_folder_id: folder.id,
+    archived_at: null,
+    created_at: folder.modifiedTime || null,
+  }));
 }
 
 export async function createProject(supabase, drive, name, userId) {
-  const folder = await drive.createFolder(name, ROOT_DRIVE_FOLDER_ID);
+  const folder = await drive.createFolder(name, PROJECTS_DRIVE_FOLDER_ID);
   const { data, error } = await supabase
     .from("projects")
     .insert({
@@ -91,47 +96,18 @@ export async function archiveProject(supabase, drive, project) {
 }
 
 export async function reconcileDriveProjects(supabase, drive, userId) {
-  let root;
-  try {
-    root = await drive.getFile(ROOT_DRIVE_FOLDER_ID);
-  } catch (error) {
-    console.warn("Drive project reconciliation skipped: root authorization/check failed.", error);
-    return { skipped: true };
-  }
-  if (!root || root.trashed) return { skipped: true };
   let folders;
   try {
     folders = await drive.list(
-      ROOT_DRIVE_FOLDER_ID,
+      PROJECTS_DRIVE_FOLDER_ID,
       `mimeType = 'application/vnd.google-apps.folder'`,
+      { bypassCache: true },
     );
   } catch (error) {
     console.warn("Drive project reconciliation skipped: folder listing failed.", error);
     return { skipped: true };
   }
-  const { data: existing, error } = await supabase
-    .from("projects")
-    .select("id, name, description, status, drive_folder_id, archived_at, created_at")
-    .order("name");
-  if (error) throw error;
-  const byDriveId = new Map((existing || []).filter((item) => item.drive_folder_id).map((item) => [item.drive_folder_id, item]));
-  const discoveredIds = new Set();
-  const archivedIds = [];
   for (const folder of folders) {
-    discoveredIds.add(folder.id);
-    const current = byDriveId.get(folder.id);
-    if (current) {
-      if (current.name !== folder.name || current.archived_at) {
-        const { error: updateError } = await supabase
-          .from("projects")
-          .update({ name: folder.name, archived_at: null, status: "active" })
-          .eq("id", current.id);
-        if (updateError) throw updateError;
-      }
-      const boards = await listBoards(supabase, current.id);
-      if (!boards.length) await createBoard(supabase, current.id, "Main board", userId);
-      continue;
-    }
     const { data: project, error: insertError } = await supabase
       .from("projects")
       .insert({
@@ -144,49 +120,13 @@ export async function reconcileDriveProjects(supabase, drive, userId) {
       })
       .select("id")
       .single();
-    if (insertError) throw insertError;
-    if (!(await listBoards(supabase, project.id)).length) {
-      await createBoard(supabase, project.id, "Main board", userId);
+    if (insertError && insertError.code !== "23505") throw insertError;
+    const projectId = project?.id || folder.id;
+    if (!(await listBoards(supabase, projectId)).length) {
+      await createBoard(supabase, projectId, "Main board", userId);
     }
   }
-  for (const project of (existing || []).filter(
-    (item) =>
-      !item.archived_at &&
-      (!item.drive_folder_id || !discoveredIds.has(item.drive_folder_id)),
-  )) {
-    try {
-      if (!project.drive_folder_id) {
-        const { error: archiveError } = await supabase
-          .from("projects")
-          .update({ archived_at: new Date().toISOString(), status: "archived" })
-          .eq("id", project.id);
-        if (archiveError) throw archiveError;
-        archivedIds.push(project.id);
-        continue;
-      }
-      const file = await drive.getFile(project.drive_folder_id);
-      if (file.trashed || !file.parents?.includes(ROOT_DRIVE_FOLDER_ID)) {
-        const { error: archiveError } = await supabase
-          .from("projects")
-          .update({ archived_at: new Date().toISOString(), status: "archived" })
-          .eq("id", project.id);
-        if (archiveError) throw archiveError;
-        archivedIds.push(project.id);
-      }
-    } catch (error) {
-      if (error instanceof DriveRequestError && error.status === 404) {
-        const { error: archiveError } = await supabase
-          .from("projects")
-          .update({ archived_at: new Date().toISOString(), status: "archived" })
-          .eq("id", project.id);
-        if (archiveError) throw archiveError;
-        archivedIds.push(project.id);
-      } else if (!(error instanceof DriveAuthError)) {
-        console.warn(`Could not verify Drive folder ${project.drive_folder_id}; leaving project active.`, error);
-      }
-    }
-  }
-  return { skipped: false, count: folders.length, archivedIds };
+  return { skipped: false, count: folders.length, archivedIds: [] };
 }
 
 export async function listBoards(supabase, projectId, includeArchived = false) {

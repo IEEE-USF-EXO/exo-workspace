@@ -58,10 +58,10 @@ export const drive = {
       `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?${params}`,
     )).json();
   },
-  async list(parentId, query = "") {
+  async list(parentId, query = "", { bypassCache = false } = {}) {
     if (!parentId) throw new Error("A Drive parent folder is required for this operation.");
     const key = `${parentId}:${query}`;
-    const hit = cache.get(key);
+    const hit = bypassCache ? null : cache.get(key);
     if (hit && hit.expires > Date.now()) return hit.data;
     const q = [`'${parentId}' in parents`, "trashed = false", query].filter(Boolean).join(" and ");
     const url = `https://www.googleapis.com/drive/v3/files?${new URLSearchParams({

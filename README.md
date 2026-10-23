@@ -55,7 +55,7 @@ Dependencies are loaded from a CDN in `index.html`.
 1. **Create the database.** Run `supabase-schema.sql` in your Supabase SQL editor. This creates the tables and Row Level Security policies.
 2. **Configure Supabase.** Set your Supabase project URL and public key in the configuration at the top of `app.js`.
 3. **Enable Google sign-in.** Turn on the Google provider in Supabase Auth, and make sure the app requests the Google Drive scope.
-4. **Configure Drive folders.** Update the Drive folder IDs in the configuration at the top of `app.js` to match your team folders. The Drive browser and board backups use the configured `ROOT_DRIVE_FOLDER_ID`.
+4. **Configure Drive folders.** The direct child folders of the configured Projects folder are the only projects. The separate general/testing folder is used for general uploads and the Drive browser. Supabase does not determine whether a project exists.
 5. **Serve the app.** For example:
 
    ```bash
@@ -162,7 +162,7 @@ The main workspace object includes the current Tldraw document snapshot. Older f
 
 - Export the workspace as JSON, including local file data when available
 - Import a backup after confirmation, which replaces the current workspace state
-- The Files view starts at the configured `ROOT_DRIVE_FOLDER_ID` (`Projects-Testing-Folder`).
+- The Files view starts at the configured general/testing folder (`Projects-Testing-Folder`).
 - Automatic and manual Tldraw board backups are saved append-only in
   `Projects-Testing-Folder/<project>/drawing-backups/<page> [<page-id>]/`
   folders. The configured Drive root is the general workspace level; each

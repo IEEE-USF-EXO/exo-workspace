@@ -1,4 +1,4 @@
-import { ROOT_DRIVE_FOLDER_ID } from "../../core/config.js";
+import { PROJECTS_DRIVE_FOLDER_ID } from "../../core/config.js";
 import { boardRecordRow, upsertBoardRecords } from "../board/data.js";
 
 const allowedTypes = new Set(["page", "shape", "asset", "binding"]);
@@ -64,7 +64,7 @@ export async function alignLegacyProjectsWithDrive(
   if (workspaceError) throw workspaceError;
   if (error) throw error;
   const folders = await drive.list(
-    ROOT_DRIVE_FOLDER_ID,
+    PROJECTS_DRIVE_FOLDER_ID,
     "mimeType = 'application/vnd.google-apps.folder'",
   );
   const legacyProjects = workspace?.data?.projects || [];

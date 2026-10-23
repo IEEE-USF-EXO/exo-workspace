@@ -20,8 +20,10 @@ const supabaseClient = window.supabase.createClient(
   },
 );
 
-const ROOT_DRIVE_FOLDER_ID = "1TEs2PCaDcNQ0nlahtM9FWJKULPTjQAWM";
-const ROOT_DRIVE_FOLDER_NAME = "Projects-Testing-Folder";
+const PROJECTS_DRIVE_FOLDER_ID = "1ERfpUZoyd-Bx2Vsp3PTG13DJ97yrP-vH";
+const PROJECTS_DRIVE_FOLDER_NAME = "Projects";
+const GENERAL_DRIVE_FOLDER_ID = "1kldWFbtd0S_Mr8zsrYBCrYiGJsc1zhl_";
+const GENERAL_DRIVE_FOLDER_NAME = "Projects-Testing-Folder";
 const DRAWING_BACKUPS_FOLDER_NAME = "drawing-backups";
 const GOOGLE_DRIVE_FOLDER_MIME = "application/vnd.google-apps.folder";
 let googleAccessToken = sessionStorage.getItem("google_provider_token");
@@ -186,7 +188,7 @@ async function checkUserSession() {
     await ensureMemberProfile(session.user);
     await loadSharedBOM();
     try {
-      if (googleAccessToken && workspaceLoaded) await syncDriveFiles();
+      if (googleAccessToken) await syncDriveFiles();
     } catch (error) {
       driveSyncing = false;
       if (!isDriveAuthorizationError(error)) {
@@ -285,7 +287,7 @@ async function fetchDriveAPI(url, options = {}) {
   return response;
 }
 
-async function listDriveFiles(folderId = ROOT_DRIVE_FOLDER_ID, signal) {
+async function listDriveFiles(folderId = GENERAL_DRIVE_FOLDER_ID, signal) {
   const params = new URLSearchParams({
     q: `'${folderId}' in parents and trashed=false`,
     orderBy: "folder,name",
@@ -315,7 +317,7 @@ async function createSubfolder(folderName, parentFolderId) {
 }
 
 async function uploadFileToGoogleDrive(file, folderId) {
-  return uploadFileToDrive(file, folderId || ROOT_DRIVE_FOLDER_ID);
+  return uploadFileToDrive(file, folderId || GENERAL_DRIVE_FOLDER_ID);
 }
 
 async function projectDriveFolder(projectId) {
@@ -687,13 +689,13 @@ function isDriveProjectFolder(folder) {
 }
 
 async function syncDriveFiles() {
-  if (!googleAccessToken || !workspaceLoaded) return;
+  if (!googleAccessToken) return;
   if (driveSyncing) return;
   driveSyncing = true;
   try {
     const driveFiles = [];
     const folders = [];
-    const rootChildren = await listDriveChildren(ROOT_DRIVE_FOLDER_ID);
+    const rootChildren = await listDriveChildren(PROJECTS_DRIVE_FOLDER_ID);
     const projectFolders = rootChildren.filter(isDriveProjectFolder);
     const previousProjects = state.projects;
     const linkedProjects = projectFolders.map((folder) => ({
@@ -747,8 +749,8 @@ async function syncDriveFiles() {
     }
     driveFolders = folders;
     const projectIds = new Set(projects.map((project) => project.id));
-    // Drive is an integration, not the source of truth for workspace data.
-    // Keep records for projects that are temporarily absent or renamed in Drive.
+    // Drive is the only source of truth for project existence.
+    driveProjects = projects;
     state = normalizeWorkspaceState({
       ...state,
       projects,
@@ -759,7 +761,16 @@ async function syncDriveFiles() {
       disposeTldrawBoard();
     }
     scope = nextScope;
-    for (const project of linkedProjects) await ensureProjectRecord(project);
+    for (const project of linkedProjects) {
+      try {
+        await ensureProjectRecord(project);
+      } catch (error) {
+        console.warn(
+          `Could not register Drive project ${project.name} for collaboration:`,
+          error,
+        );
+      }
+    }
     await persist();
     render();
   } finally {
@@ -943,6 +954,7 @@ async function remapSavedTldrawViews() {
 }
 function normalizeWorkspaceState(data) {
   const next = { ...initial(), ...(data || {}) };
+  next.projects = driveProjects;
   delete next.nodes;
   delete next.edges;
   delete next.strokes;
@@ -981,6 +993,26 @@ function normalizeWorkspaceState(data) {
   }
   return next;
 }
+
+async function loadOrCreateWorkspaceState() {
+  const { data, error } = await supabaseClient
+    .from("workspace_state")
+    .select("data")
+    .eq("id", 1)
+    .maybeSingle();
+  if (error) throw error;
+  if (data?.data) return data.data;
+
+  const emptyState = initial();
+  const { data: inserted, error: insertError } = await supabaseClient
+    .from("workspace_state")
+    .insert({ id: 1, data: emptyState })
+    .select("data")
+    .single();
+  if (insertError) throw insertError;
+  return inserted.data;
+}
+
 document.addEventListener("input", (event) => {
   if (event.target.id === "drive-search") {
     driveExplorerSearch = event.target.value;
@@ -1035,6 +1067,7 @@ function setView(viewName, updateHash = true) {
     if (window.location.hash !== hash) window.location.hash = hash;
   }
 }
+let driveProjects = [];
 let state = initial(),
   view = viewFromLocation(),
   scope = "",
@@ -1051,9 +1084,9 @@ let state = initial(),
   urls = new Map(),
   toastTimer,
   driveSyncing = false,
-  driveExplorerFolder = ROOT_DRIVE_FOLDER_ID,
+  driveExplorerFolder = GENERAL_DRIVE_FOLDER_ID,
   driveExplorerBreadcrumbs = [
-    { id: ROOT_DRIVE_FOLDER_ID, name: ROOT_DRIVE_FOLDER_NAME },
+    { id: GENERAL_DRIVE_FOLDER_ID, name: GENERAL_DRIVE_FOLDER_NAME },
   ],
   driveExplorerFiles = [],
   driveExplorerLoaded = false,
@@ -1821,7 +1854,7 @@ async function initTldrawBoard() {
   }
 }
 
-const driveTestFolderId = ROOT_DRIVE_FOLDER_ID;
+const driveTestFolderId = GENERAL_DRIVE_FOLDER_ID;
 const teamLabel = (project, team) =>
   project === "pid-spoon" && team === "Mechanical" ? "CAD" : team;
 const driveFolderFor = (project, team) =>
@@ -1957,7 +1990,10 @@ function persist() {
       }
       const { data, error } = await supabaseClient
         .from("workspace_state")
-        .update({ data: state, updated_at: new Date().toISOString() })
+        .update({
+          data: { ...state, projects: [] },
+          updated_at: new Date().toISOString(),
+        })
         .eq("id", 1)
         .select("id");
       if (error) throw error;
@@ -2103,7 +2139,7 @@ function projectForm() {
       if (!googleAccessToken) {
         throw new Error("Reconnect Google Drive before creating a project.");
       }
-      const folder = await createDriveFolder(name, ROOT_DRIVE_FOLDER_ID);
+      const folder = await createDriveFolder(name, PROJECTS_DRIVE_FOLDER_ID);
       await syncDriveFiles();
       const project = state.projects.find(
         (item) => item.driveFolderId === folder.id,
@@ -2847,8 +2883,10 @@ function filteredFiles() {
 const empty = (symbol, title, description, action) =>
   `<div class="empty"><div class="empty-symbol">${symbol}</div><h3>${title}</h3><p>${description}</p>${action || ""}</div>`;
 async function loadDriveExplorer(
-  folderId = ROOT_DRIVE_FOLDER_ID,
-  breadcrumb = [{ id: ROOT_DRIVE_FOLDER_ID, name: ROOT_DRIVE_FOLDER_NAME }],
+  folderId = GENERAL_DRIVE_FOLDER_ID,
+  breadcrumb = [
+    { id: GENERAL_DRIVE_FOLDER_ID, name: GENERAL_DRIVE_FOLDER_NAME },
+  ],
 ) {
   const requestId = ++driveExplorerRequestId;
   driveExplorerAbortController?.abort();
@@ -3525,7 +3563,7 @@ document.addEventListener("click", async (e) => {
     const index = Number(el.dataset.driveBreadcrumbIndex);
     navigateToDriveFolder(
       el.dataset.driveFolder,
-      driveExplorerBreadcrumbs[index]?.name || ROOT_DRIVE_FOLDER_NAME,
+      driveExplorerBreadcrumbs[index]?.name || GENERAL_DRIVE_FOLDER_NAME,
     );
   }
   if (el.dataset.driveItem) {
@@ -3768,16 +3806,10 @@ $("#tldraw-board-restore-input").onchange = async (event) => {
 (async () => {
   if (!(await checkForAppUpdate())) return;
   try {
-    const { data, error } = await supabaseClient
-      .from("workspace_state")
-      .select("data")
-      .eq("id", 1)
-      .single();
-
-    if (error || !data?.data) throw error || new Error("Workspace row was not found.");
+    const workspaceData = await loadOrCreateWorkspaceState();
     const needsDrawingMigration =
-      Number(data.data.drawingSchemaVersion || 0) < 2;
-    state = normalizeWorkspaceState(data?.data);
+      Number(workspaceData.drawingSchemaVersion || 0) < 2;
+    state = normalizeWorkspaceState(workspaceData);
     if (!state.groups.some((group) => group.id === selectedGroupId)) {
       selectedGroupId = state.groups[0]?.id || "";
       if (selectedGroupId) {
@@ -3852,7 +3884,9 @@ $("#tldraw-board-restore-input").onchange = async (event) => {
     $("#save-status").textContent = "Workspace synced";
   } catch (error) {
     $("#save-status").textContent = "Sync failed";
-    warn("Could not load the workspace. Saving is disabled until you reload.");
+    const message = error instanceof Error ? error.message : String(error);
+    warn(`Could not load the workspace: ${message}`);
+    console.error("Workspace startup failed", error);
   }
   await checkUserSession();
   setView(view);

@@ -14,7 +14,7 @@ export default {
   id: "projects",
   nav: { label: "Projects", order: 10, view: "projects" },
   async init(ctx) {
-    ctx.projects = await listProjects(ctx.supabase);
+    ctx.projects = await listProjects(ctx.drive);
     ctx.boards = new Map();
     for (const project of ctx.projects) {
       ctx.boards.set(project.id, await listBoards(ctx.supabase, project.id));

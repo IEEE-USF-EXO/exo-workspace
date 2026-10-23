@@ -83,11 +83,7 @@ async function boot() {
         };
       } else {
         if (drive.status() === "ok") {
-          const sync = await reconcileDriveProjects(
-            supabase,
-            drive,
-            auth.session.user.id,
-          );
+          const sync = await reconcileDriveProjects(supabase, drive, auth.session.user.id);
           if (!sync.skipped && sync.count > 0) {
             return boot();
           }
