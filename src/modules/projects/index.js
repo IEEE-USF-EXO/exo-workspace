@@ -1,6 +1,14 @@
-import { createBoard, listBoards, listProjects, updateBoard } from "./data.js";
+import {
+  archiveProject,
+  createBoard,
+  createProject,
+  listBoards,
+  listProjects,
+  persistProjectSelection,
+  projectHash,
+  updateBoard,
+} from "./data.js";
 import { escapeHtml } from "../../core/ui.js";
-import { ROOT_DRIVE_FOLDER_ID } from "../../core/config.js";
 
 export default {
   id: "projects",
@@ -19,13 +27,6 @@ export default {
       return;
     }
     const boards = ctx.boards.get(project.id) || [];
-    let driveFolderMissing = false;
-    if (project.drive_folder_id && ctx.drive.status() === "ok") {
-      const rootItems = await ctx.drive.list(ROOT_DRIVE_FOLDER_ID);
-      driveFolderMissing = !rootItems.some(
-        (item) => item.id === project.drive_folder_id,
-      );
-    }
     element.innerHTML = `
       <section class="projects-screen">
         <label>Project
@@ -41,7 +42,7 @@ export default {
         <h1>${escapeHtml(project.name)}</h1>
         <p>${escapeHtml(project.description)}</p>
         ${
-          project.drive_folder_id && !driveFolderMissing
+          project.drive_folder_id
             ? ""
             : '<p role="status">Drive folder missing. Project data remains available, but Drive files and gallery items are unavailable until a folder is linked.</p>'
         }
@@ -53,14 +54,50 @@ export default {
           )
           .join("") || "<p>No boards yet.</p>"}</div>
         <button type="button" data-create-board>Create board</button>
+        <button type="button" data-create-project>Create project</button>
+        <button type="button" data-delete-project>Delete project</button>
       </section>`;
     element.querySelector("[data-project-switcher]")?.addEventListener("change", (event) => {
-      window.location.hash = `#/p/${encodeURIComponent(event.target.value)}/projects`;
+      const next = ctx.projects.find((item) => item.id === event.target.value);
+      if (!next) return;
+      persistProjectSelection(next);
+      window.location.hash = projectHash(next, "projects");
     });
     element.querySelectorAll("[data-board-id]").forEach((button) => {
       button.addEventListener("click", () => {
         window.location.hash = `#/p/${encodeURIComponent(project.id)}/board/${button.dataset.boardId}`;
       });
+    });
+    element.querySelector("[data-create-project]")?.addEventListener("click", async () => {
+      const name = window.prompt("Project name");
+      if (!name?.trim()) return;
+      try {
+        const { project } = await createProject(
+          ctx.supabase,
+          ctx.drive,
+          name.trim(),
+          ctx.session.user.id,
+        );
+        persistProjectSelection(project);
+        window.location.hash = projectHash(project, "projects");
+      } catch (error) {
+        console.error("Project could not be created", error);
+        element.insertAdjacentHTML(
+          "afterbegin",
+          `<p role="alert">Project could not be created: ${escapeHtml(error.message)}</p>`,
+        );
+      }
+    });
+    element.querySelector("[data-delete-project]")?.addEventListener("click", async () => {
+      if (!project.drive_folder_id || !window.confirm(`Move "${project.name}" to Drive trash?`)) return;
+      await archiveProject(ctx.supabase, ctx.drive, project);
+      const next = ctx.projects.find((item) => item.id !== project.id);
+      if (next) {
+        persistProjectSelection(next);
+        window.location.hash = projectHash(next, "projects");
+      } else {
+        window.location.reload();
+      }
     });
     element.querySelector("[data-create-board]")?.addEventListener("click", async () => {
       const board = await createBoard(ctx.supabase, project.id);

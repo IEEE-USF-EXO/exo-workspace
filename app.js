@@ -20,7 +20,7 @@ const supabaseClient = window.supabase.createClient(
   },
 );
 
-const ROOT_DRIVE_FOLDER_ID = "1kldWFbtd0S_Mr8zsrYBCrYiGJsc1zhl_";
+const ROOT_DRIVE_FOLDER_ID = "1TEs2PCaDcNQ0nlahtM9FWJKULPTjQAWM";
 const ROOT_DRIVE_FOLDER_NAME = "Projects-Testing-Folder";
 const DRAWING_BACKUPS_FOLDER_NAME = "drawing-backups";
 const GOOGLE_DRIVE_FOLDER_MIME = "application/vnd.google-apps.folder";
@@ -666,13 +666,7 @@ async function listDriveChildren(parentId) {
 }
 
 function driveProjectId(folder, existingProjects) {
-  const normalizedName = folder.name.trim().toLowerCase();
-  const existing = existingProjects.find(
-    (project) =>
-      project.driveFolderId === folder.id ||
-      project.name.trim().toLowerCase() === normalizedName,
-  );
-  return existing?.id || uid();
+  return folder.id;
 }
 
 function driveTeamFromPath(path) {
@@ -710,13 +704,9 @@ async function syncDriveFiles() {
           ?.description || "",
       driveFolderId: folder.id,
     }));
-    const linkedProjectIds = new Set(linkedProjects.map((project) => project.id));
-    const projects = [
-      ...linkedProjects,
-      ...previousProjects.filter((project) => !linkedProjectIds.has(project.id)),
-    ];
+    const projects = linkedProjects;
     const projectByFolderId = new Map(
-      projects.map((project, index) => [projectFolders[index].id, project]),
+      linkedProjects.map((project) => [project.driveFolderId, project]),
     );
     for (const folder of projectFolders) {
       const project = projectByFolderId.get(folder.id);
@@ -1154,6 +1144,7 @@ async function ensureProjectRecord(project) {
       id: project.id,
       name: project.name,
       description: project.description || "",
+      drive_folder_id: project.driveFolderId || project.id,
     },
   );
   if (

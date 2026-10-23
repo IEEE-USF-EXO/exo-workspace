@@ -7,6 +7,14 @@ export class DriveAuthError extends Error {
   }
 }
 
+export class DriveRequestError extends Error {
+  constructor(message, status) {
+    super(message);
+    this.name = "DriveRequestError";
+    this.status = status;
+  }
+}
+
 let token = sessionStorage.getItem("google_provider_token");
 const cache = new Map();
 
@@ -33,13 +41,25 @@ export const drive = {
       this.setToken(null);
       throw new DriveAuthError();
     }
-    if (!response.ok) throw new Error(`Google Drive request failed (HTTP ${response.status}).`);
+    if (!response.ok) {
+      throw new DriveRequestError(
+        `Google Drive request failed (HTTP ${response.status}).`,
+        response.status,
+      );
+    }
     return response;
   },
+  async getFile(fileId) {
+    const params = new URLSearchParams({
+      fields: "id,name,mimeType,trashed,parents",
+      supportsAllDrives: "true",
+    });
+    return (await this.request(
+      `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?${params}`,
+    )).json();
+  },
   async list(parentId, query = "") {
-    if (!parentId) {
-      throw new Error("A Drive parent folder is required for this operation.");
-    }
+    if (!parentId) throw new Error("A Drive parent folder is required for this operation.");
     const key = `${parentId}:${query}`;
     const hit = cache.get(key);
     if (hit && hit.expires > Date.now()) return hit.data;
@@ -49,6 +69,8 @@ export const drive = {
       fields: "files(id,name,mimeType,size,modifiedTime,webViewLink,thumbnailLink)",
       orderBy: "folder,name",
       pageSize: "1000",
+      supportsAllDrives: "true",
+      includeItemsFromAllDrives: "true",
     })}`;
     const data = await (await this.request(url)).json();
     const files = data.files || [];
@@ -56,29 +78,39 @@ export const drive = {
     return files;
   },
   async createFolder(name, parentId) {
-    if (!parentId) {
-      throw new Error("A Drive parent folder is required for folder creation.");
-    }
-    const response = await this.request("https://www.googleapis.com/drive/v3/files", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ name, mimeType: GOOGLE_DRIVE_FOLDER_MIME, parents: [parentId] }),
-    });
+    if (!parentId) throw new Error("A Drive parent folder is required for folder creation.");
+    const response = await this.request(
+      "https://www.googleapis.com/drive/v3/files?supportsAllDrives=true",
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ name, mimeType: GOOGLE_DRIVE_FOLDER_MIME, parents: [parentId] }),
+      },
+    );
+    cache.clear();
+    return response.json();
+  },
+  async updateFile(fileId, changes) {
+    const response = await this.request(
+      `https://www.googleapis.com/drive/v3/files/${encodeURIComponent(fileId)}?supportsAllDrives=true`,
+      {
+        method: "PATCH",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(changes),
+      },
+    );
     cache.clear();
     return response.json();
   },
   async ensureFolder(name, parentId) {
     const existing = (await this.list(parentId)).find(
-      (file) =>
-        file.mimeType === GOOGLE_DRIVE_FOLDER_MIME && file.name === name,
+      (file) => file.mimeType === GOOGLE_DRIVE_FOLDER_MIME && file.name === name,
     );
     return existing || this.createFolder(name, parentId);
   },
   async uploadJson(name, payload, parentId) {
-    if (!parentId) {
-      throw new Error("A Drive parent folder is required for backup upload.");
-    }
-    const metadata = { name, mimeType: "application/json", parents: parentId ? [parentId] : undefined };
+    if (!parentId) throw new Error("A Drive parent folder is required for backup upload.");
+    const metadata = { name, mimeType: "application/json", parents: [parentId] };
     const boundary = `exo-${crypto.randomUUID()}`;
     const body = [
       `--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n`,

@@ -149,7 +149,16 @@
     />
     <div id="toast" class="toast" role="status" hidden></div>
     <div id="phase1-root" hidden></div>
-    <script src="app.js?v=1.0.11"></script>
-    <script type="module" src="src/main.js"></script>
+    <script>
+      const useModularApp = new URL(window.location.href).searchParams.get("app") === "v2";
+      if (!useModularApp) {
+        document.write('<script src="app.js?v=1.0.11"><\/script>');
+      }
+    </script>
+    <script type="module">
+      if (new URL(window.location.href).searchParams.get("app") === "v2") {
+        import("./src/main.js");
+      }
+    </script>
   </body>
 </html>

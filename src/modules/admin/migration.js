@@ -1,3 +1,4 @@
+import { ROOT_DRIVE_FOLDER_ID } from "../../core/config.js";
 import { boardRecordRow, upsertBoardRecords } from "../board/data.js";
 
 const allowedTypes = new Set(["page", "shape", "asset", "binding"]);
@@ -45,6 +46,59 @@ export async function inspectLegacyDrawings(supabase) {
       recordsById,
     };
   });
+}
+
+export async function alignLegacyProjectsWithDrive(
+  supabase,
+  drive,
+  dryRun = true,
+) {
+  const [{ data: workspace, error: workspaceError }, { data: projects, error }] =
+    await Promise.all([
+      supabase.from("workspace_state").select("data").eq("id", 1).single(),
+      supabase
+        .from("projects")
+        .select("id, name, drive_folder_id")
+        .is("drive_folder_id", null),
+    ]);
+  if (workspaceError) throw workspaceError;
+  if (error) throw error;
+  const folders = await drive.list(
+    ROOT_DRIVE_FOLDER_ID,
+    "mimeType = 'application/vnd.google-apps.folder'",
+  );
+  const legacyProjects = workspace?.data?.projects || [];
+  const results = [];
+  for (const project of projects || []) {
+    const legacy = legacyProjects.find(
+      (candidate) =>
+        String(candidate.name || "").trim().toLowerCase() ===
+        String(project.name || "").trim().toLowerCase(),
+    );
+    const folder = folders.find(
+      (candidate) =>
+        String(candidate.name || "").trim().toLowerCase() ===
+        String((legacy || project).name || "").trim().toLowerCase(),
+    );
+    if (!folder) {
+      results.push({ projectId: project.id, matched: false });
+      continue;
+    }
+    if (!dryRun) {
+      const { error: updateError } = await supabase
+        .from("projects")
+        .update({ drive_folder_id: folder.id, name: folder.name })
+        .eq("id", project.id);
+      if (updateError) throw updateError;
+    }
+    results.push({
+      projectId: project.id,
+      driveFolderId: folder.id,
+      matched: true,
+      dryRun,
+    });
+  }
+  return results;
 }
 
 export async function migrateLegacyDrawings(supabase, userId, dryRun = true) {

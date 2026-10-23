@@ -115,7 +115,10 @@ end
 $$;
 
 -- =====================================================================
--- 2. Projects: lifecycle + Drive link (Drive no longer decides existence)
+-- 2. Projects: lifecycle + Drive folder identity.
+-- The configured Drive root is the authoritative project registry. Supabase
+-- retains stable rows and boards, keyed by drive_folder_id, so cached projects
+-- can render before Drive OAuth and reconcile safely after authentication.
 -- =====================================================================
 alter table public.projects add column if not exists status text not null default 'active'
   check (status in ('active', 'paused', 'completed', 'archived'));
@@ -126,6 +129,9 @@ alter table public.projects add column if not exists created_by uuid references 
 
 create unique index if not exists projects_drive_folder_id_key
   on public.projects(drive_folder_id) where drive_folder_id is not null;
+
+-- Drive folder ids are the stable project anchor. The partial unique index above
+-- permits legacy rows without a link while preventing duplicate Drive anchors.
 
 drop policy if exists "Authenticated users can read projects" on public.projects;
 drop policy if exists "Approved members can read projects" on public.projects;
@@ -281,6 +287,25 @@ create table if not exists public.boards (
 );
 
 create index if not exists boards_project_idx on public.boards(project_id);
+
+create or replace function public.ensure_default_project_board()
+returns trigger
+language plpgsql
+security definer
+set search_path = public
+as $$
+begin
+  insert into public.boards (project_id, name, created_by)
+  values (new.id, 'Main board', new.created_by)
+  on conflict do nothing;
+  return new;
+end
+$$;
+
+drop trigger if exists projects_default_board on public.projects;
+create trigger projects_default_board
+  after insert on public.projects
+  for each row execute function public.ensure_default_project_board();
 
 create sequence if not exists public.board_record_rev_seq;
 

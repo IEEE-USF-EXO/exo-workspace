@@ -1,5 +1,5 @@
 import { pendingMembers, setMemberStatus } from "./data.js";
-import { migrateLegacyDrawings } from "./migration.js";
+import { alignLegacyProjectsWithDrive, migrateLegacyDrawings } from "./migration.js";
 import { escapeHtml } from "../../core/ui.js";
 
 export default {
@@ -30,6 +30,8 @@ export default {
         <p>Run a dry report before importing legacy drawing records. The source workspace is never modified.</p>
         <button type="button" data-migration="dry-run">Preview migration</button>
         <button type="button" data-migration="run">Run migration</button>
+        <button type="button" data-project-alignment="dry-run">Preview Drive project alignment</button>
+        <button type="button" data-project-alignment="run">Align projects with Drive</button>
         <pre data-migration-report hidden></pre>
       </section>`;
     element.querySelectorAll("[data-user-id]").forEach((button) => {
@@ -49,27 +51,47 @@ export default {
             `<p role="alert">Could not update member: ${escapeHtml(error.message)}</p>`,
           );
           button.disabled = false;
+        });
+      });
+    }
+    element.querySelectorAll("[data-migration]").forEach((button) => {
+      button.addEventListener("click", async () => {
+        const report = element.querySelector("[data-migration-report]");
+        button.disabled = true;
+        try {
+          const results = await migrateLegacyDrawings(
+            ctx.supabase,
+            ctx.session.user.id,
+            button.dataset.migration === "dry-run",
+          );
+          report.hidden = false;
+          report.textContent = JSON.stringify(results, null, 2);
+        } catch (error) {
+          report.hidden = false;
+          report.textContent = `Migration failed: ${error.message}`;
+        } finally {
+          button.disabled = false;
         }
       });
-      element.querySelectorAll("[data-migration]").forEach((button) => {
-        button.addEventListener("click", async () => {
-          const report = element.querySelector("[data-migration-report]");
-          button.disabled = true;
-          try {
-            const results = await migrateLegacyDrawings(
-              ctx.supabase,
-              ctx.session.user.id,
-              button.dataset.migration === "dry-run",
-            );
-            report.hidden = false;
-            report.textContent = JSON.stringify(results, null, 2);
-          } catch (error) {
-            report.hidden = false;
-            report.textContent = `Migration failed: ${error.message}`;
-          } finally {
-            button.disabled = false;
-          }
-        });
+    });
+    element.querySelectorAll("[data-project-alignment]").forEach((button) => {
+      button.addEventListener("click", async () => {
+        const report = element.querySelector("[data-migration-report]");
+        button.disabled = true;
+        try {
+          const results = await alignLegacyProjectsWithDrive(
+            ctx.supabase,
+            ctx.drive,
+            button.dataset.projectAlignment === "dry-run",
+          );
+          report.hidden = false;
+          report.textContent = JSON.stringify(results, null, 2);
+        } catch (error) {
+          report.hidden = false;
+          report.textContent = `Drive alignment failed: ${error.message}`;
+        } finally {
+          button.disabled = false;
+        }
       });
     });
   },
