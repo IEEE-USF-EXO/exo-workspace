@@ -1015,6 +1015,7 @@ document.addEventListener("change", (event) => {
 });
 const workspaceViews = new Set([
   "overview",
+  "tasks",
   "canvas",
   "files",
   "bom",
@@ -1023,6 +1024,7 @@ const workspaceViews = new Set([
 ]);
 const viewHashNames = {
   overview: "overview",
+  tasks: "tasks",
   canvas: "drawing-board",
   files: "files",
   bom: "bom",
@@ -3305,6 +3307,11 @@ function render() {
       "Files, drawings, and references in one local workspace.",
       "ï¼‹ Add files",
     ],
+    tasks: [
+      "What the teams are carrying.",
+      "Open work packages and decisions, read from the public EXO Org Board.",
+      "",
+    ],
     canvas: [
       "Your ideas. Your connections.",
       "Draw freely, place cards, and connect work across teams and projects.",
@@ -3365,15 +3372,20 @@ function render() {
   $("#view").innerHTML =
     view === "canvas"
       ? boardHTML()
-      : view === "overview"
-        ? overviewHTML()
-        : view === "files"
-          ? filesHTML()
-          : view === "gallery"
-            ? galleryHTML()
-            : view === "bom"
-              ? bomHTML()
-              : resourcesHTML();
+      : view === "tasks"
+        ? (window.ExoBoard?.panelHTML() ?? "")
+        : view === "overview"
+          ? overviewHTML()
+          : view === "files"
+            ? filesHTML()
+            : view === "gallery"
+              ? galleryHTML()
+              : view === "bom"
+                ? bomHTML()
+                : resourcesHTML();
+  // The board panel owns everything inside its own shell, including its fetch,
+  // cache and failure states. See github-board.js.
+  if (view === "tasks") window.ExoBoard?.mount($("#exo-board-panel"));
   if (view === "overview") {
     const updateComposer = $("#update-composer");
     if (updateComposer) {

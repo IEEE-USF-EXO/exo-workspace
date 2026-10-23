@@ -319,6 +319,10 @@ nav {
   mask-image: url("assets/icons/repo-and-links.svg");
   -webkit-mask-image: url("assets/icons/repo-and-links.svg");
 }
+.nav-icon-tasks {
+  mask-image: url("assets/icons/tasks.svg");
+  -webkit-mask-image: url("assets/icons/tasks.svg");
+}
 .project-list {
   display: grid;
   gap: 4px;
@@ -2413,5 +2417,149 @@ dialog::backdrop {
 
   .footer {
     display: none;
+  }
+}
+
+/* Tasks view: the open items read from the public EXO Org Board.
+   See github-board.js. */
+.board-root {
+  display: block;
+}
+.board-alert {
+  margin-bottom: 18px;
+}
+.board-panel .panel-head b {
+  font-size: 13px;
+  color: var(--green);
+}
+.board-panel .panel-head p a {
+  color: #5c8050;
+}
+.board-teams {
+  border-top: 1px solid var(--line);
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(330px, 1fr));
+}
+.board-team {
+  padding: 18px 22px 20px;
+  border-right: 1px solid var(--line);
+  border-bottom: 1px solid var(--line);
+  min-width: 0;
+}
+.board-team-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+  margin-bottom: 12px;
+}
+.board-team-head b {
+  font-size: 11px;
+  letter-spacing: 1.2px;
+  text-transform: uppercase;
+  color: var(--green);
+}
+.board-items {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: grid;
+  gap: 9px;
+}
+.board-item {
+  background: #fcfdfb;
+  border: 1px solid var(--line);
+  border-radius: 7px;
+  padding: 10px 12px;
+}
+.board-item-title {
+  display: block;
+  font-size: 12px;
+  color: var(--ink);
+  text-decoration: none;
+  overflow-wrap: anywhere;
+}
+a.board-item-title:hover {
+  color: var(--green);
+  text-decoration: underline;
+}
+.board-item-body {
+  margin: 5px 0 0;
+  font-size: 11px;
+  line-height: 1.45;
+  color: var(--muted);
+}
+.board-item-assignee {
+  margin: 7px 0 0;
+  font-size: 11px;
+  color: var(--muted);
+}
+.board-item-assignee b {
+  font-weight: 500;
+  color: var(--green);
+}
+.board-item-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin-top: 8px;
+  font-size: 10px;
+  color: #829278;
+}
+.board-chip {
+  border: 1px solid #e3e9dd;
+  background: #f3f6ef;
+  border-radius: 4px;
+  padding: 2px 7px;
+  font-size: 9px;
+  letter-spacing: 0.6px;
+  text-transform: uppercase;
+  color: #748c65;
+}
+.board-chip-active,
+.board-chip-in-progress {
+  border-color: #c7d9df;
+  background: #eef5f7;
+  color: #41707e;
+}
+.board-chip-needs-decision {
+  border-color: #e6d6b4;
+  background: #fbf5e7;
+  color: #8c6c2c;
+}
+.board-subteam {
+  margin-top: 16px;
+}
+.board-subteam h4 {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin: 0 0 9px;
+  font-size: 10px;
+  font-weight: 500;
+  letter-spacing: 0.8px;
+  text-transform: uppercase;
+  color: var(--muted);
+}
+.board-note {
+  margin: 0 0 22px;
+  font-size: 10px;
+  line-height: 1.6;
+  color: #97a98a;
+  max-width: 760px;
+}
+
+@media screen and (max-width: 767px) {
+  .board-teams {
+    grid-template-columns: 1fr;
+  }
+  .board-team {
+    padding: 15px 17px 17px;
+    border-right: 0;
+  }
+  .board-panel .panel-head {
+    flex-direction: column;
+    align-items: flex-start;
   }
 }

@@ -1,0 +1,9 @@
+<?xml version="1.0" encoding="utf-8"?>
+<svg viewBox="0 0 16 16" fill="none" xmlns="http://www.w3.org/2000/svg">
+<path d="M8 1H15V3H8V1Z" fill="currentColor"/>
+<path d="M8 7H15V9H8V7Z" fill="currentColor"/>
+<path d="M8 13H15V15H8V13Z" fill="currentColor"/>
+<path d="M1 1.8L2.6 3.4L5.4 0.6" stroke="currentColor" stroke-width="1.8" fill="none"/>
+<path d="M1 7.8L2.6 9.4L5.4 6.6" stroke="currentColor" stroke-width="1.8" fill="none"/>
+<path d="M0.9 12.9H5.1V15.1H0.9V12.9Z" stroke="currentColor" stroke-width="1.6" fill="none"/>
+</svg>
