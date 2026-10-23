@@ -20,8 +20,10 @@ const supabaseClient = window.supabase.createClient(
   },
 );
 
-const ROOT_DRIVE_FOLDER_ID = "1TEs2PCaDcNQ0nlahtM9FWJKULPTjQAWM";
-const ROOT_DRIVE_FOLDER_NAME = "Projects-Testing-Folder";
+const PROJECTS_DRIVE_FOLDER_ID = "1ERfpUZoyd-Bx2Vsp3PTG13DJ97yrP-vH";
+const PROJECTS_DRIVE_FOLDER_NAME = "Projects";
+const GENERAL_DRIVE_FOLDER_ID = "1kldWFbtd0S_Mr8zsrYBCrYiGJsc1zhl_";
+const GENERAL_DRIVE_FOLDER_NAME = "Projects-Testing-Folder";
 const DRAWING_BACKUPS_FOLDER_NAME = "drawing-backups";
 const GOOGLE_DRIVE_FOLDER_MIME = "application/vnd.google-apps.folder";
 let googleAccessToken = sessionStorage.getItem("google_provider_token");
@@ -285,7 +287,7 @@ async function fetchDriveAPI(url, options = {}) {
   return response;
 }
 
-async function listDriveFiles(folderId = ROOT_DRIVE_FOLDER_ID, signal) {
+async function listDriveFiles(folderId = GENERAL_DRIVE_FOLDER_ID, signal) {
   const params = new URLSearchParams({
     q: `'${folderId}' in parents and trashed=false`,
     orderBy: "folder,name",
@@ -315,7 +317,7 @@ async function createSubfolder(folderName, parentFolderId) {
 }
 
 async function uploadFileToGoogleDrive(file, folderId) {
-  return uploadFileToDrive(file, folderId || ROOT_DRIVE_FOLDER_ID);
+  return uploadFileToDrive(file, folderId || GENERAL_DRIVE_FOLDER_ID);
 }
 
 async function projectDriveFolder(projectId) {
@@ -693,7 +695,7 @@ async function syncDriveFiles() {
   try {
     const driveFiles = [];
     const folders = [];
-    const rootChildren = await listDriveChildren(ROOT_DRIVE_FOLDER_ID);
+    const rootChildren = await listDriveChildren(PROJECTS_DRIVE_FOLDER_ID);
     const projectFolders = rootChildren.filter(isDriveProjectFolder);
     const previousProjects = state.projects;
     const linkedProjects = projectFolders.map((folder) => ({
@@ -747,8 +749,8 @@ async function syncDriveFiles() {
     }
     driveFolders = folders;
     const projectIds = new Set(projects.map((project) => project.id));
-    // Drive is an integration, not the source of truth for workspace data.
-    // Keep records for projects that are temporarily absent or renamed in Drive.
+    // Drive is the source of truth for project existence. Replace cached
+    // workspace projects with the folders currently under the Projects root.
     state = normalizeWorkspaceState({
       ...state,
       projects,
@@ -1051,9 +1053,9 @@ let state = initial(),
   urls = new Map(),
   toastTimer,
   driveSyncing = false,
-  driveExplorerFolder = ROOT_DRIVE_FOLDER_ID,
+  driveExplorerFolder = GENERAL_DRIVE_FOLDER_ID,
   driveExplorerBreadcrumbs = [
-    { id: ROOT_DRIVE_FOLDER_ID, name: ROOT_DRIVE_FOLDER_NAME },
+    { id: GENERAL_DRIVE_FOLDER_ID, name: GENERAL_DRIVE_FOLDER_NAME },
   ],
   driveExplorerFiles = [],
   driveExplorerLoaded = false,
@@ -1821,7 +1823,7 @@ async function initTldrawBoard() {
   }
 }
 
-const driveTestFolderId = ROOT_DRIVE_FOLDER_ID;
+const driveTestFolderId = GENERAL_DRIVE_FOLDER_ID;
 const teamLabel = (project, team) =>
   project === "pid-spoon" && team === "Mechanical" ? "CAD" : team;
 const driveFolderFor = (project, team) =>
@@ -2103,7 +2105,7 @@ function projectForm() {
       if (!googleAccessToken) {
         throw new Error("Reconnect Google Drive before creating a project.");
       }
-      const folder = await createDriveFolder(name, ROOT_DRIVE_FOLDER_ID);
+      const folder = await createDriveFolder(name, PROJECTS_DRIVE_FOLDER_ID);
       await syncDriveFiles();
       const project = state.projects.find(
         (item) => item.driveFolderId === folder.id,
@@ -2847,8 +2849,10 @@ function filteredFiles() {
 const empty = (symbol, title, description, action) =>
   `<div class="empty"><div class="empty-symbol">${symbol}</div><h3>${title}</h3><p>${description}</p>${action || ""}</div>`;
 async function loadDriveExplorer(
-  folderId = ROOT_DRIVE_FOLDER_ID,
-  breadcrumb = [{ id: ROOT_DRIVE_FOLDER_ID, name: ROOT_DRIVE_FOLDER_NAME }],
+  folderId = GENERAL_DRIVE_FOLDER_ID,
+  breadcrumb = [
+    { id: GENERAL_DRIVE_FOLDER_ID, name: GENERAL_DRIVE_FOLDER_NAME },
+  ],
 ) {
   const requestId = ++driveExplorerRequestId;
   driveExplorerAbortController?.abort();
@@ -3525,7 +3529,7 @@ document.addEventListener("click", async (e) => {
     const index = Number(el.dataset.driveBreadcrumbIndex);
     navigateToDriveFolder(
       el.dataset.driveFolder,
-      driveExplorerBreadcrumbs[index]?.name || ROOT_DRIVE_FOLDER_NAME,
+      driveExplorerBreadcrumbs[index]?.name || GENERAL_DRIVE_FOLDER_NAME,
     );
   }
   if (el.dataset.driveItem) {
