@@ -2489,6 +2489,19 @@ a.board-item-title:hover {
   line-height: 1.45;
   color: var(--muted);
 }
+.board-item-assignee {
+  margin: 7px 0 0;
+  font-size: 11px;
+  color: var(--muted);
+}
+.board-item-assignee b {
+  font-weight: 500;
+  color: var(--green);
+}
+.board-item-unassigned {
+  font-style: italic;
+  color: #97a98a;
+}
 .board-item-meta {
   display: flex;
   flex-wrap: wrap;

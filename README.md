@@ -7,7 +7,7 @@ It is a standalone frontend: plain HTML, CSS, and vanilla JavaScript, with no bu
 ## Features
 
 - **Overview** — workspace summary (files, project cards, relationships, gallery photos) with shortcuts to the main areas.
-- **Tasks** — the open work packages and decisions from the public EXO Org Board, grouped by team and sub-team.
+- **Tasks** — the open work packages and decisions from the public EXO Org Board, grouped by team and sub-team, with assignees joined in from a private Drive sheet for signed-in viewers.
 - **Drawing board** — a real-time collaborative [Tldraw](https://tldraw.dev) canvas with multiple pages.
 - **Files** — browse, upload, and organize files in Google Drive.
 - **BOM** — shared Bill of Materials backed by Supabase, with search, filters, and CSV preview.
@@ -88,7 +88,11 @@ The panel filters to `Project == "EXO"` (PID Spoon is on hold, D-019) and treats
 
 The unauthenticated rate limit is 60 requests per hour per visitor IP, so the normalised array is cached in `localStorage` under `exo_board_cache_v1` and served from cache. It is refetched only when the cache is older than ten minutes or the visitor presses Refresh. Nothing polls. The panel labels itself with the board's own last-changed time, because the board is regenerated from the EXO Master Log and can lag it.
 
-Per Master Log decision D-021 the public board carries no individual member names, no budget figures, and no purchase information, so the panel shows no per-person ownership. Role holders are recorded in Drive under "00 Program Management > EXO Teams and Roles".
+Per Master Log decision D-021 the public board carries no individual member names, no budget figures, and no purchase information. Assignee names come instead from the private "EXO Teams and Task Manager" sheet in Drive (00 Program Management), read at runtime with the viewer's own Google token — the same sign-in the Files section uses. The join is on the package ID: column A of the `Tasks` tab against the first whitespace-delimited token of the board item title, for example `ELEC-013`.
+
+Only columns A–E of the `Tasks` tab are read (Package, Title, Team, Sub-team, Assigned to). The sheet's own Status and Due columns are a stale copy kept for people reading the sheet directly, so they are never displayed and never written back, and the `Members` tab is never read at all — Drive emails and GitHub logins never reach the browser. Sub-team prefers the board's value and falls back to the sheet's.
+
+**Names are never persisted.** The roster is held in memory only: it is not written to `localStorage`, is not merged into the cached board array, and is never committed to this public repository or served to an anonymous visitor. Signing out reloads the page, which discards it. A viewer who is not signed in, or who has no access to the sheet, still gets the complete board view with the assignee line simply absent.
 
 ### Drawing board
 

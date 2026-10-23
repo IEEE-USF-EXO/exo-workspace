@@ -9,9 +9,16 @@
   Nothing here polls.
 
   Per Master Log D-021 the public board deliberately carries no member names, no
-  budget figures and no purchase information. This panel therefore shows no
-  per-person ownership and must not try to recover any. Role holders live in
-  Drive under "00 Program Management > EXO Teams and Roles".
+  budget figures and no purchase information. Assignee names come instead from a
+  private Google Sheet in Drive, read at runtime with the viewer's own Google
+  token — never from the board, and never from this repository.
+
+  NAMES MUST NOT BE PERSISTED. The roster is held in memory only: it is never
+  written to localStorage, never merged into the cached board array, and never
+  committed to this public repository or served to an anonymous visitor. Signing
+  out reloads the page (see signOut in app.js), which discards it. Only columns
+  A-E of the Tasks tab are read, so Drive emails and GitHub logins from the
+  Members tab never reach the browser.
 
   The board is regenerated from the EXO Master Log, so it lags the log. The panel
   labels itself with the board's own last-changed time rather than implying live
@@ -57,11 +64,26 @@ window.ExoBoard = (function () {
   const NO_TEAM = "No team set";
   const BODY_PREVIEW_CHARS = 170;
 
+  // "EXO Teams and Task Manager", 00 Program Management. Private; read with the
+  // viewer's own Google token, the same sign-in the Files section uses (the app
+  // holds the full Drive scope, which authorises the Sheets API).
+  const ROSTER_SHEET_ID = "1DFEJTdtidSPWh2iKWhcnIEYAjKnnuxHlV_6MOjffGuc";
+  // Columns A-E only: Package, Title, Team, Sub-team, Assigned to. F and G are
+  // the sheet's own copy of Status and Due, which go stale; the board stays
+  // authoritative for both, so they are deliberately not read. The Members tab
+  // is never read at all.
+  const ROSTER_RANGE = "Tasks!A2:E";
+  const GOOGLE_TOKEN_KEY = "google_provider_token";
+
   let container = null;
-  let rows = null; // normalised, cached array
+  let rows = null; // normalised, cached array — public board data only
   let meta = null; // { fetchedAt, boardUpdatedAt }
   let loading = false;
   let problem = null; // { kind, detail }
+
+  // Memory only. Never cached, never written into `rows`. See the header.
+  let roster = null; // Map packageId -> { team, subteam, assignee }
+  let rosterState = "idle"; // idle | ok | no-token | denied | failed
 
   /* ---------- small helpers ---------- */
 
@@ -248,6 +270,105 @@ window.ExoBoard = (function () {
     };
   }
 
+  /* ---------- roster join (private sheet, viewer's own token) ---------- */
+
+  function googleToken() {
+    try {
+      return sessionStorage.getItem(GOOGLE_TOKEN_KEY);
+    } catch (error) {
+      return null;
+    }
+  }
+
+  // Board titles start with the package ID, e.g. "ELEC-013 BMS integration
+  // concept", which is what column A of the Tasks tab holds.
+  function packageId(title) {
+    const first = String(title || "")
+      .trim()
+      .split(/\s+/)[0];
+    return first ? first.toUpperCase() : "";
+  }
+
+  async function loadRoster() {
+    const token = googleToken();
+    if (!token) {
+      roster = null;
+      rosterState = "no-token";
+      return;
+    }
+    try {
+      const url =
+        `https://sheets.googleapis.com/v4/spreadsheets/${ROSTER_SHEET_ID}` +
+        `/values/${encodeURIComponent(ROSTER_RANGE)}?majorDimension=ROWS`;
+      const response = await fetch(url, {
+        headers: { Authorization: `Bearer ${token}` },
+      });
+      if (response.status === 401) {
+        // The Google token expired. The board view carries on without names.
+        roster = null;
+        rosterState = "expired";
+        return;
+      }
+      if (response.status === 403 || response.status === 404) {
+        // Signed in, but this viewer cannot see the sheet.
+        roster = null;
+        rosterState = "denied";
+        return;
+      }
+      if (!response.ok) {
+        roster = null;
+        rosterState = "failed";
+        return;
+      }
+      const data = await response.json();
+      const map = new Map();
+      for (const row of data.values || []) {
+        const id = packageId(row[0]);
+        if (!id) continue;
+        map.set(id, {
+          team: String(row[2] || "").trim(),
+          subteam: String(row[3] || "").trim(),
+          assignee: String(row[4] || "").trim(),
+        });
+      }
+      roster = map;
+      rosterState = "ok";
+    } catch (error) {
+      roster = null;
+      rosterState = "failed";
+    }
+  }
+
+  function rosterFor(item) {
+    if (!roster) return null;
+    return roster.get(packageId(item.Title)) || null;
+  }
+
+  // The board is authoritative for team and sub-team; the sheet only fills gaps.
+  function teamOf(item) {
+    const entry = rosterFor(item);
+    return item.Team || (entry && entry.team) || NO_TEAM;
+  }
+
+  function subteamOf(item) {
+    const fromBoard = String(item["Sub-team"] || "").trim();
+    if (fromBoard) return fromBoard;
+    const entry = rosterFor(item);
+    return entry ? entry.subteam : "";
+  }
+
+  function assigneeOf(item) {
+    const entry = rosterFor(item);
+    return entry && entry.assignee ? entry.assignee : "";
+  }
+
+  // The Assigned to column doubles as a placeholder: sub-team packages carry
+  // "Assign at kickoff" rather than a name. Render that as the pending state it
+  // is instead of "Assigned to Assign at kickoff".
+  function assigneeIsPlaceholder(value) {
+    return /^assign\b/i.test(value);
+  }
+
   /* ---------- filtering and grouping ---------- */
 
   function isOpen(row) {
@@ -273,10 +394,10 @@ window.ExoBoard = (function () {
   function groupByTeam(items) {
     const teams = new Map();
     for (const item of items) {
-      const team = item.Team || NO_TEAM;
+      const team = teamOf(item);
       if (!teams.has(team)) teams.set(team, { direct: [], subteams: new Map() });
       const bucket = teams.get(team);
-      const subteam = (item["Sub-team"] || "").trim();
+      const subteam = subteamOf(item);
       if (!subteam) {
         bucket.direct.push(item);
         continue;
@@ -311,6 +432,7 @@ window.ExoBoard = (function () {
   function itemHTML(item) {
     const title = esc(item.Title || "Untitled item");
     const body = truncate(item.body, BODY_PREVIEW_CHARS);
+    const assignee = assigneeOf(item);
     const meta = [];
     if (item.Status) {
       meta.push(
@@ -327,6 +449,13 @@ window.ExoBoard = (function () {
             : `<span class="board-item-title">${title}</span>`
         }
         ${body ? `<p class="board-item-body">${esc(body)}</p>` : ""}
+        ${
+          assignee
+            ? assigneeIsPlaceholder(assignee)
+              ? `<p class="board-item-assignee board-item-unassigned">${esc(assignee)}</p>`
+              : `<p class="board-item-assignee">Assigned to <b>${esc(assignee)}</b></p>`
+            : ""
+        }
         ${meta.length ? `<div class="board-item-meta">${meta.join("")}</div>` : ""}
       </li>`;
   }
@@ -441,9 +570,21 @@ window.ExoBoard = (function () {
         emptyBody: "Every decision on the board has been settled.",
       })}
       <p class="board-note">
-        The public board carries no individual names, budget figures or purchase
-        information by decision D-021. Role holders are recorded in Drive under
-        “00 Program Management &gt; EXO Teams and Roles”.
+        Status, due dates and the item list come from the public board, which
+        carries no individual names, budget figures or purchase information by
+        decision D-021. Assignees are read from the private “EXO Teams and Task
+        Manager” sheet in Drive with your own Google sign-in, and are never
+        stored by this page.${
+          rosterState === "no-token"
+            ? " Sign in with Google to see who is assigned to each package."
+            : rosterState === "expired"
+              ? " Your Google sign-in expired, so assignees are not shown. Reconnect Google to see them."
+              : rosterState === "denied"
+                ? " You do not have access to that sheet, so assignees are not shown."
+                : rosterState === "failed"
+                  ? " The roster sheet could not be read just now, so assignees are not shown."
+                  : ""
+        }
       </p>`;
   }
 
@@ -458,8 +599,14 @@ window.ExoBoard = (function () {
 
   /* ---------- lifecycle ---------- */
 
+  async function syncRoster() {
+    await loadRoster();
+    paint();
+  }
+
   async function refresh(force) {
     if (loading) return;
+    if (force) syncRoster();
     if (!force && !cacheIsStale()) return;
     if (navigator.onLine === false) {
       problem = { kind: "offline" };
@@ -509,7 +656,14 @@ window.ExoBoard = (function () {
         event.preventDefault();
         refresh(true);
       };
+      // A sign-out reloads the page, but drop the names here too if the token
+      // has gone for any other reason.
+      if (!googleToken() && roster) {
+        roster = null;
+        rosterState = "no-token";
+      }
       paint();
+      if (rosterState === "idle" || rosterState === "no-token") syncRoster();
       refresh(false);
     } catch (error) {
       if (element) {
@@ -518,5 +672,20 @@ window.ExoBoard = (function () {
     }
   }
 
-  return { panelHTML, mount, refresh, normalise, fieldValue, groupByTeam };
+  function clearRoster() {
+    roster = null;
+    rosterState = "no-token";
+    paint();
+  }
+
+  return {
+    panelHTML,
+    mount,
+    refresh,
+    clearRoster,
+    normalise,
+    fieldValue,
+    groupByTeam,
+    packageId,
+  };
 })();
