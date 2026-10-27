@@ -28,6 +28,14 @@
       <div id="connection-banner" class="connection-banner" role="status" aria-live="polite"><div><strong id="connection-title">Connecting to your workspace</strong><p id="connection-description">Checking your Supabase session…</p></div><button id="refresh-data" class="button secondary" hidden>Refresh</button></div>
       <div class="breadcrumb">Workspace <span>›</span> <strong id="breadcrumb-team"></strong></div>
       <div class="page-heading"><div><div class="eyebrow" id="scope-heading"></div><h1 id="page-title">Overview</h1><p id="page-description"></p></div><button class="button primary" id="new-task"><span aria-hidden="true">＋</span> New task</button></div>
+      <p id="creation-hint" class="creation-hint" role="status" hidden></p>
+      <div id="admin-actions" class="admin-actions" aria-label="EXO chair controls" hidden>
+        <span class="admin-label">EXO CHAIR</span>
+        <button class="button secondary" id="new-project">＋ New project</button>
+        <button class="button secondary" id="new-team">＋ New team</button>
+        <button class="button secondary" id="new-subteam">＋ New subteam</button>
+        <button class="button secondary" id="link-team">Link team to project</button>
+      </div>
       <div class="tabs" role="tablist" aria-label="Workspace views"><button role="tab" id="tab-overview" data-tab="overview" aria-controls="overview-view"><span class="nav-icon nav-icon-overview" aria-hidden="true"></span>Overview</button><button role="tab" id="tab-tasks" data-tab="tasks" aria-controls="tasks-view"><span class="nav-icon nav-icon-tasks" aria-hidden="true"></span>Tasks <span id="tab-count" class="tab-count"></span></button></div>
       <section id="overview-view" role="tabpanel" aria-labelledby="tab-overview">
         <div class="welcome-card"><div><span class="eyebrow">PROJECT WORKSPACE</span><h2>Your team. Your work. One place.</h2><p>Track priorities and progress across your teams and subteams.</p></div><button class="button secondary" id="view-all-tasks"><span class="nav-icon nav-icon-tasks" aria-hidden="true"></span>View tasks <span aria-hidden="true">↗</span></button></div>
@@ -43,6 +51,15 @@
     </main>
   </div>
   <dialog id="task-dialog"><form id="task-form"><div class="dialog-heading"><div><div class="eyebrow">MAKE IT HAPPEN</div><h2 id="dialog-title">New task</h2></div><button type="button" class="icon-button" id="close-dialog" aria-label="Close dialog">×</button></div><p id="form-error" class="form-error" role="alert" hidden></p><input type="hidden" id="task-id"><label for="task-title">Task name</label><input id="task-title" required maxlength="160" placeholder="What needs to get done?"><label for="task-description">Description <span class="muted">(optional)</span></label><textarea id="task-description" rows="3" placeholder="Add a little context…" maxlength="10000"></textarea><div class="form-grid"><div><label for="task-status">Status</label><select id="task-status"></select></div><div><label for="task-priority">Priority</label><select id="task-priority"></select></div><div><label for="task-assignee">Assignee</label><select id="task-assignee"></select></div><div><label for="task-due">Due date</label><input id="task-due" type="date"></div><div><label for="task-project">Project</label><select id="task-project" required></select></div><div><label for="task-team">Team</label><select id="task-team" required></select></div><div class="full-width"><label for="task-subteam">Subteam</label><select id="task-subteam" required></select></div></div><div class="dialog-footer"><button type="button" class="button danger" id="delete-task" hidden>Delete task</button><div><button type="button" class="button secondary" id="cancel-dialog">Cancel</button><button class="button primary" id="save-task" type="submit">Save task</button></div></div></form></dialog>
+  <dialog id="setup-dialog" aria-labelledby="setup-title"><form id="setup-form">
+    <div class="dialog-heading"><div><div class="eyebrow">EXO CHAIR · WORKSPACE SETUP</div><h2 id="setup-title">New project</h2></div><button type="button" class="icon-button" id="close-setup" aria-label="Close setup">×</button></div>
+    <p id="setup-description" class="setup-description"></p>
+    <p id="setup-error" class="form-error" role="alert" hidden></p>
+    <div id="setup-name-field"><label for="setup-name">Name</label><input id="setup-name" maxlength="120" required placeholder="Give it a name"><label for="setup-notes">Description <span class="muted">(optional)</span></label><textarea id="setup-notes" rows="3" maxlength="2000" placeholder="What will this group or project work on?"></textarea></div>
+    <div id="setup-parent-field" hidden><label for="setup-parent">Parent team</label><select id="setup-parent"></select></div>
+    <div id="setup-link-fields" hidden><label for="setup-project">Project</label><select id="setup-project"></select><label for="setup-link-team">Team or subteam</label><select id="setup-link-team"></select><p id="setup-link-hint" class="setup-description"></p></div>
+    <div class="dialog-footer"><div><button type="button" class="button secondary" id="cancel-setup">Cancel</button><button type="submit" class="button primary" id="save-setup">Create project</button></div></div>
+  </form></dialog>
   <dialog id="signin-dialog" class="signin-card" aria-labelledby="signin-title" aria-describedby="signin-description">
     <button class="icon-button signin-close" id="close-signin" type="button" aria-label="Close sign-in card">×</button>
     <div class="signin-logo"><img src="assets/project-icon.png" alt=""><span><b>EXO</b><small>PROJECT WORKSPACE</small></span></div>
