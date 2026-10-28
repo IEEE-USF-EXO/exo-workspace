@@ -115,10 +115,8 @@ begin
     values (p_task_id,'github_to_supabase',jsonb_build_object('before',s.local_data,'remote',p_remote));
   perform set_config('exo.github_sync','incoming',true);
   team := exo_private.github_team(p_values->>'team',null);
-  insert into public.project_teams(project_id,team_id) values (p_project_id,team) on conflict do nothing;
   if coalesce(p_values->>'subteam','') <> '' then
     team := exo_private.github_team(p_values->>'subteam',team);
-    insert into public.project_teams(project_id,team_id) values (p_project_id,team) on conflict do nothing;
   end if;
   insert into public.tasks(id,project_id,team_id,title,description,status,priority,due_at,created_by)
     values (p_task_id,p_project_id,team,p_values->>'title',p_values->>'description',p_values->>'status',

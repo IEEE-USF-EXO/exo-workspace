@@ -300,8 +300,13 @@ body:has(#signin-dialog[open]) { overflow: hidden; }
 .admin-label { font-size: 9px; letter-spacing: 1.3px; color: #7c8b79; margin-right: 8px; }
 .admin-actions .button { font-size: 11px; padding: 8px 11px; }
 .setup-description { color: var(--muted); font-size: 12px; line-height: 1.7; margin-bottom: 16px; }
-#setup-link-hint { font-size: 11px; margin-top: 9px; margin-bottom: 0; }
 #setup-error { margin-top: 12px; }
+.member-groups { list-style: none; padding: 0; margin: 12px 0 20px; }
+.member-groups li { display: flex; align-items: center; justify-content: space-between; gap: 14px; padding: 12px 0; border-bottom: 1px solid var(--line); font-size: 12px; }
+.member-groups small { display: block; color: var(--muted); font-size: 11px; margin-top: 4px; }
+.member-groups .button { flex-shrink: 0; font-size: 11px; padding: 7px 10px; }
+#member-summary { margin-top: 10px; margin-bottom: 0; }
+.membership-note { font-size: 11px; margin-top: 12px; }
 @media (max-width: 480px) {
   .admin-label { width: 100%; margin-bottom: 3px; }
   .admin-actions .button { flex: 1 1 auto; }

@@ -39,7 +39,7 @@ create table if not exists public.team_members (
   primary key (team_id, user_id)
 );
 
--- 4. Projects can span multiple teams.
+-- 4. All workspace members can view projects; tasks select their own team scope.
 create table if not exists public.projects (
   id uuid primary key default gen_random_uuid(),
   name text not null check (length(btrim(name)) between 1 and 160),
@@ -50,7 +50,8 @@ create table if not exists public.projects (
   updated_at timestamptz not null default now()
 );
 
--- 5. Link the task's exact team/subteam to its project before creating tasks.
+-- 5. Legacy project/team links are retained for compatibility and history only.
+-- Task creation and permissions no longer depend on these records.
 create table if not exists public.project_teams (
   project_id uuid not null references public.projects(id) on delete cascade,
   team_id uuid not null references public.teams(id) on delete restrict,
@@ -118,7 +119,8 @@ create table if not exists public.tasks (
   created_by uuid not null default auth.uid() references public.profiles(id) on delete restrict,
   created_at timestamptz not null default now(),
   updated_at timestamptz not null default now(),
-  foreign key (project_id, team_id) references public.project_teams(project_id, team_id) on delete restrict,
+  constraint exo_task_project_fk foreign key (project_id) references public.projects(id) on delete restrict,
+  constraint exo_task_team_fk foreign key (team_id) references public.teams(id) on delete restrict,
   foreign key (milestone_id, project_id) references public.milestones(id, project_id) on delete restrict,
   unique (id, project_id)
 );
@@ -127,6 +129,27 @@ create index if not exists exo_tasks_assignee_idx on public.tasks(assignee_id);
 create index if not exists exo_tasks_due_idx on public.tasks(due_at) where status not in ('done','cancelled');
 create index if not exists exo_tasks_milestone_idx on public.tasks(milestone_id, project_id);
 create index if not exists exo_tasks_team_idx on public.tasks(team_id);
+
+-- Upgrade existing installations too: CREATE TABLE IF NOT EXISTS alone would
+-- leave the former composite project_teams FK in place. No records are deleted.
+do $$
+declare legacy record;
+begin
+  for legacy in select conname from pg_constraint
+    where conrelid = 'public.tasks'::regclass and contype = 'f'
+      and confrelid = 'public.project_teams'::regclass loop
+    execute format('alter table public.tasks drop constraint %I', legacy.conname);
+  end loop;
+  if not exists (select 1 from pg_constraint where conrelid='public.tasks'::regclass and conname='exo_task_project_fk') then
+    alter table public.tasks add constraint exo_task_project_fk
+      foreign key (project_id) references public.projects(id) on delete restrict;
+  end if;
+  if not exists (select 1 from pg_constraint where conrelid='public.tasks'::regclass and conname='exo_task_team_fk') then
+    alter table public.tasks add constraint exo_task_team_fk
+      foreign key (team_id) references public.teams(id) on delete restrict;
+  end if;
+end;
+$$;
 
 -- 9. Multiple people can contribute to a task.
 create table if not exists public.task_contributors (
@@ -367,7 +390,7 @@ $$;
 
 -- RLS policy replacement is intentional: old permissive policies must not bypass
 -- this access model. Applies only to the named application tables below.
--- All workspace members may READ workspace records across teams. WRITES are scoped.
+-- Workspace information and references are shared; task contents follow group scope.
 -- Visitors with only the public anon key get NO rows/access.
 do $$
 declare t text; p record;
@@ -388,6 +411,23 @@ begin
   end loop;
 end;
 $$;
+
+-- Restrictive policies also constrain any permissive author/admin policies.
+-- Task links remain shared references, independently of task-content visibility.
+create policy exo_task_group_access on public.tasks as restrictive
+  for select to authenticated using (exo_private.can_work_in(team_id, project_id));
+do $$
+declare t text;
+begin
+  foreach t in array array['task_contributors','task_comments','task_checklist_items','task_activity'] loop
+    execute format('create policy exo_task_group_access on public.%I as restrictive for all to authenticated using (exo_private.can_edit_task(task_id)) with check (exo_private.can_edit_task(task_id))', t);
+  end loop;
+end;
+$$;
+create policy exo_task_group_access on public.task_dependencies as restrictive
+  for all to authenticated
+  using (exo_private.can_edit_task(task_id) and exo_private.can_edit_task(depends_on_task_id))
+  with check (exo_private.can_edit_task(task_id) and exo_private.can_edit_task(depends_on_task_id));
 
 create policy exo_profile_read on public.profiles for select to authenticated
   using (id = (select auth.uid()) or (select exo_private.is_member()));
@@ -491,5 +531,6 @@ order by tablename;
 -- insert into public.leadership_assignments(user_id, role)
 -- values ('YOUR-AUTH-USER-UUID'::uuid, 'exo_chair');
 -- Never implement first-user-auto-admin or let browser clients self-assign roles.
--- Then create teams/projects, link them in project_teams, and add team_members.
+-- Then create teams/projects and add team_members. Tasks select a project and
+-- team/subteam independently; no project_teams records are needed.
 -- This schema does not configure Google OAuth, seed sample data, or connect the UI.

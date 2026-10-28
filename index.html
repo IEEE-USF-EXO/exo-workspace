@@ -33,7 +33,7 @@
         <div class="preview-heading"><div><span class="eyebrow">EXO CHAIR · TESTING VIEW</span><h2>See the workspace from another perspective.</h2></div><button class="button secondary" id="exit-preview">Exit preview</button></div>
         <div class="preview-fields"><div><label for="preview-mode">Preview as</label><select id="preview-mode"><option value="member">Specific member</option><option value="group">Team / subteam member</option></select></div><div><label id="preview-subject-label" for="preview-subject">Member</label><select id="preview-subject"></select></div></div>
         <p id="preview-summary" role="status" aria-live="polite"></p>
-        <p class="preview-note">Read-only interface preview using the loaded memberships and roles. All saves, imports, and deletions are blocked. Your Google account stays signed in; this does not test another user’s Supabase session. Workspace members can currently read all tasks.</p>
+        <p class="preview-note">Read-only interface preview using the loaded memberships and roles. Tasks and group selectors follow the selected member’s group access. All saves, imports, and deletions are blocked. Your Google account stays signed in; this does not test another user’s Supabase session.</p>
       </section>
       <p id="creation-hint" class="creation-hint" role="status" hidden></p>
       <div id="admin-actions" class="admin-actions" aria-label="EXO chair controls" hidden>
@@ -41,7 +41,7 @@
         <button class="button secondary" id="new-project">＋ New project</button>
         <button class="button secondary" id="new-team">＋ New team</button>
         <button class="button secondary" id="new-subteam">＋ New subteam</button>
-        <button class="button secondary" id="link-team">Link team to project</button>
+        <button class="button secondary" id="manage-members">Manage members</button>
         <button class="button secondary" id="import-github">Import from GitHub</button>
       </div>
       <div class="tabs" role="tablist" aria-label="Workspace views"><button role="tab" id="tab-overview" data-tab="overview" aria-controls="overview-view"><span class="nav-icon nav-icon-overview" aria-hidden="true"></span>Overview</button><button role="tab" id="tab-tasks" data-tab="tasks" aria-controls="tasks-view"><span class="nav-icon nav-icon-tasks" aria-hidden="true"></span>Tasks <span id="tab-count" class="tab-count"></span></button></div>
@@ -64,11 +64,23 @@
     <p class="setup-description">Import work packages and decisions from the <a href="https://github.com/orgs/IEEE-USF-EXO/projects/3" target="_blank" rel="noopener noreferrer">public EXO Org Board ↗</a>. Records are saved to Supabase.</p>
     <label for="import-project">Destination project</label><select id="import-project" required></select>
     <label class="import-toggle"><input type="checkbox" id="import-closed"> Include completed and on-hold EXO items</label>
-    <p class="setup-description">Teams, subteams, and project links are created as needed. Existing imported tasks are skipped, preserving edits made here. Assignees start unassigned.</p>
+    <p class="setup-description">Teams and subteams are created as needed and can receive tasks from any project. Existing imported tasks are skipped, preserving edits made here. Assignees start unassigned.</p>
     <p id="import-error" class="form-error" role="alert" hidden></p>
     <div id="import-preview" class="import-preview" hidden></div>
     <p id="import-progress" class="setup-description" role="status" aria-live="polite"></p>
     <div class="dialog-footer"><div><button type="button" class="button secondary" id="cancel-import">Cancel</button><button type="submit" class="button primary" id="save-import">Load GitHub tasks</button></div></div>
+  </form></dialog>
+  <dialog id="members-dialog" aria-labelledby="members-title"><form id="members-form">
+    <div class="dialog-heading"><div><div class="eyebrow">EXO CHAIR · MEMBERSHIP</div><h2 id="members-title">Manage members</h2></div><button type="button" class="icon-button" id="close-members" aria-label="Close member management">×</button></div>
+    <p class="setup-description">Choose someone who has signed in with Google, then add them to a team or subteam. Memberships apply across all projects.</p>
+    <p id="members-error" class="form-error" role="alert" hidden></p>
+    <label for="member-select">Person</label><select id="member-select" required></select>
+    <p id="member-summary" class="setup-description" aria-live="polite"></p>
+    <ul id="member-groups" class="member-groups" aria-label="Direct group memberships"></ul>
+    <label for="member-team">Add to a team or subteam</label><select id="member-team" required></select>
+    <p class="setup-description membership-note">A parent team includes its subteams. Subteam membership does not grant access to its parent or siblings. Leadership roles are separate; removing a group does not revoke a lead or chair role.</p>
+    <p id="members-status" class="setup-description" role="status" aria-live="polite"></p>
+    <div class="dialog-footer"><button type="button" class="button secondary" id="refresh-members">Refresh people</button><div><button type="button" class="button secondary" id="done-members">Done</button><button type="submit" class="button primary" id="add-member">Add to group</button></div></div>
   </form></dialog>
   <dialog id="setup-dialog" aria-labelledby="setup-title"><form id="setup-form">
     <div class="dialog-heading"><div><div class="eyebrow">EXO CHAIR · WORKSPACE SETUP</div><h2 id="setup-title">New project</h2></div><button type="button" class="icon-button" id="close-setup" aria-label="Close setup">×</button></div>
@@ -76,7 +88,6 @@
     <p id="setup-error" class="form-error" role="alert" hidden></p>
     <div id="setup-name-field"><label for="setup-name">Name</label><input id="setup-name" maxlength="120" required placeholder="Give it a name"><label for="setup-notes">Description <span class="muted">(optional)</span></label><textarea id="setup-notes" rows="3" maxlength="2000" placeholder="What will this group or project work on?"></textarea></div>
     <div id="setup-parent-field" hidden><label for="setup-parent">Parent team</label><select id="setup-parent"></select></div>
-    <div id="setup-link-fields" hidden><label for="setup-project">Project</label><select id="setup-project"></select><label for="setup-link-team">Team or subteam</label><select id="setup-link-team"></select><p id="setup-link-hint" class="setup-description"></p></div>
     <div class="dialog-footer"><div><button type="button" class="button secondary" id="cancel-setup">Cancel</button><button type="submit" class="button primary" id="save-setup">Create project</button></div></div>
   </form></dialog>
   <dialog id="signin-dialog" class="signin-card" aria-labelledby="signin-title" aria-describedby="signin-description">
