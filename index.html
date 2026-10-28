@@ -76,8 +76,8 @@
       <div id="task-creation-options" class="task-scope-buttons" role="group" aria-label="Task creation method"><button type="button" data-creation-mode="single" aria-pressed="true">Single task</button><button type="button" data-creation-mode="ai" aria-pressed="false">Tasks from AI</button></div>
       <select id="task-creation-mode" aria-label="Task creation method" hidden><option value="single">Single task</option><option value="ai">Tasks from AI</option></select>
       <section id="task-ai-panel" class="task-ai-panel" hidden aria-label="Create tasks from an agent response">
-        <div class="panel-heading"><h3>Draft with your agent</h3><button type="button" class="button secondary" id="copy-task-prompt">Copy prompt</button></div>
-        <p class="setup-description">Copy the prompt to your agent, add your work notes, then paste its response here. Review before creating. The project, group and assignee below apply to every task.</p>
+        <div class="panel-heading"><h3>Draft with your agent</h3><div class="task-ai-agent-action"><label for="task-ai-agent">Agent</label><select id="task-ai-agent"><option value="chatgpt">ChatGPT</option><option value="claude">Claude</option><option value="gemini">Gemini</option></select><button type="button" class="button secondary" id="copy-task-prompt">Copy prompt &amp; open ChatGPT</button></div></div>
+        <p class="setup-description">Copy the prompt to your agent, replace the text between <code>WORK_NOTES_START</code> and <code>WORK_NOTES_END</code> with your notes, then paste only its JSON response here. Review before creating. The project, group and assignee below apply to every task.</p>
         <details><summary>View prompt</summary><textarea id="task-ai-prompt" rows="9" readonly aria-label="Task drafting prompt"></textarea></details>
         <label for="task-ai-response">Agent response</label><textarea id="task-ai-response" rows="7" maxlength="250000" placeholder='{"tasks":[{"title":"…","description":"…","priority":"medium","due_date":null}]}'></textarea>
         <button type="button" class="button secondary" id="review-ai-tasks">Review tasks</button>
