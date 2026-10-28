@@ -384,6 +384,32 @@ body:has(#member-preview:not([hidden])) .topbar { border-bottom-color: #cdbf98; 
 .task-references { margin: 0; padding: 0; list-style: none; font-size: 12px; }
 .task-references li { padding-block: 9px; overflow-wrap: anywhere; }
 .task-references a { text-decoration: underline; text-underline-offset: 3px; }
+.updates-panel, .history-panel { margin-top: 22px; }
+.activity-list { list-style: none; margin: 0; padding: 0; }
+.activity-item { padding: 15px 22px; border-top: 1px solid var(--line); font-size: 12px; }
+.activity-item p { line-height: 1.8; overflow-wrap: anywhere; }
+.activity-item strong { font-weight: 600; }
+.activity-item .text-button { font-size: inherit; text-align: left; text-decoration: underline; text-underline-offset: 3px; }
+.activity-item time { display: block; font-size: 10px; color: var(--muted); margin-top: 5px; }
+.activity-empty { padding: 22px; color: var(--muted); font-size: 12px; }
+.history-filters { display: flex; flex-wrap: wrap; align-items: center; gap: 10px; padding: 0 22px 20px; }
+.history-filters label { font-size: 11px; color: var(--muted); }
+.history-filters select { font-size: 12px; max-width: 100%; }
+.history-panel .form-error { margin: 0 22px 15px; }
+.history-more { display: block; width: 100%; padding: 14px; border-top: 1px solid var(--line); color: var(--green); font-size: 12px; }
+.event-details { margin-top: 9px; }
+.event-details summary { cursor: pointer; color: var(--muted); font-size: 11px; }
+.event-details dl { margin: 10px 0 0; }
+.event-details dl > div { display: grid; grid-template-columns: 100px minmax(0, 1fr); gap: 12px; padding: 7px 0; }
+.event-details dt { color: var(--muted); text-transform: capitalize; }
+.event-details dd { margin: 0; white-space: pre-wrap; overflow-wrap: anywhere; }
+.task-progress-control { display: flex; flex-wrap: wrap; align-items: center; gap: 9px; margin-top: 18px; }
+.task-progress-control label { margin: 0; }
+.task-progress-control select { width: auto; }
+.task-progress-control > span { font-size: 10px; }
+.task-history-section { margin-top: 24px; border-top: 1px solid var(--line); padding-top: 18px; }
+.task-history-section > summary { cursor: pointer; font-size: 13px; font-weight: 600; }
+.task-history-section .activity-item, .task-history-section .activity-empty { padding-inline: 0; }
 @media (max-width: 760px) {
   .task-list-heading { align-items: flex-start; flex-wrap: wrap; padding: 16px; }
   .task-cards { padding-inline: 12px; }

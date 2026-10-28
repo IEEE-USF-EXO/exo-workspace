@@ -5,8 +5,17 @@ const escapeHTML = value => String(value ?? '').replace(/[&<>"']/g, c => ({ '&':
 const STATUS = { todo: 'To do', in_progress: 'In progress', blocked: 'Blocked', review: 'In review', done: 'Done', cancelled: 'Cancelled' };
 const PRIORITY = { low: 'Low', medium: 'Medium', high: 'High', urgent: 'Urgent' };
 const STATUS_CLASS = { todo: 'todo', in_progress: 'progress', blocked: 'blocked', review: 'review', done: 'done', cancelled: 'cancelled' };
-const TASK_FIELDS = 'id,project_id,team_id,milestone_id,title,description,status,priority,assignee_id,due_at,completed_at,created_by,created_at,updated_at';
-const state = { tasks: [], teams: [], projects: [], profiles: [], memberships: [], leadership: [], project: '', team: 'all', subteam: 'all' };
+const CORE_TASK_FIELDS = 'id,project_id,team_id,milestone_id,title,description,status,priority,assignee_id,due_at,completed_at,created_by,created_at,updated_at';
+const TASK_FIELDS = `${CORE_TASK_FIELDS},archived_at,archived_by`;
+const ACTIVITY_FIELDS = 'id,task_id,actor_id,actor_name,task_title,project_id,team_id,action,changes,created_at';
+const state = { tasks: [], teams: [], projects: [], profiles: [], memberships: [], leadership: [], activity: [], project: '', team: 'all', subteam: 'all' };
+let activityReady = false, recentKey = '', recentRequest = 0, recentLoading = false, recentError = '';
+let recentExpanded = false, recentScope = '';
+let auditRequest = 0;
+const audit = { rows: [], loading: false, more: false, loaded: false, error: '' };
+let taskHistoryRequest = 0;
+const taskHistory = { taskId: '', rows: [], more: false, loading: false };
+const taskFields = () => activityReady ? TASK_FIELDS : CORE_TASK_FIELDS;
 const TABS = ['overview', 'tasks', 'administration'];
 let client, session = null, phase = 'connecting', busy = false, generation = 0, authReady = false, activeTab = TABS.includes(location.hash.slice(1)) ? location.hash.slice(1) : 'overview';
 let pendingAuthError = '';
@@ -115,22 +124,39 @@ function canWorkIn(teamId, projectId) {
   const id = viewUserId();
   return viewIsAdmin() || state.memberships.some(member => member.user_id === id && parents.includes(member.team_id)) || state.leadership.some(role => role.user_id === id && !role.revoked_at && ((role.role === 'project_lead' && role.project_id === projectId && parents.includes(role.team_id)) || (role.role === 'team_lead' && parents.includes(role.team_id) && !role.project_id)));
 }
-function canCreate() { return phase === 'ready' && state.projects.some(project => state.teams.some(team => canWorkIn(team.id, project.id))); }
+function userHasGroupAccess(userId, teamId, projectId) {
+  const parents = ancestors(teamId);
+  return userIsAdmin(userId) || state.memberships.some(member => member.user_id === userId && parents.includes(member.team_id)) || state.leadership.some(role => role.user_id === userId && !role.revoked_at && parents.includes(role.team_id) && ((role.role === 'team_lead' && !role.project_id) || (role.role === 'project_lead' && role.project_id === projectId)));
+}
+function fillTaskAssignees(projectId, teamId, preferred = $('#task-assignee').value) {
+  const people = state.profiles.filter(profile => userHasGroupAccess(profile.id, teamId, projectId));
+  $('#task-assignee').innerHTML = options([['', 'Unassigned group work'], ...people.map(profile => [profile.id, profile.display_name || 'Workspace member'])]);
+  const existing = state.tasks.find(task => task.id === $('#task-id').value);
+  if (existing?.assignee_id === preferred && !people.some(profile => profile.id === preferred)) $('#task-assignee').insertAdjacentHTML('beforeend', options([[preferred, `${userName(preferred)} · check group access`]]));
+  if (people.some(profile => profile.id === preferred) || existing?.assignee_id === preferred) $('#task-assignee').value = preferred || '';
+}
+function canManageIn(teamId, projectId) {
+  if (!canWorkIn(teamId, projectId) || preview.mode === 'group') return false;
+  const parents = ancestors(teamId), id = viewUserId();
+  return viewIsAdmin() || state.leadership.some(role => role.user_id === id && !role.revoked_at && parents.includes(role.team_id) && ((role.role === 'team_lead' && !role.project_id) || (role.role === 'project_lead' && role.project_id === projectId)));
+}
+function canCreate() { return phase === 'ready' && state.projects.some(project => state.teams.some(team => canManageIn(team.id, project.id))); }
 function creationBlockReason() {
   if (preview.mode) return 'Read-only testing view. Exit preview to create, edit, or delete shared records.';
   if (phase !== 'ready' || canCreate()) return '';
   const prefix = isAdmin() ? 'Your EXO chair role is active. ' : '';
   if (!state.projects.length) return `${prefix}${isAdmin() ? 'Open Administration to create your first project.' : 'Ask your EXO chair to create a project before adding tasks.'}`;
   if (!state.teams.length) return `${prefix}${isAdmin() ? 'Open Administration to create a team and enable task creation.' : 'Ask your EXO chair to create a team.'}`;
-  return 'You can view shared project information. Ask your EXO chair for a group membership or scoped leadership assignment to access tasks.';
+  return viewIsMember() ? '' : 'An administrator needs to add you to a group.';
 }
-function canEdit(task) { return !busy && !preview.mode && canWorkIn(task.team_id, task.project_id); }
+function canEdit(task) { return !busy && !preview.mode && !task.archived_at && canManageIn(task.team_id, task.project_id); }
+function canProgress(task) { return !busy && !preview.mode && !task.archived_at && task.status !== 'cancelled' && canWorkIn(task.team_id, task.project_id); }
 function scopedTasks() {
   if (!viewIsMember()) return [];
   const lens = $('#task-lens').value;
-  return state.tasks.filter(task => canWorkIn(task.team_id, task.project_id) && task.project_id === state.project && (state.team === 'all' || descendantOf(task.team_id, state.team)) && (state.subteam === 'all' || descendantOf(task.team_id, state.subteam)) && (lens !== 'assigned' || (viewUserId() && task.assignee_id === viewUserId())));
+  return state.tasks.filter(task => canWorkIn(task.team_id, task.project_id) && task.project_id === state.project && (activeTab === 'tasks' && $('#archive-filter').value === 'archived' ? Boolean(task.archived_at) : !task.archived_at) && (state.team === 'all' || descendantOf(task.team_id, state.team)) && (state.subteam === 'all' || descendantOf(task.team_id, state.subteam)) && (lens !== 'assigned' || (viewUserId() && task.assignee_id === viewUserId())));
 }
-function clearData() { for (const key of ['tasks', 'teams', 'projects', 'profiles', 'memberships', 'leadership']) state[key] = []; state.project = ''; state.team = 'all'; state.subteam = 'all'; for (const selector of ['#task-dialog', '#setup-dialog', '#members-dialog']) if ($(selector).open) $(selector).close(); if (!session && $('#import-dialog').open) $('#import-dialog').close(); }
+function clearData() { for (const key of ['tasks', 'teams', 'projects', 'profiles', 'memberships', 'leadership', 'activity']) state[key] = []; activityReady = false; recentKey = ''; ++recentRequest; ++auditRequest; Object.assign(audit, { rows: [], loading: false, more: false, loaded: false, error: '' }); state.project = ''; state.team = 'all'; state.subteam = 'all'; for (const selector of ['#task-dialog', '#setup-dialog', '#members-dialog']) if ($(selector).open) $(selector).close(); if (!session && $('#import-dialog').open) $('#import-dialog').close(); }
 function normalizeScope() {
   if (!state.projects.some(project => project.id === state.project)) state.project = state.projects[0]?.id || '';
   const roots = rootsForProject(state.project);
@@ -161,8 +187,97 @@ function formatDate(value) {
   if (day === today()) return 'Today'; if (day === dateValue(tomorrow)) return 'Tomorrow';
   return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric', ...(date.getFullYear() !== new Date().getFullYear() ? { year: 'numeric' } : {}) });
 }
-function checkbox(task) { return `<input class="complete-check" type="checkbox" data-complete="${escapeHTML(task.id)}" ${task.status === 'done' ? 'checked' : ''} ${canEdit(task) && task.status !== 'cancelled' ? '' : 'disabled'} aria-label="Mark ${escapeHTML(task.title)} ${task.status === 'done' ? 'incomplete' : 'complete'}">`; }
+function checkbox(task) { return `<input class="complete-check" type="checkbox" data-complete="${escapeHTML(task.id)}" ${task.status === 'done' ? 'checked' : ''} ${canProgress(task) ? '' : 'disabled'} aria-label="Mark ${escapeHTML(task.title)} ${task.status === 'done' ? 'incomplete' : 'complete'}">`; }
 function titleButton(task) { return `<button class="task-title-button" data-edit="${escapeHTML(task.id)}" title="Open task details">${escapeHTML(task.title)}</button>`; }
+function activityVerb(event) {
+  if (event.action === 'updated' && (event.task_id || event.entity_type === 'tasks')) {
+    const status = event.changes?.status;
+    if (status?.to === 'done') return 'completed';
+    if (status?.to === 'cancelled') return 'cancelled';
+    if (status?.from === 'done') return 'reopened';
+    if (status?.to === 'blocked') return 'marked blocked';
+    if (status?.to === 'review') return 'submitted for review';
+    if (event.changes?.assignee_id) return 'reassigned';
+  }
+  if (event.entity_type === 'team_members') return event.action === 'deleted' ? 'removed membership for' : 'added membership for';
+  return { created: 'created', updated: 'updated', deleted: 'deleted', archived: 'archived', restored: 'restored' }[event.action] || event.action;
+}
+function historyValue(field, value) {
+  if (value == null || value === '') return 'None';
+  if (field === 'status') return STATUS[value] || value;
+  if (field === 'priority') return PRIORITY[value] || value;
+  if (['assignee_id', 'created_by', 'user_id', 'assigned_by', 'added_by', 'author_id'].includes(field)) return userName(value);
+  if (field === 'team_id') return teamById(value) ? teamPath(value) : String(value);
+  if (field === 'project_id') return state.projects.find(project => project.id === value)?.name || String(value);
+  if (field.endsWith('_at')) return new Date(value).toLocaleString();
+  return typeof value === 'object' ? JSON.stringify(value) : String(value);
+}
+function activityHTML(event, details = false) {
+  const taskId = event.task_id || (event.entity_type === 'tasks' ? event.entity_id : null);
+  const task = state.tasks.find(task => task.id === taskId);
+  const label = event.task_title || event.entity_label || task?.title || 'Task';
+  const actor = event.actor_id && event.actor_id === viewUserId() ? 'You' : event.actor_name || (event.actor_id ? userName(event.actor_id) : 'Administration / system');
+  const title = task && canWorkIn(task.team_id, task.project_id) ? `<button type="button" class="text-button" data-edit="${escapeHTML(taskId)}">${escapeHTML(label)}</button>` : escapeHTML(label);
+  const changes = Object.entries(event.changes || {}).filter(([field]) => !['id', 'created_at', 'updated_at', 'completed_at', 'archived_by'].includes(field));
+  const detail = details && changes.length ? `<details class="event-details"><summary>View changes</summary><dl>${changes.map(([field, change]) => `<div><dt>${escapeHTML(field.replaceAll('_', ' '))}</dt><dd>${escapeHTML(historyValue(field, change?.from))} → ${escapeHTML(historyValue(field, change?.to))}</dd></div>`).join('')}</dl></details>` : '';
+  return `<li class="activity-item"><p><strong>${escapeHTML(actor)}</strong> ${escapeHTML(activityVerb(event))} ${title}</p><time datetime="${escapeHTML(event.created_at)}">${escapeHTML(new Date(event.created_at).toLocaleString())}</time>${detail}</li>`;
+}
+function activityPage(query, cursor, size = 30) {
+  query = query.order('created_at', { ascending: false }).order('id', { ascending: false });
+  if (cursor) query = query.or(`created_at.lt.${cursor.created_at},and(created_at.eq.${cursor.created_at},id.lt.${cursor.id})`);
+  return query.range(0, size);
+}
+function renderRecentUpdates() {
+  const scope = `${generation}|${state.project}|${state.team}|${state.subteam}|${preview.mode}|${preview.subject}`;
+  if (recentScope !== scope) { recentScope = scope; recentExpanded = false; }
+  const rows = state.activity.filter(event => event.project_id === state.project && canWorkIn(event.team_id, event.project_id) && (state.team === 'all' || descendantOf(event.team_id, state.team)) && (state.subteam === 'all' || descendantOf(event.team_id, state.subteam)));
+  const visible = recentExpanded ? rows : rows.slice(0, 3);
+  $('#recent-updates').innerHTML = visible.length ? visible.map(event => activityHTML(event)).join('') : `<li class="activity-empty">${recentLoading ? 'Loading updates…' : recentError || 'No recent updates in this group.'}</li>`;
+  $('#toggle-updates').hidden = rows.length <= 3;
+  $('#toggle-updates').textContent = recentExpanded ? 'Show less' : `Show more updates (${rows.length - 3})`;
+  $('#toggle-updates').setAttribute('aria-expanded', String(recentExpanded));
+  $('#refresh-updates').disabled = recentLoading || phase !== 'ready' || !activityReady;
+}
+async function refreshRecentActivity() {
+  if (phase !== 'ready' || !activityReady || !viewIsMember()) { state.activity = []; renderRecentUpdates(); return; }
+  const owner = session.user.id, version = generation, request = ++recentRequest;
+  const groups = state.teams.filter(team => canWorkIn(team.id, state.project) && (state.team === 'all' || descendantOf(team.id, state.team)) && (state.subteam === 'all' || descendantOf(team.id, state.subteam))).map(team => team.id);
+  if (!groups.length) { state.activity = []; recentLoading = false; renderRecentUpdates(); return; }
+  recentLoading = true; recentError = ''; renderRecentUpdates();
+  try {
+    const { data, error } = await client.from('task_activity').select(ACTIVITY_FIELDS).eq('project_id', state.project).in('team_id', groups).order('created_at', { ascending: false }).order('id', { ascending: false }).range(0, 99);
+    if (request !== recentRequest || owner !== session?.user.id || version !== generation) return;
+    if (error) throw error; state.activity = data || [];
+  } catch { if (request === recentRequest && owner === session?.user.id && version === generation) recentError = 'Could not load updates. Try Refresh.'; }
+  finally { if (request === recentRequest && owner === session?.user.id && version === generation) { recentLoading = false; renderRecentUpdates(); } }
+}
+function renderAdminHistory() {
+  const allowed = phase === 'ready' && isAdmin() && !preview.mode;
+  $('#activity-setup-note').hidden = !allowed || activityReady;
+  $('#history-error').hidden = !audit.error; $('#history-error').textContent = audit.error;
+  $('#workspace-history').innerHTML = audit.rows.length ? audit.rows.map(event => activityHTML(event, true)).join('') : `<li class="activity-empty">${!activityReady ? 'History will be available after the workspace update.' : audit.loading ? 'Loading history…' : 'No activity recorded for these filters.'}</li>`;
+  $('#history-more').hidden = !audit.more; $('#history-more').disabled = audit.loading;
+  for (const id of ['#history-type', '#history-project', '#refresh-history']) $(id).disabled = !allowed || !activityReady || audit.loading;
+  const selected = $('#history-project').value || 'all';
+  $('#history-project').innerHTML = options([['all', 'All projects'], ...state.projects.map(project => [project.id, project.name])]);
+  $('#history-project').value = selected === 'all' || state.projects.some(project => project.id === selected) ? selected : 'all';
+}
+async function loadAdminHistory(reset = true) {
+  if (phase !== 'ready' || !isAdmin() || preview.mode || !activityReady || audit.loading) return;
+  const owner = session.user.id, version = generation, request = ++auditRequest;
+  if (reset) audit.rows = [];
+  audit.loading = true; audit.error = ''; renderAdminHistory();
+  try {
+    let query = client.from('workspace_activity').select('id,entity_type,entity_id,entity_label,action,actor_id,actor_name,project_id,team_id,changes,created_at');
+    if ($('#history-type').value !== 'all') query = query.eq('entity_type', $('#history-type').value);
+    if ($('#history-project').value !== 'all') query = query.eq('project_id', $('#history-project').value);
+    const { data, error } = await activityPage(query, reset ? null : audit.rows.at(-1));
+    if (request !== auditRequest || owner !== session?.user.id || version !== generation || !isAdmin() || preview.mode) return;
+    if (error) throw error;
+    audit.rows.push(...(data || []).slice(0, 30)); audit.more = (data || []).length > 30; audit.loaded = true;
+  } catch { if (request === auditRequest && owner === session?.user.id && version === generation) audit.error = 'History could not be loaded. Try Refresh history.'; }
+  finally { if (request === auditRequest && owner === session?.user.id && version === generation) { audit.loading = false; renderAdminHistory(); } }
+}
 function renderOverview(tasks) {
   const done = tasks.filter(task => task.status === 'done').length, inProgress = tasks.filter(task => task.status === 'in_progress').length;
   const percent = tasks.length ? Math.round(done / tasks.length * 100) : 0;
@@ -175,20 +290,22 @@ function renderOverview(tasks) {
   $('#progress-bar').style.width = `${available ? percent : 0}%`;
   $('#status-breakdown').innerHTML = Object.entries(STATUS).map(([value, label]) => `<div class="breakdown-row"><span class="legend-dot ${STATUS_CLASS[value]}"></span>${label}<strong>${available ? tasks.filter(task => task.status === value).length : '—'}</strong></div>`).join('');
   $('#progress-footer').textContent = available ? `${done} of ${tasks.length} tasks complete in this view.` : 'Sign in to see your team’s progress.';
+  renderRecentUpdates();
 }
 function renderTasks(tasks) {
   const query = $('#task-search').value.toLowerCase().trim();
   const filtered = tasks.filter(task => `${task.title} ${task.description} ${userName(task.assignee_id)} ${teamPath(task.team_id)}`.toLowerCase().includes(query) && ($('#status-filter').value === 'all' || task.status === $('#status-filter').value) && ($('#priority-filter').value === 'all' || task.priority === $('#priority-filter').value));
-  const closed = filtered.filter(isClosed), includeClosed = showClosedTasks || ['done', 'cancelled'].includes($('#status-filter').value);
+  const archivedView = $('#archive-filter').value === 'archived';
+  const closed = filtered.filter(isClosed), includeClosed = archivedView || showClosedTasks || ['done', 'cancelled'].includes($('#status-filter').value);
   const visible = filtered.filter(task => !isClosed(task) || includeClosed);
   const groupFor = task => isClosed(task) ? 'Completed / cancelled' : overdue(task) ? 'Overdue' : ({ blocked: 'Blocked', in_progress: 'In progress', review: 'Awaiting review', todo: 'Not started' }[task.status] || 'Other');
   const order = ['Blocked', 'Overdue', 'In progress', 'Awaiting review', 'Not started', 'Completed / cancelled', 'Other'];
   visible.sort((a, b) => order.indexOf(groupFor(a)) - order.indexOf(groupFor(b)) || (a.due_at || '9999').localeCompare(b.due_at || '9999') || a.title.localeCompare(b.title));
   const showGroups = new Set(visible.map(task => task.team_id)).size > 1;
   $('#task-group-heading').hidden = !showGroups;
-  $('#task-list-title').textContent = $('#task-lens').value === 'assigned' ? 'My tasks' : viewIsAdmin() ? 'Workspace tasks' : 'Group tasks';
+  $('#task-list-title').textContent = archivedView ? 'Archived tasks' : $('#task-lens').value === 'assigned' ? 'My tasks' : viewIsAdmin() ? 'Workspace tasks' : 'Group tasks';
   $('#list-count').textContent = viewIsMember() ? visible.length : '—';
-  $('#show-closed').hidden = !closed.length;
+  $('#show-closed').hidden = archivedView || !closed.length;
   $('#show-closed').textContent = `${includeClosed ? 'Hide' : 'Show'} completed (${closed.length})`;
   $('#show-closed').setAttribute('aria-expanded', String(includeClosed));
   let previous = '';
@@ -226,19 +343,23 @@ function render() {
     try { const saved = localStorage.getItem(`exo-task-layout:${taskLayoutUser}`); if (['list', 'table'].includes(saved)) taskLayoutChoice = saved; } catch { /* The default layout remains usable. */ }
   }
   if (taskLensUser !== session?.user.id) { taskLensChosen = false; taskLensUser = session?.user.id || ''; }
-  const groupTasks = state.tasks.filter(task => task.project_id === state.project && canWorkIn(task.team_id, task.project_id) && (state.team === 'all' || descendantOf(task.team_id, state.team)) && (state.subteam === 'all' || descendantOf(task.team_id, state.subteam)));
+  const groupTasks = state.tasks.filter(task => !task.archived_at && task.project_id === state.project && canWorkIn(task.team_id, task.project_id) && (state.team === 'all' || descendantOf(task.team_id, state.team)) && (state.subteam === 'all' || descendantOf(task.team_id, state.subteam)));
   const personalTasks = groupTasks.some(task => task.assignee_id === viewUserId());
   if (phase === 'ready' && preview.mode !== 'group' && !taskLensChosen) $('#task-lens').value = viewIsAdmin() ? 'all' : personalTasks ? 'assigned' : 'team';
   $('#task-scope-note').hidden = !viewIsMember() || viewIsAdmin() || preview.mode === 'group' || taskLensChosen || personalTasks || !groupTasks.length;
   $('#task-scope-note').textContent = 'No individual assignments here. Showing your group’s work.';
   for (const button of document.querySelectorAll('[data-task-scope]')) { button.setAttribute('aria-pressed', String(button.dataset.taskScope === 'assigned' ? $('#task-lens').value === 'assigned' : $('#task-lens').value !== 'assigned')); button.disabled = !viewIsMember() || (preview.mode === 'group' && button.dataset.taskScope === 'assigned'); }
   $('#group-tasks-button').textContent = viewIsAdmin() ? 'All groups' : 'My group';
+  const managesTasks = state.teams.some(team => canManageIn(team.id, state.project));
+  $('#archive-filter').hidden = !managesTasks || !activityReady;
+  if (!managesTasks || !activityReady) $('#archive-filter').value = 'active';
   const team = teamById(state.team), subteam = teamById(state.subteam), tasks = scopedTasks();
   $('#overview-scope').textContent = subteam?.name || team?.name || (viewIsAdmin() ? 'Across all teams' : 'Across my groups');
   $('#nav-count').textContent = viewIsMember() ? tasks.filter(task => !isClosed(task)).length : '—';
   $('#tab-count').textContent = viewIsMember() ? tasks.length : '—';
   $('#page-title').textContent = { overview: 'Overview', tasks: 'Tasks', administration: 'Administration' }[activeTab];
-  $('#new-task').hidden = activeTab === 'administration';
+  $('#new-task').hidden = activeTab === 'administration' || (phase === 'ready' && !canCreate());
+  $('#add-task-row').hidden = phase === 'ready' && !canCreate();
   $('#nav-administration').hidden = !chair; $('#tab-administration').hidden = !chair;
   for (const element of document.querySelectorAll('[data-tab]')) {
     const active = element.dataset.tab === activeTab; element.classList.toggle('active', active);
@@ -286,9 +407,14 @@ function render() {
   if (phase === 'ready') updateConnectedBanner();
   $('#connection-banner').hidden = phase === 'ready' && viewIsMember() && state.projects.length > 0 && state.teams.length > 0;
   $('main').setAttribute('aria-busy', String(phase === 'loading' || phase === 'connecting'));
-  renderOverview(tasks); renderTasks(tasks);
+  const open = state.tasks.find(task => task.id === $('#task-id').value);
+  $('#task-progress-status').disabled = !open || !canProgress(open);
+  if ($('#task-dialog').open) $('#delete-task').disabled = busy || !activityReady;
+  renderOverview(tasks); renderTasks(tasks); renderAdminHistory();
+  const key = `${generation}|${state.project}|${state.team}|${state.subteam}|${preview.mode}|${preview.subject}`;
+  if (phase === 'ready' && activityReady && recentKey !== key) { recentKey = key; setTimeout(refreshRecentActivity, 0); }
 }
-function switchTab(tab) { if (!TABS.includes(tab) || (tab === 'administration' && (phase !== 'ready' || !isAdmin() || preview.mode))) return; activeTab = tab; if (location.hash !== `#${tab}`) history.replaceState(null, '', `#${tab}`); render(); }
+function switchTab(tab) { if (!TABS.includes(tab) || (tab === 'administration' && (phase !== 'ready' || !isAdmin() || preview.mode))) return; activeTab = tab; if (location.hash !== `#${tab}`) history.replaceState(null, '', `#${tab}`); render(); if (tab === 'administration' && !audit.loaded) loadAdminHistory(); }
 function resetPreview() {
   const saved = preview.saved;
   preview.mode = ''; preview.subject = ''; preview.saved = null;
@@ -344,6 +470,13 @@ async function readAll(table, fields, order = 'id') {
     rows.push(...data); if (data.length < 500) return rows; start += data.length;
   }
 }
+async function readTaskDataset() {
+  try { return { rows: await readAll('tasks', TASK_FIELDS), ready: true }; }
+  catch (error) {
+    if (!['PGRST204', '42703'].includes(error.code)) throw error;
+    return { rows: await readAll('tasks', CORE_TASK_FIELDS), ready: false };
+  }
+}
 async function loadWorkspace() {
   if (!client || busy) return;
   const current = ++generation, userId = session?.user.id;
@@ -356,10 +489,11 @@ async function loadWorkspace() {
       readAll('teams', 'id,name,parent_team_id'), readAll('projects', 'id,name,status'),
       readAll('profiles', 'id,display_name'),
       readAll('team_members', 'team_id,user_id', 'team_id,user_id'),
-      readAll('leadership_assignments', 'id,user_id,role,team_id,project_id,revoked_at'), readAll('tasks', TASK_FIELDS)
+      readAll('leadership_assignments', 'id,user_id,role,team_id,project_id,revoked_at'), readTaskDataset()
     ]);
     if (current !== generation || userId !== session?.user.id) return;
-    Object.assign(state, { teams, projects, profiles, memberships, leadership, tasks });
+    activityReady = tasks.ready;
+    Object.assign(state, { teams, projects, profiles, memberships, leadership, tasks: tasks.rows });
     const prefs = previewScope || readPreferences(); state.project = prefs.project || ''; state.team = prefs.team || 'all'; state.subteam = prefs.subteam || 'all';
     const member = memberships.some(member => member.user_id === userId) || leadership.some(role => role.user_id === userId && !role.revoked_at && ['exo_chair', 'permanent_project_lead', 'project_lead', 'team_lead'].includes(role.role));
     phase = member ? 'ready' : 'no-access';
@@ -371,6 +505,7 @@ async function loadWorkspace() {
     clearData(); phase = 'error'; setBanner('Workspace could not be loaded', errorMessage(error), 'error');
   }
   render();
+  if (activeTab === 'administration' && isAdmin() && !preview.mode) loadAdminHistory();
 }
 // Recheck persisted memberships so edits in Supabase take effect without signing
 // out. Do not interrupt an open form; the database still checks every request.
@@ -639,12 +774,13 @@ async function changeMembership(teamId, remove = false) {
   } finally { if (owner === session?.user.id && version === generation) { busy = false; render(); } }
 }
 function populateTaskScope(projectId, preferredRoot, preferredTeam) {
-  const roots = rootsForProject(projectId, true);
+  const roots = rootsForProject(projectId).filter(root => state.teams.some(team => rootId(team.id) === root.id && canManageIn(team.id, projectId)));
   $('#task-team').innerHTML = options(roots.map(team => [team.id, team.name]));
   $('#task-team').value = roots.some(team => team.id === preferredRoot) ? preferredRoot : roots[0]?.id || '';
-  const available = state.teams.filter(team => rootId(team.id) === $('#task-team').value && canWorkIn(team.id, projectId));
+  const available = state.teams.filter(team => rootId(team.id) === $('#task-team').value && canManageIn(team.id, projectId));
   $('#task-subteam').innerHTML = options(available.map(team => [team.id, team.parent_team_id ? teamPath(team.id).split(' / ').slice(1).join(' / ') : 'Team-wide']));
   $('#task-subteam').value = available.some(team => team.id === preferredTeam) ? preferredTeam : available[0]?.id || '';
+  fillTaskAssignees(projectId, $('#task-subteam').value);
   $('#save-task').disabled = busy || !available.length;
 }
 function openTask(id) {
@@ -668,18 +804,23 @@ function openTask(id) {
     $('#dialog-title').textContent = preview.mode ? 'Task details · testing view' : canEdit(task) ? 'Edit task' : 'Task details · read only';
     $('#save-task').disabled = !canEdit(task);
   } else {
-    const projects = state.projects.filter(project => state.teams.some(team => canWorkIn(team.id, project.id)));
+    const projects = state.projects.filter(project => state.teams.some(team => canManageIn(team.id, project.id)));
     $('#task-project').innerHTML = options(projects.map(project => [project.id, project.name]));
     $('#task-project').value = projects.some(project => project.id === state.project) ? state.project : projects[0]?.id || '';
     populateTaskScope($('#task-project').value, state.team, state.subteam);
   }
   $('#delete-task').hidden = !task || !canEdit(task);
+  if (task) fillTaskAssignees(task.project_id, task.team_id, task.assignee_id);
   taskEditing = !task;
   $('#task-detail-view').hidden = !task;
   $('#task-edit-fields').hidden = Boolean(task);
   $('#edit-task').hidden = !task || !canEdit(task);
   $('#save-task').hidden = Boolean(task); $('#delete-task').hidden = true;
   $('#cancel-dialog').textContent = task ? 'Close' : 'Cancel';
+  $('#task-progress-control').hidden = !task || !canProgress(task);
+  $('#task-progress-status').disabled = !task || !canProgress(task);
+  $('#task-progress-status').value = task?.status || 'todo';
+  $('#task-history-section').open = false;
   if (task) {
     $('#dialog-title').textContent = preview.mode ? 'Task details · preview' : 'Task details';
     $('#task-detail-title').textContent = task.title;
@@ -687,6 +828,12 @@ function openTask(id) {
     setLinkedText($('#task-instructions'), task.description || 'No instructions added yet.');
     $('#task-detail-facts').innerHTML = [['Assignee', task.assignee_id ? userName(task.assignee_id) : 'Unassigned group work'], ['Due date', formatDate(task.due_at)], ['Group', teamPath(task.team_id)], ['Project', state.projects.find(project => project.id === task.project_id)?.name || 'Project']].map(([label, value]) => `<div><dt>${label}</dt><dd>${escapeHTML(value)}</dd></div>`).join('');
     loadTaskReferences(task);
+    loadTaskHistory(task, true);
+    $('#delete-task').hidden = Boolean(preview.mode) || !canManageIn(task.team_id, task.project_id);
+    $('#delete-task').textContent = task.archived_at ? 'Restore task' : 'Archive task';
+    $('#delete-task').disabled = !activityReady;
+    $('#delete-task').title = activityReady ? '' : 'The activity database update is needed first.';
+    if (task.archived_at) $('#task-detail-meta').insertAdjacentHTML('beforeend', '<span class="badge cancelled">Archived</span>');
   }
   showDialog($('#task-dialog'));
   if (task) { $('#task-detail-title').tabIndex = -1; $('#task-detail-title').focus(); }
@@ -703,12 +850,30 @@ async function loadTaskReferences(task) {
     $('#task-references').innerHTML = links.length ? links.map(link => `<li><a href="${escapeHTML(link.url)}" target="_blank" rel="noopener noreferrer">${escapeHTML(link.label || new URL(link.url).hostname)} ↗</a></li>`).join('') : '<li class="muted">No references attached.</li>';
   } catch { if (owner === session?.user.id && version === generation && $('#task-id').value === task.id) $('#task-references').textContent = 'References could not be loaded. Close and reopen this task to retry.'; }
 }
+async function loadTaskHistory(task, reset = true) {
+  if (!activityReady) { $('#task-history').innerHTML = '<li class="activity-empty">History will be available after the workspace update.</li>'; $('#task-history-more').hidden = true; return; }
+  if (!reset && taskHistory.loading) return;
+  const owner = session?.user.id, version = generation, request = ++taskHistoryRequest;
+  if (reset) { taskHistory.taskId = task.id; taskHistory.rows = []; }
+  taskHistory.loading = true; $('#task-history-more').disabled = true;
+  if (!taskHistory.rows.length) $('#task-history').innerHTML = '<li class="activity-empty">Loading history…</li>';
+  try {
+    const { data, error } = await activityPage(client.from('task_activity').select(ACTIVITY_FIELDS).eq('task_id', task.id), reset ? null : taskHistory.rows.at(-1), 20);
+    if (request !== taskHistoryRequest || owner !== session?.user.id || version !== generation || $('#task-id').value !== task.id || !$('#task-dialog').open) return;
+    if (error) throw error;
+    taskHistory.rows.push(...(data || []).slice(0, 20)); taskHistory.more = (data || []).length > 20;
+    $('#task-history').innerHTML = taskHistory.rows.length ? taskHistory.rows.map(event => activityHTML(event, true)).join('') : '<li class="activity-empty">No activity recorded yet.</li>';
+    $('#task-history-more').hidden = !taskHistory.more;
+  } catch { if (request === taskHistoryRequest && owner === session?.user.id && version === generation && $('#task-id').value === task.id) $('#task-history').innerHTML = '<li class="activity-empty">Could not load history. Close and reopen this task to retry.</li>'; }
+  finally { if (request === taskHistoryRequest) { taskHistory.loading = false; $('#task-history-more').disabled = false; } }
+}
 function editOpenTask() {
   const task = state.tasks.find(task => task.id === $('#task-id').value);
   if (!task || !canEdit(task) || busy || preview.mode) return;
   taskEditing = true; $('#task-detail-view').hidden = true; $('#task-edit-fields').hidden = false;
   $('#edit-task').hidden = true; $('#save-task').hidden = false; $('#delete-task').hidden = false;
   $('#cancel-dialog').textContent = 'Cancel'; $('#dialog-title').textContent = 'Edit task'; $('#task-title').focus();
+  $('#delete-task').hidden = true;
   dialogBaselines.set($('#task-dialog'), dialogFormState($('#task-dialog')));
 }
 function lockForm(locked) {
@@ -731,45 +896,56 @@ async function saveTask(event) {
   const values = { title, description: $('#task-description').value.trim(), status: $('#task-status').value, priority: $('#task-priority').value, assignee_id: $('#task-assignee').value || null,
     due_at: !date ? null : existing && dueDate(existing) === date ? existing.due_at : new Date(`${date}T23:59:59`).toISOString() };
   const teamId = $('#task-subteam').value, projectId = $('#task-project').value;
-  if (!existing && !canWorkIn(teamId, projectId)) { formError(new Error('Choose an existing project and a team or subteam you can work in.')); return; }
+  if (!existing && !canManageIn(teamId, projectId)) { formError(new Error('Choose a project and group you lead.')); return; }
   const owner = session.user.id, version = generation;
   busy = true; lockForm(true); render();
   try {
-    const query = existing ? client.from('tasks').update(values).eq('id', id).eq('updated_at', existing.updated_at) : client.from('tasks').insert({ ...values, project_id: projectId, team_id: teamId, created_by: owner });
-    const { data, error } = await query.select(TASK_FIELDS).maybeSingle();
+    const query = existing ? activityReady ? client.rpc('manage_task', { p_task: id, p_expected: existing.updated_at, p_values: values }) : client.from('tasks').update(values).eq('id', id).eq('updated_at', existing.updated_at) : client.from('tasks').insert({ ...values, project_id: projectId, team_id: teamId, created_by: owner });
+    const { data, error } = await query.select(taskFields()).maybeSingle();
     if (error) throw error; if (!data) throw new Error('This task changed or you no longer have permission. Close this dialog, refresh, and try again.');
     if (owner !== session?.user.id || version !== generation) return;
     state.tasks = existing ? state.tasks.map(task => task.id === id ? data : task) : [...state.tasks, data];
     state.project = data.project_id; state.team = rootId(data.team_id); state.subteam = data.team_id === state.team ? 'all' : data.team_id;
     $('#task-search').value = ''; $('#status-filter').value = 'all'; $('#priority-filter').value = 'all';
-    savePreferences(); $('#task-dialog').close(); toast(existing ? 'Task saved to Supabase.' : 'Task created in Supabase.');
+    savePreferences(); $('#task-dialog').close(); recentKey = ''; audit.loaded = false; toast(existing ? 'Task saved.' : 'Task created.');
   } catch (error) { if (owner === session?.user.id && version === generation) formError(error); }
   finally { busy = false; lockForm(false); render(); }
 }
 async function toggleTask(event) {
   if (!event.target.matches('[data-complete]')) return;
   const task = state.tasks.find(task => task.id === event.target.dataset.complete);
-  if (!task || !canEdit(task)) { render(); return; }
-  const status = event.target.checked ? 'done' : 'todo', owner = session.user.id, version = generation;
+  if (!task || !canProgress(task)) { render(); return; }
+  await updateTaskProgress(task, event.target.checked ? 'done' : 'todo');
+}
+async function updateTaskProgress(task, status) {
+  if (!canProgress(task) || !['todo', 'in_progress', 'blocked', 'review', 'done'].includes(status)) return;
+  const owner = session.user.id, version = generation;
   busy = true; render();
   try {
-    const { data, error } = await client.from('tasks').update({ status }).eq('id', task.id).eq('updated_at', task.updated_at).select(TASK_FIELDS).maybeSingle();
+    const { data, error } = await client.from('tasks').update({ status }).eq('id', task.id).eq('updated_at', task.updated_at).select(taskFields()).maybeSingle();
     if (error) throw error; if (!data) throw new Error('Task changed or access was removed. Refresh and try again.');
     if (owner !== session?.user.id || version !== generation) return;
-    state.tasks = state.tasks.map(task => task.id === data.id ? data : task); toast(status === 'done' ? 'Task completed.' : 'Task reopened.');
+    state.tasks = state.tasks.map(task => task.id === data.id ? data : task); recentKey = ''; audit.loaded = false;
+    if ($('#task-dialog').open && $('#task-id').value === task.id) {
+      $('#task-status').value = data.status; $('#task-progress-status').value = data.status;
+      $('#task-detail-meta .badge').className = `badge ${STATUS_CLASS[data.status]}`; $('#task-detail-meta .badge').textContent = STATUS[data.status];
+      dialogBaselines.set($('#task-dialog'), dialogFormState($('#task-dialog'))); loadTaskHistory(data, true);
+    }
+    toast(status === 'done' ? 'Task completed.' : 'Progress updated.');
   } catch (error) { if (owner === session?.user.id) toast(errorMessage(error)); }
-  finally { busy = false; render(); }
+  finally { busy = false; if ($('#task-dialog').open && $('#task-id').value === task.id) $('#task-progress-status').value = state.tasks.find(item => item.id === task.id)?.status || task.status; render(); }
 }
 async function deleteTask() {
   if (preview.mode) return;
   const task = state.tasks.find(task => task.id === $('#task-id').value);
-  if (!task || !canEdit(task) || !confirm('Delete this task and its comments, links, checklist, and activity? This cannot be undone.')) return;
+  if (!task || busy || !activityReady || !canManageIn(task.team_id, task.project_id) || !confirm(task.archived_at ? 'Restore this task to the active workspace?' : 'Archive this task? Its instructions and history will be kept.')) return;
   const owner = session.user.id, version = generation; busy = true; lockForm(true); render();
   try {
-    const { data, error } = await client.from('tasks').delete().eq('id', task.id).eq('updated_at', task.updated_at).select('id').maybeSingle();
+    const { data, error } = await client.rpc('manage_task', { p_task: task.id, p_expected: task.updated_at, p_values: { archived: !task.archived_at } }).select(TASK_FIELDS).maybeSingle();
     if (error) throw error; if (!data) throw new Error('Task changed or access was removed. Refresh and try again.');
     if (owner !== session?.user.id || version !== generation) return;
-    state.tasks = state.tasks.filter(item => item.id !== task.id); $('#task-dialog').close(); toast('Task deleted from Supabase.');
+    state.tasks = state.tasks.map(item => item.id === task.id ? data : item); recentKey = ''; audit.loaded = false;
+    $('#task-dialog').close(); toast(task.archived_at ? 'Task restored.' : 'Task archived. History preserved.');
   } catch (error) { if (owner === session?.user.id) formError(error); }
   finally { busy = false; lockForm(false); render(); }
 }
@@ -818,6 +994,15 @@ $('#task-status').innerHTML = options(Object.entries(STATUS));
 $('#status-filter').innerHTML = options([['all', 'All statuses'], ...Object.entries(STATUS)]);
 $('#task-priority').innerHTML = options(Object.entries(PRIORITY));
 $('#priority-filter').innerHTML = options([['all', 'All priorities'], ...Object.entries(PRIORITY)]);
+$('#task-progress-status').innerHTML = options(Object.entries(STATUS).filter(([value]) => value !== 'cancelled'));
+$('#task-progress-status').addEventListener('change', () => { const task = state.tasks.find(task => task.id === $('#task-id').value); if (task) updateTaskProgress(task, $('#task-progress-status').value); });
+$('#task-history-more').addEventListener('click', () => { const task = state.tasks.find(task => task.id === taskHistory.taskId); if (task) loadTaskHistory(task, false); });
+$('#refresh-updates').addEventListener('click', refreshRecentActivity);
+$('#toggle-updates').addEventListener('click', () => { recentExpanded = !recentExpanded; renderRecentUpdates(); });
+for (const id of ['#history-type', '#history-project']) $(id).addEventListener('change', () => loadAdminHistory(true));
+$('#refresh-history').addEventListener('click', () => loadAdminHistory(true));
+$('#history-more').addEventListener('click', () => loadAdminHistory(false));
+$('#archive-filter').addEventListener('change', () => render());
 $('#project-select').addEventListener('change', event => { state.project = event.target.value; state.team = 'all'; state.subteam = 'all'; savePreferences(); render(); });
 $('#team-select').addEventListener('change', event => { state.team = event.target.value; state.subteam = 'all'; savePreferences(); render(); });
 $('#subteam-select').addEventListener('change', event => { state.subteam = event.target.value; savePreferences(); render(); });
@@ -848,7 +1033,7 @@ for (const button of document.querySelectorAll('[data-task-layout]')) button.add
 $('#edit-task').addEventListener('click', editOpenTask);
 for (const element of document.querySelectorAll('[data-tab]')) element.addEventListener('click', event => { event.preventDefault(); switchTab(element.dataset.tab); });
 $('.tabs').addEventListener('keydown', event => { if (['ArrowRight', 'ArrowLeft', 'Home', 'End'].includes(event.key)) { event.preventDefault(); const tabs = [...$('.tabs').querySelectorAll('[role="tab"]')].filter(tab => !tab.hidden), index = Math.max(0, tabs.findIndex(tab => tab.dataset.tab === activeTab)); const next = event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1 : (index + (event.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length; switchTab(tabs[next].dataset.tab); tabs[next].focus(); } });
-window.addEventListener('hashchange', () => { if (TABS.includes(location.hash.slice(1)) || !location.hash) { activeTab = location.hash.slice(1) || 'overview'; render(); } });
+window.addEventListener('hashchange', () => { if (TABS.includes(location.hash.slice(1)) || !location.hash) { activeTab = location.hash.slice(1) || 'overview'; render(); if (activeTab === 'administration' && !audit.loaded) loadAdminHistory(); } });
 for (const selector of ['#new-task', '#add-task-row']) $(selector).addEventListener('click', () => openTask());
 $('#see-tasks').addEventListener('click', () => switchTab('tasks'));
 for (const selector of ['#close-dialog', '#cancel-dialog']) $(selector).addEventListener('click', () => requestDialogClose($('#task-dialog')));
@@ -856,6 +1041,7 @@ $('#task-title').addEventListener('input', () => $('#task-title').setCustomValid
 $('#task-dialog').addEventListener('close', () => $('#task-title').setCustomValidity(''));
 $('#task-project').addEventListener('change', () => populateTaskScope($('#task-project').value));
 $('#task-team').addEventListener('change', () => populateTaskScope($('#task-project').value, $('#task-team').value));
+$('#task-subteam').addEventListener('change', () => fillTaskAssignees($('#task-project').value, $('#task-subteam').value));
 for (const selector of ['#task-search', '#status-filter', '#priority-filter']) $(selector).addEventListener(selector === '#task-search' ? 'input' : 'change', () => renderTasks(scopedTasks()));
 document.addEventListener('click', event => { const button = event.target.closest('[data-edit]'); if (button) openTask(button.dataset.edit); });
 document.addEventListener('change', toggleTask);

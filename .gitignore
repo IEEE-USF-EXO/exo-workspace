@@ -1,0 +1,13 @@
+# Private roster imports must stay outside the website directory.
+seed-members.sql
+seed-roster.sql
+roster-review*.json
+EXO Teams and Task Manager.xlsx
+*roster*.csv
+*roster*.xlsx
+
+# Local credentials and development dependencies.
+.env
+.env.*
+!.env.example
+node_modules/

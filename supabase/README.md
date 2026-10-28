@@ -23,6 +23,44 @@ first verified sign-in. Each approval is consumed once: later sign-ins do not
 restore a membership a chair has removed. Leadership assignments are separate.
 Rows without a clear email/group mapping must be reviewed before approval.
 
+## Activity history, permissions and archiving
+
+Keep email-filled seed scripts and roster exports outside the repository and
+website directory. Only the generic roster migration belongs in Git. Ignore
+rules help prevent accidental commits but do not protect a file already tracked
+or prevent a static server from serving a local file.
+
+For an existing database, run `activity-log.sql` as one script in SQL Editor,
+then refresh Workbench. The updated root `schema.sql` includes this extension
+for fresh installations too. Before installation, existing task reads still work;
+the new activity and archive controls remain unavailable.
+
+- EXO chairs see all workspace history in Administration.
+- Team leads manage tasks in their team and descendants across projects;
+  project leads manage their assigned team scope in their assigned project.
+- Members update progress on tasks in their permitted groups. Task creation,
+  assignment, editing, archive and restore require a scoped lead or chair.
+- Assignees must have access to the selected group. Existing legacy assignments
+  are preserved until changed. Membership does not itself grant a leadership role.
+- Tasks are archived/restored instead of deleted through the app. Normal browser
+  clients cannot permanently delete them or rewrite the history.
+- Task updates show the actor, timestamp and changed values. A separate chair-only
+  workspace ledger also records membership, roles, profiles, projects, teams,
+  milestones, references, comments, checklists, contributors and dependencies.
+- The ledger keeps snapshots without foreign keys to the original entities, so
+  later owner-level deletion does not erase already-recorded workspace history.
+- Existing task activity is backfilled once; old titles and names use the best
+  currently available data when no original snapshot exists. Historical events
+  that were never recorded cannot be reconstructed. Non-task history starts when
+  the migration is installed. SQL/automation changes without an authenticated
+  user are attributed to "Administration / system" rather than inventing an actor.
+
+Recent updates follow the selected project/groups, independently of the personal
+task filter. History and updates are fetched on refresh and after local task
+changes; this is not a real-time notification system. In review is a progress
+status, not a separate approval/sign-off mechanism. Private emails and roster
+pre-approvals are not copied into the browser-facing history.
+
 ## Deferred GitHub synchronization
 
 GitHub synchronization is unfinished and inactive. There is no Edge Function
