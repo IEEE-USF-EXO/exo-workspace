@@ -11,6 +11,7 @@ let client, session = null, phase = 'connecting', busy = false, generation = 0, 
 let pendingAuthError = '';
 let signinDismissed = false, signinError = '';
 let setupMode = 'project';
+let importPlan = null;
 const dateValue = date => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
 const today = () => dateValue(new Date());
 const dueDate = task => task.due_at ? dateValue(new Date(task.due_at)) : '';
@@ -59,7 +60,7 @@ function creationBlockReason() {
 }
 function canEdit(task) { return !busy && canWorkIn(task.team_id, task.project_id); }
 function scopedTasks() { return state.tasks.filter(task => task.project_id === state.project && (state.team === 'all' || descendantOf(task.team_id, state.team)) && (state.subteam === 'all' || descendantOf(task.team_id, state.subteam))); }
-function clearData() { for (const key of ['tasks', 'teams', 'projects', 'projectTeams', 'profiles', 'memberships', 'leadership']) state[key] = []; state.project = ''; state.team = 'all'; state.subteam = 'all'; for (const selector of ['#task-dialog', '#setup-dialog']) if ($(selector).open) $(selector).close(); }
+function clearData() { for (const key of ['tasks', 'teams', 'projects', 'projectTeams', 'profiles', 'memberships', 'leadership']) state[key] = []; state.project = ''; state.team = 'all'; state.subteam = 'all'; for (const selector of ['#task-dialog', '#setup-dialog']) if ($(selector).open) $(selector).close(); if (!session && $('#import-dialog').open) $('#import-dialog').close(); }
 function normalizeScope() {
   if (!state.projects.some(project => project.id === state.project)) state.project = state.projects[0]?.id || '';
   if (state.team !== 'all' && !rootsForProject(state.project).some(team => team.id === state.team)) state.team = 'all';
@@ -154,6 +155,8 @@ function render() {
   $('#new-subteam').title = state.teams.some(team => !team.parent_team_id) ? '' : 'Create a parent team first.';
   $('#link-team').disabled = busy || !chair || !state.projects.length || !state.teams.length;
   $('#link-team').title = !state.projects.length || !state.teams.length ? 'Create a project and a team first.' : '';
+  $('#import-github').disabled = busy || !chair || !state.projects.length;
+  $('#import-github').title = state.projects.length ? '' : 'Create a destination project first.';
   for (const selector of ['#task-search', '#status-filter', '#priority-filter']) $(selector).disabled = phase !== 'ready';
   $('main').setAttribute('aria-busy', String(phase === 'loading' || phase === 'connecting'));
   renderOverview(tasks); renderTasks(tasks);
@@ -201,6 +204,111 @@ function updateConnectedBanner() {
   if (!state.projects.length) setBanner('Connected · no projects yet', isAdmin() ? 'Create your first project using the EXO chair controls below.' : 'An EXO chair can create your first project.', 'ready');
   else if (!state.projectTeams.length) setBanner('Connected · link teams to projects', isAdmin() ? 'Create your teams, then use Link team to project to start adding tasks.' : 'An EXO chair needs to link teams to projects before tasks can be added.', 'ready');
   else setBanner('Connected to Supabase', `${state.tasks.length} task${state.tasks.length === 1 ? '' : 's'} loaded across your workspace. Use Refresh to get the latest changes.`, 'ready');
+}
+function resetImportPlan() {
+  importPlan = null; $('#import-preview').hidden = true; $('#import-preview').textContent = '';
+  $('#import-error').hidden = true; $('#import-progress').textContent = '';
+  $('#save-import').textContent = 'Load GitHub tasks'; $('#save-import').disabled = false;
+}
+function openImport() {
+  if (busy || phase !== 'ready' || !isAdmin() || !state.projects.length) return;
+  if (!window.ExoBoard) { toast('The GitHub board reader did not load. Reload the page.'); return; }
+  $('#import-form').reset(); resetImportPlan();
+  $('#import-project').innerHTML = options(state.projects.map(project => [project.id, project.name]));
+  $('#import-project').value = state.project || state.projects[0].id;
+  $('#import-dialog').showModal(); $('#import-project').focus();
+}
+function lockImport(locked) { for (const field of $('#import-form').querySelectorAll('button,input,select')) field.disabled = locked; }
+async function prepareImport() {
+  const owner = session.user.id, version = generation, projectId = $('#import-project').value;
+  busy = true; lockImport(true); $('#import-error').hidden = true; $('#import-progress').textContent = 'Reading the public GitHub board…'; render();
+  try {
+    const result = await ExoBoard.load();
+    const selected = ExoBoard.selectRows(result.rows, $('#import-closed').checked);
+    selected.forEach(ExoBoard.validate);
+    const entries = await Promise.all(selected.map(async row => ({ row, id: await ExoBoard.taskId(projectId, row.id) })));
+    if (owner !== session?.user.id || version !== generation) return;
+    const existing = new Set(state.tasks.map(task => task.id));
+    const fresh = entries.filter(entry => !existing.has(entry.id));
+    importPlan = { projectId, entries, fetchedAt: result.fetchedAt };
+    $('#import-preview').innerHTML = `<strong>${fresh.length} new task${fresh.length === 1 ? '' : 's'} ready to import</strong><p>${entries.length - fresh.length} already imported · ${new Set(selected.map(row => ExoBoard.nameKey(row.team))).size} teams · EXO items only</p><ul>${fresh.slice(0, 5).map(entry => `<li>${escapeHTML(entry.row.title)}<small>${escapeHTML(entry.row.team)}${entry.row.subteam ? ` / ${escapeHTML(entry.row.subteam)}` : ''} · ${escapeHTML(entry.row.status)}</small></li>`).join('')}</ul>${fresh.length > 5 ? `<p>And ${fresh.length - 5} more tasks.</p>` : ''}`;
+    $('#import-preview').hidden = false;
+    $('#import-progress').textContent = `Board snapshot loaded ${new Date(result.fetchedAt).toLocaleString()}. Existing dashboard tasks will not be overwritten.`;
+  } catch (error) {
+    if (owner === session?.user.id && version === generation) { importPlan = null; $('#import-error').textContent = errorMessage(error); $('#import-error').hidden = false; $('#import-progress').textContent = ''; }
+  } finally {
+    busy = false; lockImport(false);
+    const count = importPlan?.entries.filter(entry => !state.tasks.some(task => task.id === entry.id)).length || 0;
+    $('#save-import').textContent = importPlan ? (count ? `Import ${count} tasks to Supabase` : 'All tasks already imported') : 'Load GitHub tasks';
+    $('#save-import').disabled = Boolean(importPlan && !count); render();
+  }
+}
+async function executeImport() {
+  const owner = session.user.id, version = generation, plan = importPlan;
+  if (!plan || !state.projects.some(project => project.id === plan.projectId)) return;
+  busy = true; lockImport(true); $('#import-error').hidden = true;
+  $('#import-progress').textContent = 'Checking existing Supabase records…'; render();
+  let imported = 0, failure = null;
+  function assertSession() { if (owner !== session?.user.id || version !== generation) throw new Error('The signed-in account changed. Import stopped.'); }
+  try {
+    // Refresh before writing so manually added records and other imports are reused.
+    const [teams, links, tasks] = await Promise.all([readAll('teams', 'id,name,parent_team_id'), readAll('project_teams', 'project_id,team_id', 'project_id,team_id'), readAll('tasks', 'id')]);
+    assertSession();
+    const pending = plan.entries.filter(entry => !tasks.some(task => task.id === entry.id));
+    // INSERT ... ON CONFLICT DO NOTHING makes retries safe across tabs/devices.
+    async function ensure(table, values, fields, keys = ['id']) {
+      assertSession();
+      const { data, error } = await client.from(table).upsert(values, { onConflict: keys.join(','), ignoreDuplicates: true }).select(fields).maybeSingle();
+      if (error) throw error; assertSession(); if (data) return data;
+      let query = client.from(table).select(fields); for (const key of keys) query = query.eq(key, values[key]);
+      const existing = await query.maybeSingle(); if (existing.error) throw existing.error; assertSession();
+      if (!existing.data) throw new Error(`Could not confirm the saved ${table} record. Refresh and retry.`);
+      return existing.data;
+    }
+    async function ensureTeam(name, parentId = null) {
+      const matches = teams.filter(team => (team.parent_team_id || null) === parentId && ExoBoard.nameKey(team.name) === ExoBoard.nameKey(name));
+      if (matches.length > 1) throw new Error(`More than one team is named “${name}” under the same parent. Resolve the duplicate before importing.`);
+      if (matches.length) return matches[0];
+      const team = await ensure('teams', { id: await ExoBoard.teamId(parentId, name), name, parent_team_id: parentId }, 'id,name,parent_team_id');
+      teams.push(team); return team;
+    }
+    async function ensureLink(teamId) {
+      if (links.some(link => link.project_id === plan.projectId && link.team_id === teamId)) return;
+      const link = await ensure('project_teams', { project_id: plan.projectId, team_id: teamId }, 'project_id,team_id', ['project_id', 'team_id']);
+      links.push(link);
+    }
+    const values = [];
+    for (const entry of pending) {
+      assertSession(); $('#import-progress').textContent = `Preparing ${entry.row.team}${entry.row.subteam ? ` / ${entry.row.subteam}` : ''}…`;
+      const root = await ensureTeam(entry.row.team); await ensureLink(root.id);
+      const team = entry.row.subteam ? await ensureTeam(entry.row.subteam, root.id) : root; await ensureLink(team.id);
+      values.push(ExoBoard.taskValues(entry.row, plan.projectId, team.id, owner, entry.id));
+    }
+    for (let offset = 0; offset < values.length; offset += 100) {
+      assertSession(); $('#import-progress').textContent = `Saving tasks ${offset + 1}–${Math.min(offset + 100, values.length)} of ${values.length} to Supabase…`;
+      const { data, error } = await client.from('tasks').upsert(values.slice(offset, offset + 100), { onConflict: 'id', ignoreDuplicates: true }).select('id');
+      if (error) throw error; if (!Array.isArray(data)) throw new Error('Supabase did not confirm the imported tasks. Refresh and retry.');
+      imported += data.length; assertSession();
+    }
+    state.project = plan.projectId; state.team = 'all'; state.subteam = 'all'; savePreferences();
+  } catch (error) { failure = error; }
+  finally {
+    busy = false; lockImport(false);
+    if (owner === session?.user.id && version === generation) {
+      await loadWorkspace(); importPlan = null;
+      if (failure) {
+        $('#import-error').textContent = `${errorMessage(failure)} ${imported} tasks were saved before the import stopped. Any teams or links already created are retained. Reload the board and retry; existing items will be skipped.`;
+        $('#import-error').hidden = false; $('#import-preview').hidden = true; $('#save-import').textContent = 'Load GitHub tasks'; $('#save-import').disabled = false; $('#import-progress').textContent = '';
+      } else {
+        $('#import-dialog').close(); toast(`${imported} tasks saved to Supabase; ${plan.entries.length - imported} existing items skipped.`);
+      }
+    }
+    render();
+  }
+}
+async function submitImport(event) {
+  event.preventDefault(); if (busy || !session || phase !== 'ready' || !isAdmin()) return;
+  if (importPlan) await executeImport(); else await prepareImport();
 }
 function fillLinkTeams() {
   const projectId = $('#setup-project').value;
@@ -409,6 +517,7 @@ async function initialize() {
       const changedUser = session?.user.id !== nextSession?.user.id;
       session = nextSession;
       if (changedUser || event === 'SIGNED_OUT') {
+        if ($('#import-dialog').open) $('#import-dialog').close(); importPlan = null;
         signinDismissed = false; signinError = '';
         ++generation; busy = false; clearData(); phase = nextSession ? 'loading' : 'signed-out';
         setBanner(nextSession ? 'Loading shared workspace' : 'Sign in to your workspace', nextSession ? 'Reading shared data…' : 'Use Google sign-in to load your shared tasks.');
@@ -448,6 +557,11 @@ $('#setup-dialog').addEventListener('close', () => $('#setup-name').setCustomVal
 $('#setup-project').addEventListener('change', fillLinkTeams);
 for (const selector of ['#close-setup', '#cancel-setup']) $(selector).addEventListener('click', () => { if (!busy) $('#setup-dialog').close(); });
 $('#setup-dialog').addEventListener('cancel', event => { if (busy) event.preventDefault(); });
+$('#import-github').addEventListener('click', openImport);
+$('#import-form').addEventListener('submit', submitImport);
+for (const selector of ['#import-project', '#import-closed']) $(selector).addEventListener('change', resetImportPlan);
+for (const selector of ['#close-import', '#cancel-import']) $(selector).addEventListener('click', () => { if (!busy) $('#import-dialog').close(); });
+$('#import-dialog').addEventListener('cancel', event => { if (busy) event.preventDefault(); });
 $('#delete-task').addEventListener('click', deleteTask);
 $('#auth-button').addEventListener('click', () => {
   if (session) authenticate();
