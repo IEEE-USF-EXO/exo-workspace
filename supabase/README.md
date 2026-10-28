@@ -61,6 +61,23 @@ changes; this is not a real-time notification system. In review is a progress
 status, not a separate approval/sign-off mechanism. Private emails and roster
 pre-approvals are not copied into the browser-facing history.
 
+## Draft multiple tasks with an external agent
+
+In New task, choose **Tasks from AI**. Select the shared project, group and
+assignee, then copy the prompt to your agent and add your work notes. Paste its
+JSON response back and choose **Review tasks**, then **Create tasks**. The prompt
+uses the existing Deliverable/Evidence and Decision/Question task conventions.
+No AI service is called by Workbench and no API key is needed. The copied prompt
+includes project/group names and formatting instructions, not the member roster.
+
+Responses accept 1–30 tasks with title, description, priority and due_date only.
+All tasks start as To do in the selected scope. Edit the pasted response and
+review again to change a draft. Invalid dates, unexpected fields and duplicate
+titles within the batch or loaded active group tasks are rejected. This is not
+a database-wide uniqueness constraint. Creation uses one atomic batch, preserving
+normal Supabase permissions and activity logging. Retries reuse generated IDs
+without overwriting existing tasks. No database migration is required.
+
 ## Deferred GitHub synchronization
 
 GitHub synchronization is unfinished and inactive. There is no Edge Function

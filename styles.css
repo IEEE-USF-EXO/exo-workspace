@@ -440,6 +440,14 @@ body:has(#member-preview:not([hidden])) .topbar { border-bottom-color: #cdbf98; 
 }
 
 /* Compact navigation and optional contextual help. */
+.task-ai-panel { margin-block: 18px; padding: 18px; border: 1px solid var(--line); border-radius: 10px; background: var(--soft); }
+.task-ai-panel h3, .ai-task-preview h3 { margin: 0; font-size: 14px; }
+.task-ai-panel summary { cursor: pointer; color: var(--muted); font-size: 12px; margin-block: 12px; }
+.task-ai-panel textarea { width: 100%; }
+.ai-task-preview { list-style: none; margin: 0; padding: 0; display: grid; gap: 12px; }
+.ai-task-preview li { min-width: 0; padding: 14px; background: var(--paper); border: 1px solid var(--line); border-radius: 8px; }
+.ai-task-preview p { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 12px; margin-bottom: 0; }
+#task-creation-options { margin-bottom: 18px; }
 .sidebar-toggle { position: absolute; top: 30px; right: 9px; width: 25px; height: 30px; display: grid; place-items: center; border: 1px solid var(--line); border-radius: 6px; background: var(--paper); font-size: 21px; }
 .brand { padding-right: 24px; }
 .sidebar-collapsed .sidebar { width: 72px; padding-inline: 12px; overflow: visible; }
