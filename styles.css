@@ -157,6 +157,9 @@ tr.is-done .task-title-button { text-decoration: line-through; color: #94a18a; }
 .up-next-empty { padding: 30px 22px; color: #7b8b70; font-size: 12px; }
 dialog { width: min(540px, calc(100% - 28px)); max-height: calc(100vh - 28px); overflow-y: auto; border: 1px solid var(--line); border-radius: 10px; padding: 26px; color: var(--ink); background: var(--paper); box-shadow: 0 18px 60px #223e3226; }
 dialog::backdrop { background: #223e3259; }
+html:has(dialog[open]), body:has(dialog[open]) { overflow: hidden; }
+html { scrollbar-gutter: stable; }
+dialog { overscroll-behavior: contain; }
 .dialog-heading { display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; }
 .dialog-heading h2 { font-size: 22px; font-weight: 550; }
 .icon-button { border: 1px solid var(--line); border-radius: 6px; font-size: 22px; line-height: 1; width: 29px; height: 29px; color: #7b8b70; }
@@ -281,7 +284,6 @@ button:disabled:hover { filter: none; }
 .signin-card .form-error { text-align: left; margin: 16px 0 0; }
 #signin-reload { margin-top: 12px; }
 .signin-footnote { margin-top: 27px; padding-top: 19px; border-top: 1px solid #edf0e9; font-size: 10px; color: #94a08c; }
-body:has(#signin-dialog[open]) { overflow: hidden; }
 #toast { z-index: 20; }
 @media (max-width: 480px) {
   .signin-card { padding: 33px 24px 23px; }
@@ -365,12 +367,16 @@ body:has(#member-preview:not([hidden])) .topbar { border-bottom-color: #cdbf98; 
 #task-dialog { margin: 0 0 0 auto; width: min(560px, 100%); height: 100dvh; max-height: 100dvh; border-radius: 12px 0 0 12px; padding: 26px; }
 #task-dialog[open] { display: flex; flex-direction: column; }
 #task-form { display: flex; flex-direction: column; min-height: 100%; }
-#task-form .dialog-footer { margin-top: auto; padding-top: 18px; }
+.task-drawer-header { position: sticky; top: -26px; z-index: 2; flex-shrink: 0; background: var(--paper); margin: -26px -26px 24px; padding: 26px 26px 16px; border-bottom: 1px solid var(--line); }
+.task-drawer-header .dialog-heading { margin-bottom: 12px; }
+.task-actions { display: flex; align-items: center; justify-content: space-between; gap: 10px; }
+.task-actions > div { display: flex; flex-wrap: wrap; gap: 8px; margin-left: auto; }
 #task-edit-fields, #task-detail-view { padding-bottom: 24px; }
 #task-detail-title { font-size: 23px; line-height: 1.4; overflow-wrap: anywhere; }
 .task-detail-meta { display: flex; flex-wrap: wrap; gap: 12px; align-items: center; margin-top: 14px; }
 .detail-section-title { margin: 25px 0 10px; font-size: 13px; }
 .task-instructions { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 13px; line-height: 1.8; }
+.task-instructions a { text-decoration: underline; text-underline-offset: 3px; }
 .task-detail-facts { display: grid; gap: 13px; margin: 24px 0; padding-block: 20px; border-block: 1px solid var(--line); }
 .task-detail-facts > div { display: grid; grid-template-columns: 80px minmax(0, 1fr); gap: 12px; font-size: 12px; }
 .task-detail-facts dt { color: var(--muted); }
@@ -383,6 +389,7 @@ body:has(#member-preview:not([hidden])) .topbar { border-bottom-color: #cdbf98; 
   .task-cards { padding-inline: 12px; }
   .compact-task { padding: 15px; }
   #task-dialog { width: 100%; border-radius: 0; padding: 20px; }
+  .task-drawer-header { top: -20px; margin: -20px -20px 20px; padding: 20px 20px 14px; }
   #tasks-view .table-scroll { overflow: visible; }
   #tasks-view table, #task-rows { display: block; white-space: normal; }
   #tasks-view thead { display: none; }

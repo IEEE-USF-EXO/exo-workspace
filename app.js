@@ -17,6 +17,21 @@ let checkingGroupAccess = false;
 let taskLensChosen = false, taskLensUser = '', showClosedTasks = false, taskEditing = false;
 let taskLayoutUser = '', taskLayoutChoice = '', previewLayoutChoice = '';
 function taskLayout() { return (preview.mode ? previewLayoutChoice : taskLayoutChoice) || 'list'; }
+const dialogBaselines = new WeakMap();
+function dialogFormState(dialog) {
+  return JSON.stringify([...dialog.querySelectorAll('input:not([type="hidden"]),select,textarea')].map(field => [field.id || field.name, ['checkbox', 'radio'].includes(field.type) ? field.checked : field.value]));
+}
+function showDialog(dialog) {
+  dialogBaselines.set(dialog, dialogFormState(dialog));
+  dialog.showModal();
+}
+function requestDialogClose(dialog) {
+  if (!dialog.open || busy) return false;
+  const protectsChanges = dialog.id === 'setup-dialog' || dialog.id === 'import-dialog' || (dialog.id === 'task-dialog' && taskEditing);
+  if (protectsChanges && dialogBaselines.has(dialog) && dialogBaselines.get(dialog) !== dialogFormState(dialog) && !confirm('Discard unsaved changes?')) return false;
+  if (dialog.id === 'signin-dialog') signinDismissed = true;
+  dialog.close(); return true;
+}
 // Preview identity never replaces the authenticated session or enters storage.
 const preview = { mode: '', subject: '', saved: null };
 const dateValue = date => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
@@ -27,6 +42,27 @@ const overdue = task => !isClosed(task) && task.due_at && dueDate(task) < today(
 const teamById = id => state.teams.find(team => team.id === id);
 const userName = id => state.profiles.find(profile => profile.id === id)?.display_name || (id ? 'Workspace member' : 'Unassigned');
 const options = entries => entries.map(([value, label]) => `<option value="${escapeHTML(value)}">${escapeHTML(label)}</option>`).join('');
+function setLinkedText(container, value) {
+  const text = String(value ?? ''); let cursor = 0;
+  container.replaceChildren();
+  for (const match of text.matchAll(/https?:\/\/[^\s<>"']+/gi)) {
+    container.append(document.createTextNode(text.slice(cursor, match.index)));
+    let candidate = match[0].replace(/[.,;:!?]+$/, '');
+    for (const [open, close] of [['(', ')'], ['[', ']'], ['{', '}']]) {
+      while (candidate.endsWith(close) && candidate.split(close).length > candidate.split(open).length) candidate = candidate.slice(0, -1);
+    }
+    try {
+      const url = new URL(candidate);
+      if (!['http:', 'https:'].includes(url.protocol)) throw new Error('Unsupported link');
+      const link = document.createElement('a');
+      link.href = url.href; link.textContent = candidate;
+      link.target = '_blank'; link.rel = 'noopener noreferrer';
+      container.append(link, document.createTextNode(match[0].slice(candidate.length)));
+    } catch { container.append(document.createTextNode(match[0])); }
+    cursor = match.index + match[0].length;
+  }
+  container.append(document.createTextNode(text.slice(cursor)));
+}
 function preferenceKey() { return `exo-scope-v2:${session?.user.id || 'visitor'}`; }
 function savePreferences() { if (preview.mode) return; try { localStorage.setItem(preferenceKey(), JSON.stringify({ project: state.project, team: state.team, subteam: state.subteam })); } catch { /* Shared records are never stored here. */ } }
 function readPreferences() { try { return JSON.parse(localStorage.getItem(preferenceKey()) || '{}') || {}; } catch { return {}; } }
@@ -221,7 +257,7 @@ function render() {
   $('#signin-reload').hidden = phase !== 'error' || authReady;
   $('#close-signin').disabled = busy;
   if (session && $('#signin-dialog').open) $('#signin-dialog').close();
-  else if (!session && !signinDismissed && ['signed-out', 'error'].includes(phase) && !$('#signin-dialog').open) $('#signin-dialog').showModal();
+  else if (!session && !signinDismissed && ['signed-out', 'error'].includes(phase) && !$('#signin-dialog').open) showDialog($('#signin-dialog'));
   $('#auth-user').hidden = !session;
   $('#auth-user').textContent = session ? (state.profiles.find(profile => profile.id === session.user.id)?.display_name || session.user.user_metadata?.full_name || 'Signed in') : '';
   $('#refresh-data').hidden = !client; $('#refresh-data').disabled = busy || phase === 'loading';
@@ -327,7 +363,7 @@ async function loadWorkspace() {
     const prefs = previewScope || readPreferences(); state.project = prefs.project || ''; state.team = prefs.team || 'all'; state.subteam = prefs.subteam || 'all';
     const member = memberships.some(member => member.user_id === userId) || leadership.some(role => role.user_id === userId && !role.revoked_at && ['exo_chair', 'permanent_project_lead', 'project_lead', 'team_lead'].includes(role.role));
     phase = member ? 'ready' : 'no-access';
-    if (!member) setBanner('Signed in · membership needed', 'Your account has no workspace membership. Ask an administrator to add you to a team. For a new database, bootstrap your administrator using schema.sql.', 'error');
+    if (!member) setBanner('Waiting for group access', 'You’re signed in. An administrator needs to add you to a team or subteam before you can access your workspace.', 'notice');
     else updateConnectedBanner();
     if (!member) { state.tasks = []; state.teams = []; state.projects = []; }
   } catch (error) {
@@ -372,7 +408,7 @@ function openImport() {
   $('#import-form').reset(); resetImportPlan();
   $('#import-project').innerHTML = options(state.projects.map(project => [project.id, project.name]));
   $('#import-project').value = state.project || state.projects[0].id;
-  $('#import-dialog').showModal(); $('#import-project').focus();
+  showDialog($('#import-dialog')); $('#import-project').focus();
 }
 function lockImport(locked) { for (const field of $('#import-form').querySelectorAll('button,input,select')) field.disabled = locked; }
 async function prepareImport() {
@@ -482,7 +518,7 @@ function openSetup(mode) {
   $('#setup-parent-field').hidden = mode !== 'subteam'; $('#setup-parent').required = mode === 'subteam';
   $('#setup-parent').innerHTML = options(roots.map(team => [team.id, team.name]));
   if (roots.some(team => team.id === state.team)) $('#setup-parent').value = state.team;
-  $('#setup-dialog').showModal(); $('#setup-name').focus();
+  showDialog($('#setup-dialog')); $('#setup-name').focus();
 }
 async function saveSetup(event) {
   event.preventDefault(); if (preview.mode || busy || phase !== 'ready' || !session || !isAdmin()) return;
@@ -568,7 +604,7 @@ async function refreshMembers() {
 function openMembers() {
   if (busy || preview.mode || phase !== 'ready' || !isAdmin()) return;
   $('#members-form').reset(); $('#members-error').hidden = true; $('#members-status').textContent = '';
-  fillMemberPeople(); $('#members-dialog').showModal(); refreshMembers();
+  fillMemberPeople(); showDialog($('#members-dialog')); refreshMembers();
 }
 async function changeMembership(teamId, remove = false) {
   if (busy || preview.mode || phase !== 'ready' || !session || !isAdmin() || !$('#members-dialog').open) return;
@@ -648,11 +684,11 @@ function openTask(id) {
     $('#dialog-title').textContent = preview.mode ? 'Task details · preview' : 'Task details';
     $('#task-detail-title').textContent = task.title;
     $('#task-detail-meta').innerHTML = `<span class="badge ${STATUS_CLASS[task.status]}">${STATUS[task.status]}</span><span class="priority ${task.priority}">${escapeHTML(PRIORITY[task.priority])}</span>`;
-    $('#task-instructions').textContent = task.description || 'No instructions added yet.';
+    setLinkedText($('#task-instructions'), task.description || 'No instructions added yet.');
     $('#task-detail-facts').innerHTML = [['Assignee', task.assignee_id ? userName(task.assignee_id) : 'Unassigned group work'], ['Due date', formatDate(task.due_at)], ['Group', teamPath(task.team_id)], ['Project', state.projects.find(project => project.id === task.project_id)?.name || 'Project']].map(([label, value]) => `<div><dt>${label}</dt><dd>${escapeHTML(value)}</dd></div>`).join('');
     loadTaskReferences(task);
   }
-  $('#task-dialog').showModal();
+  showDialog($('#task-dialog'));
   if (task) { $('#task-detail-title').tabIndex = -1; $('#task-detail-title').focus(); }
   else $('#task-title').focus();
 }
@@ -673,6 +709,7 @@ function editOpenTask() {
   taskEditing = true; $('#task-detail-view').hidden = true; $('#task-edit-fields').hidden = false;
   $('#edit-task').hidden = true; $('#save-task').hidden = false; $('#delete-task').hidden = false;
   $('#cancel-dialog').textContent = 'Cancel'; $('#dialog-title').textContent = 'Edit task'; $('#task-title').focus();
+  dialogBaselines.set($('#task-dialog'), dialogFormState($('#task-dialog')));
 }
 function lockForm(locked) {
   for (const button of $('#task-form').querySelectorAll('button')) button.disabled = locked;
@@ -814,8 +851,7 @@ $('.tabs').addEventListener('keydown', event => { if (['ArrowRight', 'ArrowLeft'
 window.addEventListener('hashchange', () => { if (TABS.includes(location.hash.slice(1)) || !location.hash) { activeTab = location.hash.slice(1) || 'overview'; render(); } });
 for (const selector of ['#new-task', '#add-task-row']) $(selector).addEventListener('click', () => openTask());
 $('#see-tasks').addEventListener('click', () => switchTab('tasks'));
-for (const selector of ['#close-dialog', '#cancel-dialog']) $(selector).addEventListener('click', () => { if (!busy) $('#task-dialog').close(); });
-$('#task-dialog').addEventListener('cancel', event => { if (busy) event.preventDefault(); });
+for (const selector of ['#close-dialog', '#cancel-dialog']) $(selector).addEventListener('click', () => requestDialogClose($('#task-dialog')));
 $('#task-title').addEventListener('input', () => $('#task-title').setCustomValidity(''));
 $('#task-dialog').addEventListener('close', () => $('#task-title').setCustomValidity(''));
 $('#task-project').addEventListener('change', () => populateTaskScope($('#task-project').value));
@@ -828,29 +864,42 @@ for (const [selector, mode] of [['#new-project', 'project'], ['#new-team', 'team
 $('#setup-form').addEventListener('submit', saveSetup);
 $('#setup-name').addEventListener('input', () => $('#setup-name').setCustomValidity(''));
 $('#setup-dialog').addEventListener('close', () => $('#setup-name').setCustomValidity(''));
-for (const selector of ['#close-setup', '#cancel-setup']) $(selector).addEventListener('click', () => { if (!busy) $('#setup-dialog').close(); });
-$('#setup-dialog').addEventListener('cancel', event => { if (busy) event.preventDefault(); });
+for (const selector of ['#close-setup', '#cancel-setup']) $(selector).addEventListener('click', () => requestDialogClose($('#setup-dialog')));
 $('#manage-members').addEventListener('click', openMembers);
 $('#refresh-members').addEventListener('click', refreshMembers);
 $('#member-select').addEventListener('change', () => { if (!busy) { $('#members-error').hidden = true; $('#members-status').textContent = ''; renderMemberGroups(); } });
 $('#members-form').addEventListener('submit', event => { event.preventDefault(); changeMembership($('#member-team').value); });
 $('#member-groups').addEventListener('click', event => { const button = event.target.closest('[data-remove-membership]'); if (button) changeMembership(button.dataset.removeMembership, true); });
-for (const selector of ['#close-members', '#done-members']) $(selector).addEventListener('click', () => { if (!busy) $('#members-dialog').close(); });
-$('#members-dialog').addEventListener('cancel', event => { if (busy) event.preventDefault(); });
+for (const selector of ['#close-members', '#done-members']) $(selector).addEventListener('click', () => requestDialogClose($('#members-dialog')));
 $('#import-github').addEventListener('click', openImport);
 $('#import-form').addEventListener('submit', submitImport);
 for (const selector of ['#import-project', '#import-closed']) $(selector).addEventListener('change', resetImportPlan);
-for (const selector of ['#close-import', '#cancel-import']) $(selector).addEventListener('click', () => { if (!busy) $('#import-dialog').close(); });
-$('#import-dialog').addEventListener('cancel', event => { if (busy) event.preventDefault(); });
+for (const selector of ['#close-import', '#cancel-import']) $(selector).addEventListener('click', () => requestDialogClose($('#import-dialog')));
 $('#delete-task').addEventListener('click', deleteTask);
 $('#auth-button').addEventListener('click', () => {
   if (session) authenticate();
-  else { signinDismissed = false; render(); if (!$('#signin-dialog').open) $('#signin-dialog').showModal(); }
+  else { signinDismissed = false; render(); if (!$('#signin-dialog').open) showDialog($('#signin-dialog')); }
 });
 $('#google-signin').addEventListener('click', authenticate);
-$('#close-signin').addEventListener('click', () => { if (!busy) { signinDismissed = true; $('#signin-dialog').close(); } });
-$('#signin-dialog').addEventListener('cancel', event => { if (busy) event.preventDefault(); else signinDismissed = true; });
+$('#close-signin').addEventListener('click', () => requestDialogClose($('#signin-dialog')));
 $('#signin-reload').addEventListener('click', () => location.reload());
+// Dialog backdrops retarget pointer events to the dialog element. Require both
+// ends of the gesture outside its bounds so dragging from a field cannot close it.
+for (const dialog of document.querySelectorAll('dialog')) {
+  let startedOutside = false;
+  const outside = event => {
+    const bounds = dialog.getBoundingClientRect();
+    return event.target === dialog && (event.clientX < bounds.left || event.clientX > bounds.right || event.clientY < bounds.top || event.clientY > bounds.bottom);
+  };
+  dialog.addEventListener('pointerdown', event => { startedOutside = outside(event); });
+  dialog.addEventListener('pointercancel', () => { startedOutside = false; });
+  dialog.addEventListener('click', event => {
+    const dismiss = startedOutside && outside(event); startedOutside = false;
+    if (dismiss) requestDialogClose(dialog);
+  });
+  dialog.addEventListener('cancel', event => { event.preventDefault(); requestDialogClose(dialog); });
+  dialog.addEventListener('close', () => { startedOutside = false; dialogBaselines.delete(dialog); });
+}
 $('#refresh-data').addEventListener('click', () => loadWorkspace());
 $('#sidebar-toggle').addEventListener('click', () => setSidebarCollapsed(!document.body.classList.contains('sidebar-collapsed')));
 try { setSidebarCollapsed(localStorage.getItem('exo-sidebar-collapsed') === 'true'); } catch { setSidebarCollapsed(false); }

@@ -11,6 +11,18 @@ and scoped leadership. Parent-team membership includes descendant subteams;
 subteam membership excludes parents and siblings. EXO chairs retain all groups.
 Shared projects, team information, milestones and reference links remain readable.
 
+## Roster-based onboarding
+
+Install `roster-memberships.sql` after the core schema. Then run a separately
+prepared private roster seed in SQL Editor. Keep email-filled seeds outside this
+public repository and website directory; the reusable migration has no emails.
+
+Pre-approvals match the account's primary email to a verified Google identity.
+They apply to existing accounts when the private seed runs, or automatically at
+first verified sign-in. Each approval is consumed once: later sign-ins do not
+restore a membership a chair has removed. Leadership assignments are separate.
+Rows without a clear email/group mapping must be reviewed before approval.
+
 ## Deferred GitHub synchronization
 
 GitHub synchronization is unfinished and inactive. There is no Edge Function
