@@ -12,6 +12,8 @@ let pendingAuthError = '';
 let signinDismissed = false, signinError = '';
 let setupMode = 'project';
 let importPlan = null;
+// Preview identity never replaces the authenticated session or enters storage.
+const preview = { mode: '', subject: '', saved: null };
 const dateValue = date => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
 const today = () => dateValue(new Date());
 const dueDate = task => task.due_at ? dateValue(new Date(task.due_at)) : '';
@@ -21,7 +23,7 @@ const teamById = id => state.teams.find(team => team.id === id);
 const userName = id => state.profiles.find(profile => profile.id === id)?.display_name || (id ? 'Workspace member' : 'Unassigned');
 const options = entries => entries.map(([value, label]) => `<option value="${escapeHTML(value)}">${escapeHTML(label)}</option>`).join('');
 function preferenceKey() { return `exo-scope-v2:${session?.user.id || 'visitor'}`; }
-function savePreferences() { try { localStorage.setItem(preferenceKey(), JSON.stringify({ project: state.project, team: state.team, subteam: state.subteam })); } catch { /* Shared records are never stored here. */ } }
+function savePreferences() { if (preview.mode) return; try { localStorage.setItem(preferenceKey(), JSON.stringify({ project: state.project, team: state.team, subteam: state.subteam })); } catch { /* Shared records are never stored here. */ } }
 function readPreferences() { try { return JSON.parse(localStorage.getItem(preferenceKey()) || '{}') || {}; } catch { return {}; } }
 function toast(message) { $('#toast').textContent = message; $('#toast').classList.add('visible'); clearTimeout(toast.timer); toast.timer = setTimeout(() => $('#toast').classList.remove('visible'), 5000); }
 function setBanner(title, description, type = '') { $('#connection-title').textContent = title; $('#connection-description').textContent = description; $('#connection-banner').className = `connection-banner ${type}`; }
@@ -40,17 +42,30 @@ function teamPath(id) { return ancestors(id).reverse().map(id => teamById(id)?.n
 function descendantOf(id, parent) { return ancestors(id).includes(parent); }
 function linkedTeams(projectId) { const ids = new Set(state.projectTeams.filter(link => link.project_id === projectId).map(link => link.team_id)); return state.teams.filter(team => ids.has(team.id)); }
 function rootsForProject(projectId, writable = false) {
+  if (!viewIsMember()) return [];
   const ids = new Set(linkedTeams(projectId).filter(team => !writable || canWorkIn(team.id, projectId)).map(team => rootId(team.id)));
   return state.teams.filter(team => ids.has(team.id));
 }
 function isAdmin() { return state.leadership.some(role => role.user_id === session?.user.id && role.role === 'exo_chair' && !role.revoked_at && !role.team_id && !role.project_id); }
-function canWorkIn(teamId, projectId) {
+function viewUserId() { return preview.mode === 'member' ? preview.subject : preview.mode === 'group' ? null : session?.user.id; }
+function userIsAdmin(userId) { return Boolean(userId) && state.leadership.some(role => role.user_id === userId && role.role === 'exo_chair' && !role.revoked_at && !role.team_id && !role.project_id); }
+function viewIsAdmin() { return preview.mode === 'group' ? false : userIsAdmin(viewUserId()); }
+function viewIsMember() {
   if (!session || phase !== 'ready') return false;
+  if (preview.mode === 'group') return Boolean(teamById(preview.subject));
+  const id = viewUserId();
+  return state.memberships.some(member => member.user_id === id) || state.leadership.some(role => role.user_id === id && !role.revoked_at && ['exo_chair', 'permanent_project_lead', 'team_lead', 'project_lead'].includes(role.role));
+}
+function canWorkIn(teamId, projectId) {
+  if (!viewIsMember()) return false;
   const parents = ancestors(teamId);
-  return isAdmin() || state.memberships.some(member => member.user_id === session.user.id && parents.includes(member.team_id)) || state.leadership.some(role => role.user_id === session.user.id && !role.revoked_at && ((role.role === 'project_lead' && role.project_id === projectId && parents.includes(role.team_id)) || (role.role === 'team_lead' && parents.includes(role.team_id) && !role.project_id)));
+  if (preview.mode === 'group') return parents.includes(preview.subject);
+  const id = viewUserId();
+  return viewIsAdmin() || state.memberships.some(member => member.user_id === id && parents.includes(member.team_id)) || state.leadership.some(role => role.user_id === id && !role.revoked_at && ((role.role === 'project_lead' && role.project_id === projectId && parents.includes(role.team_id)) || (role.role === 'team_lead' && parents.includes(role.team_id) && !role.project_id)));
 }
 function canCreate() { return phase === 'ready' && state.projects.some(project => linkedTeams(project.id).some(team => canWorkIn(team.id, project.id))); }
 function creationBlockReason() {
+  if (preview.mode) return 'Read-only testing view. Exit preview to create, edit, or delete shared records.';
   if (phase !== 'ready' || canCreate()) return '';
   const prefix = isAdmin() ? 'Your EXO chair role is active. ' : '';
   if (!state.projects.length) return `${prefix}${isAdmin() ? 'Use New project below to create your first project.' : 'Ask your EXO chair to create a project before adding tasks.'}`;
@@ -58,8 +73,12 @@ function creationBlockReason() {
   if (!state.projects.some(project => linkedTeams(project.id).length)) return `${prefix}${isAdmin() ? 'Use Link team to project below to enable New task.' : 'Ask your EXO chair to link a team to a project.'}`;
   return 'Your account can view tasks, but needs team membership or a matching leadership assignment to create them.';
 }
-function canEdit(task) { return !busy && canWorkIn(task.team_id, task.project_id); }
-function scopedTasks() { return state.tasks.filter(task => task.project_id === state.project && (state.team === 'all' || descendantOf(task.team_id, state.team)) && (state.subteam === 'all' || descendantOf(task.team_id, state.subteam))); }
+function canEdit(task) { return !busy && !preview.mode && canWorkIn(task.team_id, task.project_id); }
+function scopedTasks() {
+  if (!viewIsMember()) return [];
+  const lens = $('#task-lens').value;
+  return state.tasks.filter(task => task.project_id === state.project && (state.team === 'all' || descendantOf(task.team_id, state.team)) && (state.subteam === 'all' || descendantOf(task.team_id, state.subteam)) && (lens !== 'team' || canWorkIn(task.team_id, task.project_id)) && (lens !== 'assigned' || (viewUserId() && task.assignee_id === viewUserId())));
+}
 function clearData() { for (const key of ['tasks', 'teams', 'projects', 'projectTeams', 'profiles', 'memberships', 'leadership']) state[key] = []; state.project = ''; state.team = 'all'; state.subteam = 'all'; for (const selector of ['#task-dialog', '#setup-dialog']) if ($(selector).open) $(selector).close(); if (!session && $('#import-dialog').open) $('#import-dialog').close(); }
 function normalizeScope() {
   if (!state.projects.some(project => project.id === state.project)) state.project = state.projects[0]?.id || '';
@@ -68,14 +87,14 @@ function normalizeScope() {
 }
 function fillScope() {
   normalizeScope();
-  $('#project-select').innerHTML = state.projects.length ? options(state.projects.map(project => [project.id, project.name])) : '<option value="">No projects loaded</option>';
+  $('#project-select').innerHTML = viewIsMember() && state.projects.length ? options(state.projects.map(project => [project.id, project.name])) : '<option value="">No projects loaded</option>';
   $('#project-select').value = state.project;
   $('#team-select').innerHTML = options([['all', 'All teams'], ...rootsForProject(state.project).map(team => [team.id, team.name])]);
   $('#team-select').value = state.team;
   const children = state.teams.filter(team => team.id !== state.team && descendantOf(team.id, state.team));
   $('#subteam-select').innerHTML = options([['all', 'All subteams'], ...children.map(team => [team.id, teamPath(team.id).split(' / ').slice(1).join(' / ')])]);
   $('#subteam-select').value = state.subteam;
-  $('#project-select').disabled = phase !== 'ready' || busy || !state.projects.length;
+  $('#project-select').disabled = !viewIsMember() || busy || !state.projects.length;
   $('#team-select').disabled = phase !== 'ready' || busy || !rootsForProject(state.project).length;
   $('#subteam-select').disabled = phase !== 'ready' || busy || state.team === 'all' || !children.length;
 }
@@ -90,7 +109,7 @@ function titleButton(task) { return `<button class="task-title-button" data-edit
 function renderOverview(tasks) {
   const done = tasks.filter(task => task.status === 'done').length, inProgress = tasks.filter(task => task.status === 'in_progress').length;
   const percent = tasks.length ? Math.round(done / tasks.length * 100) : 0;
-  const available = phase === 'ready';
+  const available = viewIsMember();
   const stats = [['Total tasks', tasks.length, 'Across this workspace view', '<span class="nav-icon nav-icon-tasks" aria-hidden="true"></span>'], ['In progress', inProgress, 'Work currently underway', '◷'], ['Completed', done, 'Tasks marked as done', '✓'], ['Overdue', tasks.filter(overdue).length, 'Tasks past their due date', '⚑']];
   $('#stats').innerHTML = stats.map(([label, count, note, icon]) => `<div class="stat"><div class="stat-top">${label}<span class="stat-icon">${icon}</span></div><strong>${available ? count : '—'}</strong><small>${available ? note : 'Waiting for workspace data'}</small></div>`).join('');
   const upcoming = tasks.filter(task => !isClosed(task)).sort((a, b) => (a.due_at || '9999').localeCompare(b.due_at || '9999')).slice(0, 4);
@@ -103,23 +122,26 @@ function renderOverview(tasks) {
 function renderTasks(tasks) {
   const query = $('#task-search').value.toLowerCase().trim();
   const filtered = tasks.filter(task => `${task.title} ${task.description} ${userName(task.assignee_id)} ${teamPath(task.team_id)}`.toLowerCase().includes(query) && ($('#status-filter').value === 'all' || task.status === $('#status-filter').value) && ($('#priority-filter').value === 'all' || task.priority === $('#priority-filter').value));
-  $('#list-count').textContent = phase === 'ready' ? filtered.length : '—';
+  $('#list-count').textContent = viewIsMember() ? filtered.length : '—';
   $('#task-rows').innerHTML = filtered.map(task => {
     const name = userName(task.assignee_id);
     return `<tr class="${task.status === 'done' ? 'is-done' : ''}"><td class="check-cell">${checkbox(task)}</td><td>${titleButton(task)}</td><td><span class="badge ${STATUS_CLASS[task.status] || 'todo'}">${escapeHTML(STATUS[task.status] || task.status)}</span></td><td><span class="priority ${Object.hasOwn(PRIORITY, task.priority) ? task.priority : 'medium'}">${escapeHTML(PRIORITY[task.priority] || task.priority)}</span></td><td><div class="assignee"><span class="avatar">${escapeHTML(task.assignee_id ? name.split(/\s+/).map(part => part[0]).slice(0, 2).join('').toUpperCase() : '–')}</span>${escapeHTML(name)}</div></td><td class="due ${overdue(task) ? 'overdue' : ''}">${formatDate(task.due_at)}</td><td>${escapeHTML(teamPath(task.team_id))}</td></tr>`;
   }).join('');
   $('#task-empty').hidden = filtered.length > 0;
-  $('#task-empty h3').textContent = phase === 'ready' ? 'No tasks in this view' : 'Workspace unavailable';
-  $('#empty-description').textContent = phase !== 'ready' ? 'See the connection message above for the next step.' : tasks.length ? 'Try another search or adjust your filters.' : 'Choose another scope or create the first task.';
+  $('#task-empty h3').textContent = viewIsMember() ? 'No tasks in this view' : 'Workspace unavailable';
+  $('#empty-description').textContent = !viewIsMember() ? 'This account has no workspace access. See the message above.' : tasks.length ? 'Try another search or adjust your filters.' : 'Choose another task scope, team, or project.';
 }
 function render() {
+  if (preview.mode && !['loading', 'connecting'].includes(phase) && (!session || !isAdmin())) resetPreview();
+  if (preview.mode === 'member' && !state.profiles.some(profile => profile.id === preview.subject) && phase === 'ready') resetPreview();
+  if (preview.mode === 'group' && !teamById(preview.subject) && phase === 'ready') resetPreview();
   fillScope();
-  const project = state.projects.find(project => project.id === state.project), team = teamById(state.team), subteam = teamById(state.subteam), tasks = scopedTasks();
+  const project = viewIsMember() ? state.projects.find(project => project.id === state.project) : null, team = teamById(state.team), subteam = teamById(state.subteam), tasks = scopedTasks();
   $('#breadcrumb-team').textContent = project?.name || 'EXO Workbench';
   $('#scope-heading').textContent = `${team?.name || 'All teams'} / ${subteam?.name || 'All subteams'}`;
   $('#overview-scope').textContent = subteam?.name || team?.name || 'Across all teams';
-  $('#nav-count').textContent = phase === 'ready' ? tasks.filter(task => !isClosed(task)).length : '—';
-  $('#tab-count').textContent = phase === 'ready' ? tasks.length : '—';
+  $('#nav-count').textContent = viewIsMember() ? tasks.filter(task => !isClosed(task)).length : '—';
+  $('#tab-count').textContent = viewIsMember() ? tasks.length : '—';
   $('#page-title').textContent = activeTab === 'overview' ? 'Overview' : 'Tasks';
   $('#page-description').textContent = activeTab === 'overview' ? 'An overview of your team’s priorities and progress.' : 'Manage tasks and track work across your team.';
   for (const element of document.querySelectorAll('[data-tab]')) {
@@ -143,25 +165,70 @@ function render() {
   $('#auth-user').textContent = session ? (state.profiles.find(profile => profile.id === session.user.id)?.display_name || session.user.user_metadata?.full_name || 'Signed in') : '';
   $('#storage-note').textContent = phase === 'ready' ? 'Tasks are saved to Supabase.' : session ? 'Waiting for workspace access.' : 'Sign in to load shared tasks.';
   $('#refresh-data').hidden = !client; $('#refresh-data').disabled = busy || phase === 'loading';
-  for (const selector of ['#new-task', '#add-task-row']) $(selector).disabled = busy || !canCreate();
+  for (const selector of ['#new-task', '#add-task-row']) $(selector).disabled = busy || Boolean(preview.mode) || !canCreate();
   const creationHint = creationBlockReason();
   $('#creation-hint').textContent = creationHint;
   $('#creation-hint').hidden = !creationHint;
   for (const selector of ['#new-task', '#add-task-row']) $(selector).title = creationHint;
-  const chair = phase === 'ready' && isAdmin();
+  const chair = phase === 'ready' && viewIsAdmin();
   $('#admin-actions').hidden = !chair;
-  for (const selector of ['#new-project', '#new-team']) $(selector).disabled = busy || !chair;
-  $('#new-subteam').disabled = busy || !chair || !state.teams.some(team => !team.parent_team_id);
+  for (const selector of ['#new-project', '#new-team']) $(selector).disabled = busy || Boolean(preview.mode) || !chair;
+  $('#new-subteam').disabled = busy || Boolean(preview.mode) || !chair || !state.teams.some(team => !team.parent_team_id);
   $('#new-subteam').title = state.teams.some(team => !team.parent_team_id) ? '' : 'Create a parent team first.';
-  $('#link-team').disabled = busy || !chair || !state.projects.length || !state.teams.length;
+  $('#link-team').disabled = busy || Boolean(preview.mode) || !chair || !state.projects.length || !state.teams.length;
   $('#link-team').title = !state.projects.length || !state.teams.length ? 'Create a project and a team first.' : '';
-  $('#import-github').disabled = busy || !chair || !state.projects.length;
+  $('#import-github').disabled = busy || Boolean(preview.mode) || !chair || !state.projects.length;
   $('#import-github').title = state.projects.length ? '' : 'Create a destination project first.';
-  for (const selector of ['#task-search', '#status-filter', '#priority-filter']) $(selector).disabled = phase !== 'ready';
+  for (const selector of ['#task-search', '#task-lens', '#status-filter', '#priority-filter']) $(selector).disabled = !viewIsMember();
+  $('#task-lens option[value="assigned"]').disabled = preview.mode === 'group';
+  $('#view-as').hidden = phase !== 'ready' || !isAdmin() || Boolean(preview.mode);
+  $('#view-as').disabled = busy || !state.profiles.length;
+  renderPreview();
+  if (phase === 'ready') updateConnectedBanner();
   $('main').setAttribute('aria-busy', String(phase === 'loading' || phase === 'connecting'));
   renderOverview(tasks); renderTasks(tasks);
 }
 function switchTab(tab) { activeTab = tab; if (location.hash !== `#${tab}`) history.replaceState(null, '', `#${tab}`); render(); }
+function resetPreview() {
+  const saved = preview.saved;
+  preview.mode = ''; preview.subject = ''; preview.saved = null;
+  if (saved) {
+    state.project = saved.project; state.team = saved.team; state.subteam = saved.subteam;
+    $('#task-lens').value = saved.lens; $('#task-search').value = saved.search;
+    $('#status-filter').value = saved.status; $('#priority-filter').value = saved.priority;
+  }
+  if ($('#task-dialog').open) $('#task-dialog').close();
+}
+function applyPreviewSubject() {
+  state.team = 'all'; state.subteam = 'all';
+  $('#task-lens').value = preview.mode === 'group' ? 'team' : 'all';
+  $('#task-search').value = ''; $('#status-filter').value = 'all'; $('#priority-filter').value = 'all';
+  if ($('#task-dialog').open) $('#task-dialog').close();
+}
+function startPreview() {
+  if (busy || phase !== 'ready' || !isAdmin()) return;
+  if (!preview.mode) preview.saved = { project: state.project, team: state.team, subteam: state.subteam, lens: $('#task-lens').value, search: $('#task-search').value, status: $('#status-filter').value, priority: $('#priority-filter').value };
+  preview.mode = 'member'; preview.subject = state.profiles.find(profile => profile.id !== session.user.id)?.id || session.user.id;
+  applyPreviewSubject(); render(); $('#preview-subject').focus();
+}
+function renderPreview() {
+  $('#member-preview').hidden = !preview.mode;
+  if (!preview.mode) return;
+  $('#preview-mode').value = preview.mode;
+  $('#preview-mode option[value="group"]').disabled = !state.teams.length;
+  $('#preview-subject-label').textContent = preview.mode === 'member' ? 'Member' : 'Team / subteam';
+  const subjects = preview.mode === 'member' ? state.profiles.map(profile => [profile.id, `${profile.display_name || 'Workspace member'} · ${profile.id.slice(0, 8)}`]) : state.teams.map(team => [team.id, teamPath(team.id)]);
+  $('#preview-subject').innerHTML = subjects.length ? options(subjects) : '<option value="">No teams available</option>';
+  $('#preview-subject').value = preview.subject;
+  $('#preview-mode').disabled = phase !== 'ready' || busy;
+  $('#preview-subject').disabled = phase !== 'ready' || busy || !subjects.length;
+  $('#exit-preview').disabled = busy;
+  if (phase !== 'ready') { $('#preview-summary').textContent = 'Refreshing the preview’s memberships and roles…'; return; }
+  const label = preview.mode === 'group' ? `Ordinary member of ${teamPath(preview.subject)}` : userName(preview.subject);
+  const roles = preview.mode === 'member' ? state.leadership.filter(role => role.user_id === preview.subject && !role.revoked_at).map(role => role.role.replaceAll('_', ' ')) : [];
+  const tasks = scopedTasks(), editable = tasks.filter(task => canWorkIn(task.team_id, task.project_id)).length;
+  $('#preview-summary').textContent = `${label}${roles.length ? ` · ${[...new Set(roles)].join(', ')}` : ''} · Workspace access: ${viewIsMember() ? 'yes' : 'no'} · Could create tasks: ${canCreate() ? 'yes' : 'no'} · Could edit ${editable} of ${tasks.length} tasks in this scope. Preview saves are disabled.`;
+}
 // Range pagination prevents silently dropping records at Supabase's default row cap.
 async function readAll(table, fields, order = 'id') {
   const rows = []; let start = 0;
@@ -176,6 +243,7 @@ async function readAll(table, fields, order = 'id') {
 async function loadWorkspace() {
   if (!client || busy) return;
   const current = ++generation, userId = session?.user.id;
+  const previewScope = preview.mode ? { project: state.project, team: state.team, subteam: state.subteam } : null;
   clearData();
   if (!session) { phase = 'signed-out'; setBanner('Sign in to your workspace', pendingAuthError || 'Use Google sign-in to load your teams, projects, and shared tasks.'); render(); return; }
   phase = 'loading'; setBanner('Loading shared workspace', 'Reading projects, teams, members, and tasks from Supabase…'); render();
@@ -188,7 +256,7 @@ async function loadWorkspace() {
     ]);
     if (current !== generation || userId !== session?.user.id) return;
     Object.assign(state, { teams, projects, projectTeams, profiles, memberships, leadership, tasks });
-    const prefs = readPreferences(); state.project = prefs.project || ''; state.team = prefs.team || 'all'; state.subteam = prefs.subteam || 'all';
+    const prefs = previewScope || readPreferences(); state.project = prefs.project || ''; state.team = prefs.team || 'all'; state.subteam = prefs.subteam || 'all';
     const member = memberships.some(member => member.user_id === userId) || leadership.some(role => role.user_id === userId && !role.revoked_at && ['exo_chair', 'permanent_project_lead', 'project_lead', 'team_lead'].includes(role.role));
     phase = member ? 'ready' : 'no-access';
     if (!member) setBanner('Signed in · membership needed', 'Your account has no workspace membership. Ask an administrator to add you to a team. For a new database, bootstrap your administrator using schema.sql.', 'error');
@@ -201,8 +269,9 @@ async function loadWorkspace() {
   render();
 }
 function updateConnectedBanner() {
-  if (!state.projects.length) setBanner('Connected · no projects yet', isAdmin() ? 'Create your first project using the EXO chair controls below.' : 'An EXO chair can create your first project.', 'ready');
-  else if (!state.projectTeams.length) setBanner('Connected · link teams to projects', isAdmin() ? 'Create your teams, then use Link team to project to start adding tasks.' : 'An EXO chair needs to link teams to projects before tasks can be added.', 'ready');
+  if (preview.mode && !viewIsMember()) setBanner('Preview · membership needed', 'This member has no active team membership or leadership assignment. They would not have workspace access.', 'error');
+  else if (!state.projects.length) setBanner('Connected · no projects yet', viewIsAdmin() ? 'Create your first project using the EXO chair controls below.' : 'An EXO chair can create your first project.', 'ready');
+  else if (!state.projectTeams.length) setBanner('Connected · link teams to projects', viewIsAdmin() ? 'Create your teams, then use Link team to project to start adding tasks.' : 'An EXO chair needs to link teams to projects before tasks can be added.', 'ready');
   else setBanner('Connected to Supabase', `${state.tasks.length} task${state.tasks.length === 1 ? '' : 's'} loaded across your workspace. Use Refresh to get the latest changes.`, 'ready');
 }
 function resetImportPlan() {
@@ -211,7 +280,7 @@ function resetImportPlan() {
   $('#save-import').textContent = 'Load GitHub tasks'; $('#save-import').disabled = false;
 }
 function openImport() {
-  if (busy || phase !== 'ready' || !isAdmin() || !state.projects.length) return;
+  if (preview.mode || busy || phase !== 'ready' || !isAdmin() || !state.projects.length) return;
   if (!window.ExoBoard) { toast('The GitHub board reader did not load. Reload the page.'); return; }
   $('#import-form').reset(); resetImportPlan();
   $('#import-project').innerHTML = options(state.projects.map(project => [project.id, project.name]));
@@ -220,6 +289,7 @@ function openImport() {
 }
 function lockImport(locked) { for (const field of $('#import-form').querySelectorAll('button,input,select')) field.disabled = locked; }
 async function prepareImport() {
+  if (preview.mode) return;
   const owner = session.user.id, version = generation, projectId = $('#import-project').value;
   busy = true; lockImport(true); $('#import-error').hidden = true; $('#import-progress').textContent = 'Reading the public GitHub board…'; render();
   try {
@@ -244,6 +314,7 @@ async function prepareImport() {
   }
 }
 async function executeImport() {
+  if (preview.mode) return;
   const owner = session.user.id, version = generation, plan = importPlan;
   if (!plan || !state.projects.some(project => project.id === plan.projectId)) return;
   busy = true; lockImport(true); $('#import-error').hidden = true;
@@ -307,7 +378,7 @@ async function executeImport() {
   }
 }
 async function submitImport(event) {
-  event.preventDefault(); if (busy || !session || phase !== 'ready' || !isAdmin()) return;
+  event.preventDefault(); if (preview.mode || busy || !session || phase !== 'ready' || !isAdmin()) return;
   if (importPlan) await executeImport(); else await prepareImport();
 }
 function fillLinkTeams() {
@@ -320,7 +391,7 @@ function fillLinkTeams() {
   $('#save-setup').disabled = busy || !available.length;
 }
 function openSetup(mode) {
-  if (busy || phase !== 'ready' || !isAdmin()) return;
+  if (preview.mode || busy || phase !== 'ready' || !isAdmin()) return;
   const roots = state.teams.filter(team => !team.parent_team_id);
   if (mode === 'subteam' && !roots.length) return;
   if (mode === 'link' && (!state.projects.length || !state.teams.length)) return;
@@ -351,7 +422,7 @@ function openSetup(mode) {
   $('#setup-dialog').showModal(); (mode === 'link' ? $('#setup-project') : $('#setup-name')).focus();
 }
 async function saveSetup(event) {
-  event.preventDefault(); if (busy || phase !== 'ready' || !session || !isAdmin()) return;
+  event.preventDefault(); if (preview.mode || busy || phase !== 'ready' || !session || !isAdmin()) return;
   const name = $('#setup-name').value.trim(), description = $('#setup-notes').value.trim() || null;
   if (setupMode !== 'link' && !name) { $('#setup-name').setCustomValidity('Enter a name.'); $('#setup-name').reportValidity(); return; }
   const owner = session.user.id, version = generation, mode = setupMode;
@@ -401,7 +472,7 @@ function populateTaskScope(projectId, preferredRoot, preferredTeam) {
 }
 function openTask(id) {
   const task = id ? state.tasks.find(task => task.id === id) : null;
-  if ((!task && !canCreate()) || busy) return;
+  if ((!task && (!canCreate() || preview.mode)) || busy || !viewIsMember()) return;
   $('#task-form').reset(); $('#form-error').hidden = true;
   for (const field of $('#task-form').querySelectorAll('input,select,textarea')) field.disabled = false;
   $('#task-id').value = task?.id || ''; $('#dialog-title').textContent = task ? 'Task details' : 'New task';
@@ -416,7 +487,7 @@ function openTask(id) {
     $('#task-subteam').innerHTML = options([[task.team_id, teamPath(task.team_id)]]);
     for (const selector of ['#task-project', '#task-team', '#task-subteam']) $(selector).disabled = true;
     if (!canEdit(task)) for (const field of $('#task-form').querySelectorAll('input,select,textarea')) field.disabled = true;
-    $('#dialog-title').textContent = canEdit(task) ? 'Edit task' : 'Task details · read only';
+    $('#dialog-title').textContent = preview.mode ? 'Task details · testing view' : canEdit(task) ? 'Edit task' : 'Task details · read only';
     $('#save-task').disabled = !canEdit(task);
   } else {
     const projects = state.projects.filter(project => linkedTeams(project.id).some(team => canWorkIn(team.id, project.id)));
@@ -438,7 +509,7 @@ function lockForm(locked) {
 }
 function formError(error) { $('#form-error').textContent = errorMessage(error); $('#form-error').hidden = false; }
 async function saveTask(event) {
-  event.preventDefault(); if (busy || !session) return;
+  event.preventDefault(); if (preview.mode || busy || !session) return;
   const id = $('#task-id').value, existing = state.tasks.find(task => task.id === id);
   const title = $('#task-title').value.trim();
   if (!title) { $('#task-title').setCustomValidity('Give your task a name.'); $('#task-title').reportValidity(); return; }
@@ -477,6 +548,7 @@ async function toggleTask(event) {
   finally { busy = false; render(); }
 }
 async function deleteTask() {
+  if (preview.mode) return;
   const task = state.tasks.find(task => task.id === $('#task-id').value);
   if (!task || !canEdit(task) || !confirm('Delete this task and its comments, links, checklist, and activity? This cannot be undone.')) return;
   const owner = session.user.id, version = generation; busy = true; lockForm(true); render();
@@ -517,6 +589,7 @@ async function initialize() {
       const changedUser = session?.user.id !== nextSession?.user.id;
       session = nextSession;
       if (changedUser || event === 'SIGNED_OUT') {
+        resetPreview();
         if ($('#import-dialog').open) $('#import-dialog').close(); importPlan = null;
         signinDismissed = false; signinError = '';
         ++generation; busy = false; clearData(); phase = nextSession ? 'loading' : 'signed-out';
@@ -535,6 +608,21 @@ $('#priority-filter').innerHTML = options([['all', 'All priorities'], ...Object.
 $('#project-select').addEventListener('change', event => { state.project = event.target.value; state.team = 'all'; state.subteam = 'all'; savePreferences(); render(); });
 $('#team-select').addEventListener('change', event => { state.team = event.target.value; state.subteam = 'all'; savePreferences(); render(); });
 $('#subteam-select').addEventListener('change', event => { state.subteam = event.target.value; savePreferences(); render(); });
+$('#view-as').addEventListener('click', startPreview);
+$('#exit-preview').addEventListener('click', () => { if (!busy) { resetPreview(); render(); $('#view-as').focus(); } });
+$('#preview-mode').addEventListener('change', event => {
+  if (busy || !preview.mode || !isAdmin()) return;
+  if (event.target.value === 'group' && !state.teams.length) { event.target.value = preview.mode; toast('Create a team before using the group preview.'); return; }
+  preview.mode = event.target.value;
+  preview.subject = preview.mode === 'member' ? state.profiles.find(profile => profile.id !== session.user.id)?.id || session.user.id : state.teams[0]?.id || '';
+  applyPreviewSubject(); render();
+});
+$('#preview-subject').addEventListener('change', event => {
+  if (busy || !preview.mode || !isAdmin()) return;
+  const valid = preview.mode === 'member' ? state.profiles.some(profile => profile.id === event.target.value) : Boolean(teamById(event.target.value));
+  if (!valid) return; preview.subject = event.target.value; applyPreviewSubject(); render();
+});
+$('#task-lens').addEventListener('change', () => { if (preview.mode === 'group' && $('#task-lens').value === 'assigned') $('#task-lens').value = 'team'; render(); });
 for (const element of document.querySelectorAll('[data-tab]')) element.addEventListener('click', event => { event.preventDefault(); switchTab(element.dataset.tab); });
 $('.tabs').addEventListener('keydown', event => { if (['ArrowRight', 'ArrowLeft', 'Home', 'End'].includes(event.key)) { event.preventDefault(); const tab = event.key === 'Home' ? 'overview' : event.key === 'End' ? 'tasks' : activeTab === 'overview' ? 'tasks' : 'overview'; switchTab(tab); $(`#tab-${tab}`).focus(); } });
 window.addEventListener('hashchange', () => { if (['#overview', '#tasks', ''].includes(location.hash)) { activeTab = location.hash === '#tasks' ? 'tasks' : 'overview'; render(); } });
