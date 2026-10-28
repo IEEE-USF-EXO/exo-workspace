@@ -20,6 +20,7 @@
     <nav aria-label="Main navigation">
       <a href="#overview" data-tab="overview"><span class="nav-icon nav-icon-overview" aria-hidden="true"></span>Overview</a>
       <a href="#tasks" data-tab="tasks"><span class="nav-icon nav-icon-tasks" aria-hidden="true"></span>Tasks<span id="nav-count" class="nav-count"></span></a>
+      <a href="#administration" data-tab="administration" id="nav-administration" hidden><span class="nav-icon nav-icon-administration" aria-hidden="true"></span>Administration</a>
     </nav>
     <div class="sidebar-bottom"><div class="local-note"><b><span class="status-dot"></span>Supabase workspace</b><small id="storage-note">Sign in to load shared tasks.</small></div><div class="legal-links"><a href="privacy.html" target="_blank" rel="noopener noreferrer">Privacy Policy</a><span aria-hidden="true">·</span><a href="terms.html" target="_blank" rel="noopener noreferrer">Terms of Service</a></div></div>
   </aside>
@@ -28,7 +29,7 @@
     <main>
       <div id="connection-banner" class="connection-banner" role="status" aria-live="polite"><div><strong id="connection-title">Connecting to your workspace</strong><p id="connection-description">Checking your Supabase session…</p></div><button id="refresh-data" class="button secondary" hidden>Refresh</button></div>
       <div class="breadcrumb">Workspace <span>›</span> <strong id="breadcrumb-team"></strong></div>
-      <div class="page-heading"><div><div class="eyebrow" id="scope-heading"></div><h1 id="page-title">Overview</h1><p id="page-description"></p></div><div class="heading-actions"><button class="button secondary" id="view-as" hidden>View as member</button><button class="button primary" id="new-task"><span aria-hidden="true">＋</span> New task</button></div></div>
+      <div class="page-heading"><div><div class="eyebrow" id="scope-heading"></div><h1 id="page-title">Overview</h1><p id="page-description"></p></div><div class="heading-actions"><button class="button primary" id="new-task"><span aria-hidden="true">＋</span> New task</button></div></div>
       <section id="member-preview" class="member-preview" aria-label="Workspace preview controls" hidden>
         <div class="preview-heading"><div><span class="eyebrow">EXO CHAIR · TESTING VIEW</span><h2>See the workspace from another perspective.</h2></div><button class="button secondary" id="exit-preview">Exit preview</button></div>
         <div class="preview-fields"><div><label for="preview-mode">Preview as</label><select id="preview-mode"><option value="member">Specific member</option><option value="group">Team / subteam member</option></select></div><div><label id="preview-subject-label" for="preview-subject">Member</label><select id="preview-subject"></select></div></div>
@@ -36,15 +37,15 @@
         <p class="preview-note">Read-only interface preview using the loaded memberships and roles. Tasks and group selectors follow the selected member’s group access. All saves, imports, and deletions are blocked. Your Google account stays signed in; this does not test another user’s Supabase session.</p>
       </section>
       <p id="creation-hint" class="creation-hint" role="status" hidden></p>
-      <div id="admin-actions" class="admin-actions" aria-label="EXO chair controls" hidden>
-        <span class="admin-label">EXO CHAIR</span>
-        <button class="button secondary" id="new-project">＋ New project</button>
-        <button class="button secondary" id="new-team">＋ New team</button>
-        <button class="button secondary" id="new-subteam">＋ New subteam</button>
-        <button class="button secondary" id="manage-members">Manage members</button>
-        <button class="button secondary" id="import-github">Import from GitHub</button>
-      </div>
-      <div class="tabs" role="tablist" aria-label="Workspace views"><button role="tab" id="tab-overview" data-tab="overview" aria-controls="overview-view"><span class="nav-icon nav-icon-overview" aria-hidden="true"></span>Overview</button><button role="tab" id="tab-tasks" data-tab="tasks" aria-controls="tasks-view"><span class="nav-icon nav-icon-tasks" aria-hidden="true"></span>Tasks <span id="tab-count" class="tab-count"></span></button></div>
+      <div class="tabs" role="tablist" aria-label="Workspace views"><button role="tab" id="tab-overview" data-tab="overview" aria-controls="overview-view"><span class="nav-icon nav-icon-overview" aria-hidden="true"></span>Overview</button><button role="tab" id="tab-tasks" data-tab="tasks" aria-controls="tasks-view"><span class="nav-icon nav-icon-tasks" aria-hidden="true"></span>Tasks <span id="tab-count" class="tab-count"></span></button><button role="tab" id="tab-administration" data-tab="administration" aria-controls="administration-view" hidden><span class="nav-icon nav-icon-administration" aria-hidden="true"></span>Administration</button></div>
+      <section id="administration-view" role="tabpanel" aria-labelledby="tab-administration" hidden>
+        <div id="admin-actions" class="admin-actions" aria-label="EXO chair controls" hidden>
+          <section class="panel"><div class="eyebrow">WORKSPACE</div><h2>Projects and groups</h2><p>Create shared projects and organize teams and subteams for task assignments.</p><div class="admin-buttons"><button class="button secondary" id="new-project">＋ New project</button><button class="button secondary" id="new-team">＋ New team</button><button class="button secondary" id="new-subteam">＋ New subteam</button></div></section>
+          <section class="panel"><div class="eyebrow">PEOPLE</div><h2>Member access</h2><p>Add signed-in people to their groups or update existing memberships.</p><div class="admin-buttons"><button class="button secondary" id="manage-members">Manage members</button></div></section>
+          <section class="panel"><div class="eyebrow">TESTING</div><h2>Workspace preview</h2><p>Check the tasks and group selectors a member would see in a read-only preview.</p><div class="admin-buttons"><button class="button secondary" id="view-as" hidden>View as member</button></div></section>
+          <section class="panel"><div class="eyebrow">IMPORT</div><h2>GitHub board</h2><p>Import missing tasks from the EXO board into a project. Automatic synchronization remains inactive.</p><div class="admin-buttons"><button class="button secondary" id="import-github">Import from GitHub</button></div></section>
+        </div>
+      </section>
       <section id="overview-view" role="tabpanel" aria-labelledby="tab-overview">
         <div class="welcome-card"><div><span class="eyebrow">PROJECT WORKSPACE</span><h2>Your team. Your work. One place.</h2><p>Track priorities and progress across your teams and subteams.</p></div><button class="button secondary" id="view-all-tasks"><span class="nav-icon nav-icon-tasks" aria-hidden="true"></span>View tasks <span aria-hidden="true">↗</span></button></div>
         <div class="section-heading"><h2>At a glance</h2><span id="overview-scope"></span></div>

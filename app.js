@@ -7,7 +7,8 @@ const PRIORITY = { low: 'Low', medium: 'Medium', high: 'High', urgent: 'Urgent' 
 const STATUS_CLASS = { todo: 'todo', in_progress: 'progress', blocked: 'blocked', review: 'review', done: 'done', cancelled: 'cancelled' };
 const TASK_FIELDS = 'id,project_id,team_id,milestone_id,title,description,status,priority,assignee_id,due_at,completed_at,created_by,created_at,updated_at';
 const state = { tasks: [], teams: [], projects: [], profiles: [], memberships: [], leadership: [], project: '', team: 'all', subteam: 'all' };
-let client, session = null, phase = 'connecting', busy = false, generation = 0, authReady = false, activeTab = location.hash === '#tasks' ? 'tasks' : 'overview';
+const TABS = ['overview', 'tasks', 'administration'];
+let client, session = null, phase = 'connecting', busy = false, generation = 0, authReady = false, activeTab = TABS.includes(location.hash.slice(1)) ? location.hash.slice(1) : 'overview';
 let pendingAuthError = '';
 let signinDismissed = false, signinError = '';
 let setupMode = 'project';
@@ -72,8 +73,8 @@ function creationBlockReason() {
   if (preview.mode) return 'Read-only testing view. Exit preview to create, edit, or delete shared records.';
   if (phase !== 'ready' || canCreate()) return '';
   const prefix = isAdmin() ? 'Your EXO chair role is active. ' : '';
-  if (!state.projects.length) return `${prefix}${isAdmin() ? 'Use New project below to create your first project.' : 'Ask your EXO chair to create a project before adding tasks.'}`;
-  if (!state.teams.length) return `${prefix}${isAdmin() ? 'Use New team below to enable task creation.' : 'Ask your EXO chair to create a team.'}`;
+  if (!state.projects.length) return `${prefix}${isAdmin() ? 'Open Administration to create your first project.' : 'Ask your EXO chair to create a project before adding tasks.'}`;
+  if (!state.teams.length) return `${prefix}${isAdmin() ? 'Open Administration to create a team and enable task creation.' : 'Ask your EXO chair to create a team.'}`;
   return 'You can view shared project information. Ask your EXO chair for a group membership or scoped leadership assignment to access tasks.';
 }
 function canEdit(task) { return !busy && !preview.mode && canWorkIn(task.team_id, task.project_id); }
@@ -144,6 +145,10 @@ function render() {
   if (preview.mode && !['loading', 'connecting'].includes(phase) && (!session || !isAdmin())) resetPreview();
   if (preview.mode === 'member' && !state.profiles.some(profile => profile.id === preview.subject) && phase === 'ready') resetPreview();
   if (preview.mode === 'group' && !teamById(preview.subject) && phase === 'ready') resetPreview();
+  const chair = phase === 'ready' && isAdmin() && !preview.mode;
+  if (activeTab === 'administration' && !chair && !['connecting', 'loading'].includes(phase)) {
+    activeTab = 'overview'; history.replaceState(null, '', '#overview');
+  }
   fillScope();
   const project = viewIsMember() ? state.projects.find(project => project.id === state.project) : null, team = teamById(state.team), subteam = teamById(state.subteam), tasks = scopedTasks();
   $('#breadcrumb-team').textContent = project?.name || 'EXO Workbench';
@@ -151,14 +156,18 @@ function render() {
   $('#overview-scope').textContent = subteam?.name || team?.name || (viewIsAdmin() ? 'Across all teams' : 'Across my groups');
   $('#nav-count').textContent = viewIsMember() ? tasks.filter(task => !isClosed(task)).length : '—';
   $('#tab-count').textContent = viewIsMember() ? tasks.length : '—';
-  $('#page-title').textContent = activeTab === 'overview' ? 'Overview' : 'Tasks';
-  $('#page-description').textContent = activeTab === 'overview' ? 'An overview of your team’s priorities and progress.' : 'Manage tasks and track work across your team.';
+  $('#page-title').textContent = { overview: 'Overview', tasks: 'Tasks', administration: 'Administration' }[activeTab];
+  $('#page-description').textContent = { overview: 'An overview of your team’s priorities and progress.', tasks: 'Manage tasks and track work across your team.', administration: 'Manage workspace structure, member access, and EXO chair tools.' }[activeTab];
+  $('#scope-heading').hidden = activeTab === 'administration';
+  $('#new-task').hidden = activeTab === 'administration';
+  $('#nav-administration').hidden = !chair; $('#tab-administration').hidden = !chair;
   for (const element of document.querySelectorAll('[data-tab]')) {
     const active = element.dataset.tab === activeTab; element.classList.toggle('active', active);
     if (element.getAttribute('role') === 'tab') { element.setAttribute('aria-selected', String(active)); element.tabIndex = active ? 0 : -1; }
     else if (active) element.setAttribute('aria-current', 'page'); else element.removeAttribute('aria-current');
   }
   $('#overview-view').hidden = activeTab !== 'overview'; $('#tasks-view').hidden = activeTab !== 'tasks';
+  $('#administration-view').hidden = !chair || activeTab !== 'administration';
   $('#auth-button').disabled = !authReady || busy;
   $('#auth-button').textContent = !authReady ? 'Connecting…' : session ? 'Sign out' : 'Sign in with Google';
   $('#google-signin').disabled = !authReady || busy;
@@ -177,9 +186,8 @@ function render() {
   for (const selector of ['#new-task', '#add-task-row']) $(selector).disabled = busy || Boolean(preview.mode) || !canCreate();
   const creationHint = creationBlockReason();
   $('#creation-hint').textContent = creationHint;
-  $('#creation-hint').hidden = !creationHint;
+  $('#creation-hint').hidden = !creationHint || activeTab === 'administration';
   for (const selector of ['#new-task', '#add-task-row']) $(selector).title = creationHint;
-  const chair = phase === 'ready' && viewIsAdmin();
   $('#admin-actions').hidden = !chair;
   for (const selector of ['#new-project', '#new-team']) $(selector).disabled = busy || Boolean(preview.mode) || !chair;
   $('#new-subteam').disabled = busy || Boolean(preview.mode) || !chair || !state.teams.some(team => !team.parent_team_id);
@@ -201,7 +209,7 @@ function render() {
   $('main').setAttribute('aria-busy', String(phase === 'loading' || phase === 'connecting'));
   renderOverview(tasks); renderTasks(tasks);
 }
-function switchTab(tab) { activeTab = tab; if (location.hash !== `#${tab}`) history.replaceState(null, '', `#${tab}`); render(); }
+function switchTab(tab) { if (!TABS.includes(tab) || (tab === 'administration' && (phase !== 'ready' || !isAdmin() || preview.mode))) return; activeTab = tab; if (location.hash !== `#${tab}`) history.replaceState(null, '', `#${tab}`); render(); }
 function resetPreview() {
   const saved = preview.saved;
   preview.mode = ''; preview.subject = ''; preview.saved = null;
@@ -209,6 +217,7 @@ function resetPreview() {
     state.project = saved.project; state.team = saved.team; state.subteam = saved.subteam;
     $('#task-lens').value = saved.lens; $('#task-search').value = saved.search;
     $('#status-filter').value = saved.status; $('#priority-filter').value = saved.priority;
+    if (saved.tab) { activeTab = saved.tab; history.replaceState(null, '', `#${activeTab}`); }
   }
   if ($('#task-dialog').open) $('#task-dialog').close();
 }
@@ -220,9 +229,9 @@ function applyPreviewSubject() {
 }
 function startPreview() {
   if (busy || phase !== 'ready' || !isAdmin()) return;
-  if (!preview.mode) preview.saved = { project: state.project, team: state.team, subteam: state.subteam, lens: $('#task-lens').value, search: $('#task-search').value, status: $('#status-filter').value, priority: $('#priority-filter').value };
+  if (!preview.mode) preview.saved = { tab: activeTab, project: state.project, team: state.team, subteam: state.subteam, lens: $('#task-lens').value, search: $('#task-search').value, status: $('#status-filter').value, priority: $('#priority-filter').value };
   preview.mode = 'member'; preview.subject = state.profiles.find(profile => profile.id !== session.user.id)?.id || session.user.id;
-  applyPreviewSubject(); render(); $('#preview-subject').focus();
+  applyPreviewSubject(); switchTab('overview'); $('#preview-subject').focus();
 }
 function renderPreview() {
   $('#member-preview').hidden = !preview.mode;
@@ -299,8 +308,8 @@ async function refreshGroupAccess() {
 }
 function updateConnectedBanner() {
   if (preview.mode && !viewIsMember()) setBanner('Preview · membership needed', 'This member has no active team membership or leadership assignment. They would not have workspace access.', 'error');
-  else if (!state.projects.length) setBanner('Connected · no projects yet', viewIsAdmin() ? 'Create your first project using the EXO chair controls below.' : 'An EXO chair can create your first project.', 'ready');
-  else if (!state.teams.length) setBanner('Connected · no teams yet', viewIsAdmin() ? 'Create a team using the EXO chair controls below to start adding tasks.' : 'An EXO chair can create teams for task assignments.', 'ready');
+  else if (!state.projects.length) setBanner('Connected · no projects yet', viewIsAdmin() ? 'Open Administration to create your first project.' : 'An EXO chair can create your first project.', 'ready');
+  else if (!state.teams.length) setBanner('Connected · no teams yet', viewIsAdmin() ? 'Open Administration to create a team and start adding tasks.' : 'An EXO chair can create teams for task assignments.', 'ready');
   else {
     const count = state.tasks.filter(task => canWorkIn(task.team_id, task.project_id)).length;
     setBanner('Connected to Supabase', `${count} task${count === 1 ? '' : 's'} available to your groups across projects. Use Refresh to get the latest changes.`, 'ready');
@@ -711,8 +720,8 @@ $('#preview-subject').addEventListener('change', event => {
 });
 $('#task-lens').addEventListener('change', () => { if (preview.mode === 'group' && $('#task-lens').value === 'assigned') $('#task-lens').value = 'team'; render(); });
 for (const element of document.querySelectorAll('[data-tab]')) element.addEventListener('click', event => { event.preventDefault(); switchTab(element.dataset.tab); });
-$('.tabs').addEventListener('keydown', event => { if (['ArrowRight', 'ArrowLeft', 'Home', 'End'].includes(event.key)) { event.preventDefault(); const tab = event.key === 'Home' ? 'overview' : event.key === 'End' ? 'tasks' : activeTab === 'overview' ? 'tasks' : 'overview'; switchTab(tab); $(`#tab-${tab}`).focus(); } });
-window.addEventListener('hashchange', () => { if (['#overview', '#tasks', ''].includes(location.hash)) { activeTab = location.hash === '#tasks' ? 'tasks' : 'overview'; render(); } });
+$('.tabs').addEventListener('keydown', event => { if (['ArrowRight', 'ArrowLeft', 'Home', 'End'].includes(event.key)) { event.preventDefault(); const tabs = [...$('.tabs').querySelectorAll('[role="tab"]')].filter(tab => !tab.hidden), index = Math.max(0, tabs.findIndex(tab => tab.dataset.tab === activeTab)); const next = event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1 : (index + (event.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length; switchTab(tabs[next].dataset.tab); tabs[next].focus(); } });
+window.addEventListener('hashchange', () => { if (TABS.includes(location.hash.slice(1)) || !location.hash) { activeTab = location.hash.slice(1) || 'overview'; render(); } });
 for (const selector of ['#new-task', '#add-task-row']) $(selector).addEventListener('click', () => openTask());
 for (const selector of ['#see-tasks', '#view-all-tasks']) $(selector).addEventListener('click', () => switchTab('tasks'));
 for (const selector of ['#close-dialog', '#cancel-dialog']) $(selector).addEventListener('click', () => { if (!busy) $('#task-dialog').close(); });

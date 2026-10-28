@@ -41,6 +41,7 @@ nav a:hover { color: #49674c; background: #f4f7f1; }
 .nav-icon { width: 22px; height: 22px; flex: 0 0 22px; display: inline-block; background-color: currentColor; mask: center / contain no-repeat; -webkit-mask: center / contain no-repeat; }
 .nav-icon-overview { mask-image: url('assets/icons/overview.svg'); -webkit-mask-image: url('assets/icons/overview.svg'); }
 .nav-icon-tasks { mask-image: url('assets/icons/tasks.svg'); -webkit-mask-image: url('assets/icons/tasks.svg'); }
+.nav-icon-administration { mask-image: url('assets/icons/administration.svg'); -webkit-mask-image: url('assets/icons/administration.svg'); }
 .nav-count { margin-left: auto; font-size: 10px; padding: 1px 6px; border: 1px solid var(--line); border-radius: 4px; color: #74866e; }
 .sidebar-bottom { margin-top: auto; padding-top: 30px; }
 .local-note { border: 1px solid var(--line); border-radius: 8px; padding: 13px; color: #7e8f75; font-size: 11px; }
@@ -296,9 +297,11 @@ body:has(#signin-dialog[open]) { overflow: hidden; }
 .creation-hint { padding: 12px 15px; margin: -8px 0 22px; font-size: 12px; color: #63775a; background: var(--soft); border: 1px solid var(--line); border-radius: 7px; }
 
 /* Workspace creation controls appear only for an authenticated EXO chair. */
-.admin-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; padding: 13px 15px; margin-bottom: 22px; background: var(--paper); border: 1px solid var(--line); border-radius: 8px; }
-.admin-label { font-size: 9px; letter-spacing: 1.3px; color: #7c8b79; margin-right: 8px; }
-.admin-actions .button { font-size: 11px; padding: 8px 11px; }
+.admin-actions { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; margin-bottom: 22px; }
+.admin-actions > .panel { padding: 22px; display: flex; flex-direction: column; min-width: 0; }
+.admin-actions h2 { font-size: 16px; margin-bottom: 9px; }
+.admin-actions p { font-size: 12px; color: var(--muted); line-height: 1.8; margin-bottom: 22px; }
+.admin-buttons { display: flex; flex-wrap: wrap; gap: 8px; margin-top: auto; }
 .setup-description { color: var(--muted); font-size: 12px; line-height: 1.7; margin-bottom: 16px; }
 #setup-error { margin-top: 12px; }
 .member-groups { list-style: none; padding: 0; margin: 12px 0 20px; }
@@ -307,8 +310,11 @@ body:has(#signin-dialog[open]) { overflow: hidden; }
 .member-groups .button { flex-shrink: 0; font-size: 11px; padding: 7px 10px; }
 #member-summary { margin-top: 10px; margin-bottom: 0; }
 .membership-note { font-size: 11px; margin-top: 12px; }
+@media (max-width: 760px) {
+  .admin-actions { grid-template-columns: 1fr; }
+  .admin-actions > .panel { padding: 20px; }
+}
 @media (max-width: 480px) {
-  .admin-label { width: 100%; margin-bottom: 3px; }
   .admin-actions .button { flex: 1 1 auto; }
 }
 
