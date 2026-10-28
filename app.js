@@ -14,6 +14,9 @@ let signinDismissed = false, signinError = '';
 let setupMode = 'project';
 let importPlan = null;
 let checkingGroupAccess = false;
+let taskLensChosen = false, taskLensUser = '', showClosedTasks = false, taskEditing = false;
+let taskLayoutUser = '', taskLayoutChoice = '', previewLayoutChoice = '';
+function taskLayout() { return (preview.mode ? previewLayoutChoice : taskLayoutChoice) || 'list'; }
 // Preview identity never replaces the authenticated session or enters storage.
 const preview = { mode: '', subject: '', saved: null };
 const dateValue = date => `${date.getFullYear()}-${String(date.getMonth() + 1).padStart(2, '0')}-${String(date.getDate()).padStart(2, '0')}`;
@@ -140,14 +143,38 @@ function renderOverview(tasks) {
 function renderTasks(tasks) {
   const query = $('#task-search').value.toLowerCase().trim();
   const filtered = tasks.filter(task => `${task.title} ${task.description} ${userName(task.assignee_id)} ${teamPath(task.team_id)}`.toLowerCase().includes(query) && ($('#status-filter').value === 'all' || task.status === $('#status-filter').value) && ($('#priority-filter').value === 'all' || task.priority === $('#priority-filter').value));
-  $('#list-count').textContent = viewIsMember() ? filtered.length : '—';
-  $('#task-rows').innerHTML = filtered.map(task => {
+  const closed = filtered.filter(isClosed), includeClosed = showClosedTasks || ['done', 'cancelled'].includes($('#status-filter').value);
+  const visible = filtered.filter(task => !isClosed(task) || includeClosed);
+  const groupFor = task => isClosed(task) ? 'Completed / cancelled' : overdue(task) ? 'Overdue' : ({ blocked: 'Blocked', in_progress: 'In progress', review: 'Awaiting review', todo: 'Not started' }[task.status] || 'Other');
+  const order = ['Blocked', 'Overdue', 'In progress', 'Awaiting review', 'Not started', 'Completed / cancelled', 'Other'];
+  visible.sort((a, b) => order.indexOf(groupFor(a)) - order.indexOf(groupFor(b)) || (a.due_at || '9999').localeCompare(b.due_at || '9999') || a.title.localeCompare(b.title));
+  const showGroups = new Set(visible.map(task => task.team_id)).size > 1;
+  $('#task-group-heading').hidden = !showGroups;
+  $('#task-list-title').textContent = $('#task-lens').value === 'assigned' ? 'My tasks' : viewIsAdmin() ? 'Workspace tasks' : 'Group tasks';
+  $('#list-count').textContent = viewIsMember() ? visible.length : '—';
+  $('#show-closed').hidden = !closed.length;
+  $('#show-closed').textContent = `${includeClosed ? 'Hide' : 'Show'} completed (${closed.length})`;
+  $('#show-closed').setAttribute('aria-expanded', String(includeClosed));
+  let previous = '';
+  $('#task-rows').innerHTML = visible.map(task => {
     const name = userName(task.assignee_id);
-    return `<tr class="${task.status === 'done' ? 'is-done' : ''}"><td class="check-cell">${checkbox(task)}</td><td>${titleButton(task)}</td><td><span class="badge ${STATUS_CLASS[task.status] || 'todo'}">${escapeHTML(STATUS[task.status] || task.status)}</span></td><td><span class="priority ${Object.hasOwn(PRIORITY, task.priority) ? task.priority : 'medium'}">${escapeHTML(PRIORITY[task.priority] || task.priority)}</span></td><td><div class="assignee"><span class="avatar">${escapeHTML(task.assignee_id ? name.split(/\s+/).map(part => part[0]).slice(0, 2).join('').toUpperCase() : '–')}</span>${escapeHTML(name)}</div></td><td class="due ${overdue(task) ? 'overdue' : ''}">${formatDate(task.due_at)}</td><td>${escapeHTML(teamPath(task.team_id))}</td></tr>`;
+    const group = groupFor(task), heading = previous === group ? '' : `<tr class="task-section"><th colspan="${showGroups ? 6 : 5}" scope="rowgroup">${group}</th></tr>`; previous = group;
+    return `${heading}<tr class="task-item ${task.status === 'done' ? 'is-done' : ''}"><td class="check-cell">${checkbox(task)}</td><td class="task-name-cell">${titleButton(task)}${!task.assignee_id ? '<small class="task-subtitle">Unassigned group work</small>' : ''}${['urgent', 'high'].includes(task.priority) ? `<small class="priority ${task.priority}">${PRIORITY[task.priority]}</small>` : ''}</td><td data-label="Status"><span class="badge ${STATUS_CLASS[task.status] || 'todo'}">${escapeHTML(STATUS[task.status] || task.status)}</span></td><td data-label="Due" class="due ${overdue(task) ? 'overdue' : ''}">${formatDate(task.due_at)}</td><td data-label="Assignee"><div class="assignee"><span class="avatar">${escapeHTML(task.assignee_id ? name.split(/\s+/).map(part => part[0]).slice(0, 2).join('').toUpperCase() : '–')}</span>${escapeHTML(task.assignee_id ? name : 'Group work')}</div></td><td data-label="Group" ${showGroups ? '' : 'hidden'}>${escapeHTML(teamPath(task.team_id))}</td></tr>`;
   }).join('');
-  $('#task-empty').hidden = filtered.length > 0;
-  $('#task-empty h3').textContent = viewIsMember() ? 'No tasks in this view' : 'Workspace unavailable';
-  $('#empty-description').textContent = !viewIsMember() ? 'This account has no workspace access. See the message above.' : tasks.length ? 'Try another search or adjust your filters.' : 'Choose another task scope, team, or project.';
+  previous = '';
+  $('#task-cards').innerHTML = visible.map(task => {
+    const group = groupFor(task), heading = previous === group ? '' : `<h3 class="task-card-section">${group}</h3>`; previous = group;
+    const description = (task.description || '').split('\n\nImported from: https://github.com/orgs/IEEE-USF-EXO/projects/3')[0].replace(/\s+/g, ' ').trim();
+    const showOwner = $('#task-lens').value !== 'assigned';
+    return `${heading}<article class="compact-task ${task.status === 'done' ? 'is-done' : ''}" data-task-card="${escapeHTML(task.id)}"><div class="task-card-heading"><h3>${titleButton(task)}</h3>${['urgent', 'high'].includes(task.priority) ? `<span class="priority ${task.priority}">${PRIORITY[task.priority]}</span>` : ''}<span class="task-card-arrow" aria-hidden="true">↗</span></div><div class="task-card-meta"><span class="badge ${STATUS_CLASS[task.status] || 'todo'}">${escapeHTML(STATUS[task.status] || task.status)}</span>${task.due_at ? `<span class="due ${overdue(task) ? 'overdue' : ''}">${formatDate(task.due_at)}</span>` : ''}${showOwner ? `<span>${escapeHTML(task.assignee_id ? userName(task.assignee_id) : 'Unassigned group work')}</span>` : ''}${showGroups ? `<span>${escapeHTML(teamPath(task.team_id))}</span>` : ''}</div>${description ? `<p class="task-card-description">${escapeHTML(description.slice(0, 180))}${description.length > 180 ? '…' : ''}</p>` : ''}</article>`;
+  }).join('');
+  const layout = taskLayout();
+  $('#task-cards').hidden = layout !== 'list'; $('#task-table-view').hidden = layout !== 'table';
+  for (const button of document.querySelectorAll('[data-task-layout]')) { button.setAttribute('aria-pressed', String(button.dataset.taskLayout === layout)); button.disabled = !viewIsMember(); }
+  $('#task-empty').hidden = visible.length > 0;
+  $('#task-empty h3').textContent = viewIsMember() ? closed.length && !includeClosed ? 'No active tasks' : 'No tasks in this view' : 'Workspace unavailable';
+  $('#empty-description').textContent = !viewIsMember() ? 'This account has no workspace access. See the message above.' : $('#task-lens').value === 'assigned' ? 'You have no assignments matching this view.' : closed.length ? 'Use Show completed to see finished work.' : tasks.length ? 'Try another search or adjust your filters.' : 'Your group’s tasks will appear here.';
+  $('#empty-group-tasks').hidden = !viewIsMember() || $('#task-lens').value !== 'assigned';
 }
 function render() {
   if (preview.mode && !['loading', 'connecting'].includes(phase) && (!session || !isAdmin())) resetPreview();
@@ -158,6 +185,18 @@ function render() {
     activeTab = 'overview'; history.replaceState(null, '', '#overview');
   }
   fillScope();
+  if (taskLayoutUser !== session?.user.id) {
+    taskLayoutUser = session?.user.id || ''; taskLayoutChoice = '';
+    try { const saved = localStorage.getItem(`exo-task-layout:${taskLayoutUser}`); if (['list', 'table'].includes(saved)) taskLayoutChoice = saved; } catch { /* The default layout remains usable. */ }
+  }
+  if (taskLensUser !== session?.user.id) { taskLensChosen = false; taskLensUser = session?.user.id || ''; }
+  const groupTasks = state.tasks.filter(task => task.project_id === state.project && canWorkIn(task.team_id, task.project_id) && (state.team === 'all' || descendantOf(task.team_id, state.team)) && (state.subteam === 'all' || descendantOf(task.team_id, state.subteam)));
+  const personalTasks = groupTasks.some(task => task.assignee_id === viewUserId());
+  if (phase === 'ready' && preview.mode !== 'group' && !taskLensChosen) $('#task-lens').value = viewIsAdmin() ? 'all' : personalTasks ? 'assigned' : 'team';
+  $('#task-scope-note').hidden = !viewIsMember() || viewIsAdmin() || preview.mode === 'group' || taskLensChosen || personalTasks || !groupTasks.length;
+  $('#task-scope-note').textContent = 'No individual assignments here. Showing your group’s work.';
+  for (const button of document.querySelectorAll('[data-task-scope]')) { button.setAttribute('aria-pressed', String(button.dataset.taskScope === 'assigned' ? $('#task-lens').value === 'assigned' : $('#task-lens').value !== 'assigned')); button.disabled = !viewIsMember() || (preview.mode === 'group' && button.dataset.taskScope === 'assigned'); }
+  $('#group-tasks-button').textContent = viewIsAdmin() ? 'All groups' : 'My group';
   const team = teamById(state.team), subteam = teamById(state.subteam), tasks = scopedTasks();
   $('#overview-scope').textContent = subteam?.name || team?.name || (viewIsAdmin() ? 'Across all teams' : 'Across my groups');
   $('#nav-count').textContent = viewIsMember() ? tasks.filter(task => !isClosed(task)).length : '—';
@@ -218,6 +257,7 @@ function resetPreview() {
   const saved = preview.saved;
   preview.mode = ''; preview.subject = ''; preview.saved = null;
   if (saved) {
+    taskLensChosen = Boolean(saved.lensChosen);
     state.project = saved.project; state.team = saved.team; state.subteam = saved.subteam;
     $('#task-lens').value = saved.lens; $('#task-search').value = saved.search;
     $('#status-filter').value = saved.status; $('#priority-filter').value = saved.priority;
@@ -226,6 +266,8 @@ function resetPreview() {
   if ($('#task-dialog').open) $('#task-dialog').close();
 }
 function applyPreviewSubject() {
+  previewLayoutChoice = '';
+  taskLensChosen = false;
   state.team = 'all'; state.subteam = 'all';
   $('#task-lens').value = preview.mode === 'group' ? 'team' : 'all';
   $('#task-search').value = ''; $('#status-filter').value = 'all'; $('#priority-filter').value = 'all';
@@ -233,7 +275,7 @@ function applyPreviewSubject() {
 }
 function startPreview() {
   if (busy || phase !== 'ready' || !isAdmin()) return;
-  if (!preview.mode) preview.saved = { tab: activeTab, project: state.project, team: state.team, subteam: state.subteam, lens: $('#task-lens').value, search: $('#task-search').value, status: $('#status-filter').value, priority: $('#priority-filter').value };
+  if (!preview.mode) preview.saved = { tab: activeTab, project: state.project, team: state.team, subteam: state.subteam, lens: $('#task-lens').value, lensChosen: taskLensChosen, search: $('#task-search').value, status: $('#status-filter').value, priority: $('#priority-filter').value };
   preview.mode = 'member'; preview.subject = state.profiles.find(profile => profile.id !== session.user.id)?.id || session.user.id;
   applyPreviewSubject(); switchTab('overview'); $('#preview-subject').focus();
 }
@@ -596,7 +638,41 @@ function openTask(id) {
     populateTaskScope($('#task-project').value, state.team, state.subteam);
   }
   $('#delete-task').hidden = !task || !canEdit(task);
-  $('#task-dialog').showModal(); if (!$('#task-title').disabled) $('#task-title').focus();
+  taskEditing = !task;
+  $('#task-detail-view').hidden = !task;
+  $('#task-edit-fields').hidden = Boolean(task);
+  $('#edit-task').hidden = !task || !canEdit(task);
+  $('#save-task').hidden = Boolean(task); $('#delete-task').hidden = true;
+  $('#cancel-dialog').textContent = task ? 'Close' : 'Cancel';
+  if (task) {
+    $('#dialog-title').textContent = preview.mode ? 'Task details · preview' : 'Task details';
+    $('#task-detail-title').textContent = task.title;
+    $('#task-detail-meta').innerHTML = `<span class="badge ${STATUS_CLASS[task.status]}">${STATUS[task.status]}</span><span class="priority ${task.priority}">${escapeHTML(PRIORITY[task.priority])}</span>`;
+    $('#task-instructions').textContent = task.description || 'No instructions added yet.';
+    $('#task-detail-facts').innerHTML = [['Assignee', task.assignee_id ? userName(task.assignee_id) : 'Unassigned group work'], ['Due date', formatDate(task.due_at)], ['Group', teamPath(task.team_id)], ['Project', state.projects.find(project => project.id === task.project_id)?.name || 'Project']].map(([label, value]) => `<div><dt>${label}</dt><dd>${escapeHTML(value)}</dd></div>`).join('');
+    loadTaskReferences(task);
+  }
+  $('#task-dialog').showModal();
+  if (task) { $('#task-detail-title').tabIndex = -1; $('#task-detail-title').focus(); }
+  else $('#task-title').focus();
+}
+async function loadTaskReferences(task) {
+  const owner = session?.user.id, version = generation;
+  $('#task-references').textContent = 'Loading references…';
+  try {
+    const { data, error } = await client.from('task_links').select('id,label,url').eq('task_id', task.id).order('created_at').range(0, 499);
+    if (owner !== session?.user.id || version !== generation || $('#task-id').value !== task.id || !$('#task-dialog').open) return;
+    if (error) throw error;
+    const links = (data || []).filter(link => { try { return ['https:', 'http:'].includes(new URL(link.url).protocol); } catch { return false; } });
+    $('#task-references').innerHTML = links.length ? links.map(link => `<li><a href="${escapeHTML(link.url)}" target="_blank" rel="noopener noreferrer">${escapeHTML(link.label || new URL(link.url).hostname)} ↗</a></li>`).join('') : '<li class="muted">No references attached.</li>';
+  } catch { if (owner === session?.user.id && version === generation && $('#task-id').value === task.id) $('#task-references').textContent = 'References could not be loaded. Close and reopen this task to retry.'; }
+}
+function editOpenTask() {
+  const task = state.tasks.find(task => task.id === $('#task-id').value);
+  if (!task || !canEdit(task) || busy || preview.mode) return;
+  taskEditing = true; $('#task-detail-view').hidden = true; $('#task-edit-fields').hidden = false;
+  $('#edit-task').hidden = true; $('#save-task').hidden = false; $('#delete-task').hidden = false;
+  $('#cancel-dialog').textContent = 'Cancel'; $('#dialog-title').textContent = 'Edit task'; $('#task-title').focus();
 }
 function lockForm(locked) {
   for (const button of $('#task-form').querySelectorAll('button')) button.disabled = locked;
@@ -609,7 +685,7 @@ function lockForm(locked) {
 }
 function formError(error) { $('#form-error').textContent = errorMessage(error); $('#form-error').hidden = false; }
 async function saveTask(event) {
-  event.preventDefault(); if (preview.mode || busy || !session) return;
+  event.preventDefault(); if (preview.mode || busy || !session || !taskEditing) return;
   const id = $('#task-id').value, existing = state.tasks.find(task => task.id === id);
   const title = $('#task-title').value.trim();
   if (!title) { $('#task-title').setCustomValidity('Give your task a name.'); $('#task-title').reportValidity(); return; }
@@ -722,7 +798,17 @@ $('#preview-subject').addEventListener('change', event => {
   const valid = preview.mode === 'member' ? state.profiles.some(profile => profile.id === event.target.value) : Boolean(teamById(event.target.value));
   if (!valid) return; preview.subject = event.target.value; applyPreviewSubject(); render();
 });
-$('#task-lens').addEventListener('change', () => { if (preview.mode === 'group' && $('#task-lens').value === 'assigned') $('#task-lens').value = 'team'; render(); });
+$('#task-lens').addEventListener('change', () => { taskLensChosen = true; if (preview.mode === 'group' && $('#task-lens').value === 'assigned') $('#task-lens').value = 'team'; render(); });
+for (const button of document.querySelectorAll('[data-task-scope]')) button.addEventListener('click', () => { if (!viewIsMember() || button.disabled) return; taskLensChosen = true; $('#task-lens').value = button.dataset.taskScope; render(); });
+$('#empty-group-tasks').addEventListener('click', () => { taskLensChosen = true; $('#task-lens').value = 'team'; render(); });
+$('#show-closed').addEventListener('click', () => { showClosedTasks = $('#show-closed').getAttribute('aria-expanded') !== 'true'; if (!showClosedTasks && ['done', 'cancelled'].includes($('#status-filter').value)) $('#status-filter').value = 'all'; renderTasks(scopedTasks()); });
+for (const button of document.querySelectorAll('[data-task-layout]')) button.addEventListener('click', () => {
+  if (!viewIsMember()) return;
+  if (preview.mode) previewLayoutChoice = button.dataset.taskLayout;
+  else { taskLayoutChoice = button.dataset.taskLayout; try { localStorage.setItem(`exo-task-layout:${session.user.id}`, taskLayoutChoice); } catch { /* Keep the session choice. */ } }
+  renderTasks(scopedTasks());
+});
+$('#edit-task').addEventListener('click', editOpenTask);
 for (const element of document.querySelectorAll('[data-tab]')) element.addEventListener('click', event => { event.preventDefault(); switchTab(element.dataset.tab); });
 $('.tabs').addEventListener('keydown', event => { if (['ArrowRight', 'ArrowLeft', 'Home', 'End'].includes(event.key)) { event.preventDefault(); const tabs = [...$('.tabs').querySelectorAll('[role="tab"]')].filter(tab => !tab.hidden), index = Math.max(0, tabs.findIndex(tab => tab.dataset.tab === activeTab)); const next = event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1 : (index + (event.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length; switchTab(tabs[next].dataset.tab); tabs[next].focus(); } });
 window.addEventListener('hashchange', () => { if (TABS.includes(location.hash.slice(1)) || !location.hash) { activeTab = location.hash.slice(1) || 'overview'; render(); } });
@@ -776,6 +862,19 @@ document.addEventListener('click', event => {
 document.addEventListener('keydown', event => { if (event.key === 'Escape') for (const help of document.querySelectorAll('.help')) { help.classList.remove('is-open'); help.classList.add('is-dismissed'); help.querySelector('button').setAttribute('aria-expanded', 'false'); } });
 document.addEventListener('focusout', event => { const help = event.target.closest('.help'); if (help && !help.contains(event.relatedTarget)) help.classList.remove('is-dismissed', 'is-open'); });
 document.addEventListener('pointerover', event => event.target.closest('.help')?.classList.remove('is-dismissed'));
+document.addEventListener('click', event => {
+  for (const menu of document.querySelectorAll('.legal-menu[open]')) {
+    if (!menu.contains(event.target) || event.target.closest('a')) menu.open = false;
+  }
+});
+document.addEventListener('keydown', event => {
+  if (event.key !== 'Escape') return;
+  for (const menu of document.querySelectorAll('.legal-menu[open]')) {
+    const restoreFocus = menu.contains(document.activeElement);
+    menu.open = false;
+    if (restoreFocus) menu.querySelector('summary').focus();
+  }
+});
 window.addEventListener('focus', refreshGroupAccess);
 document.addEventListener('visibilitychange', refreshGroupAccess);
 setInterval(refreshGroupAccess, 30000);
