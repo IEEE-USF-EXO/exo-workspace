@@ -28,6 +28,14 @@ function preferenceKey() { return `exo-scope-v2:${session?.user.id || 'visitor'}
 function savePreferences() { if (preview.mode) return; try { localStorage.setItem(preferenceKey(), JSON.stringify({ project: state.project, team: state.team, subteam: state.subteam })); } catch { /* Shared records are never stored here. */ } }
 function readPreferences() { try { return JSON.parse(localStorage.getItem(preferenceKey()) || '{}') || {}; } catch { return {}; } }
 function toast(message) { $('#toast').textContent = message; $('#toast').classList.add('visible'); clearTimeout(toast.timer); toast.timer = setTimeout(() => $('#toast').classList.remove('visible'), 5000); }
+function setSidebarCollapsed(collapsed) {
+  document.body.classList.toggle('sidebar-collapsed', collapsed);
+  $('#sidebar-toggle').setAttribute('aria-expanded', String(!collapsed));
+  $('#sidebar-toggle').setAttribute('aria-label', collapsed ? 'Expand sidebar' : 'Collapse sidebar');
+  $('#sidebar-toggle').title = collapsed ? 'Expand sidebar' : 'Collapse sidebar';
+  $('#sidebar-toggle span').textContent = collapsed ? '›' : '‹';
+  try { localStorage.setItem('exo-sidebar-collapsed', String(collapsed)); } catch { /* Still works without storage. */ }
+}
 function setBanner(title, description, type = '') { $('#connection-title').textContent = title; $('#connection-description').textContent = description; $('#connection-banner').className = `connection-banner ${type}`; }
 function errorMessage(error) {
   const context = error?.table ? `Could not load public.${error.table} (${error.code || 'request failed'}). ` : '';
@@ -115,13 +123,13 @@ function formatDate(value) {
   return date.toLocaleDateString(undefined, { month: 'short', day: 'numeric', ...(date.getFullYear() !== new Date().getFullYear() ? { year: 'numeric' } : {}) });
 }
 function checkbox(task) { return `<input class="complete-check" type="checkbox" data-complete="${escapeHTML(task.id)}" ${task.status === 'done' ? 'checked' : ''} ${canEdit(task) && task.status !== 'cancelled' ? '' : 'disabled'} aria-label="Mark ${escapeHTML(task.title)} ${task.status === 'done' ? 'incomplete' : 'complete'}">`; }
-function titleButton(task) { return `<button class="task-title-button" data-edit="${escapeHTML(task.id)}">${escapeHTML(task.title)}</button>`; }
+function titleButton(task) { return `<button class="task-title-button" data-edit="${escapeHTML(task.id)}" title="Open task details">${escapeHTML(task.title)}</button>`; }
 function renderOverview(tasks) {
   const done = tasks.filter(task => task.status === 'done').length, inProgress = tasks.filter(task => task.status === 'in_progress').length;
   const percent = tasks.length ? Math.round(done / tasks.length * 100) : 0;
   const available = viewIsMember();
   const stats = [['Total tasks', tasks.length, 'Across this workspace view', '<span class="nav-icon nav-icon-tasks" aria-hidden="true"></span>'], ['In progress', inProgress, 'Work currently underway', '◷'], ['Completed', done, 'Tasks marked as done', '✓'], ['Overdue', tasks.filter(overdue).length, 'Tasks past their due date', '⚑']];
-  $('#stats').innerHTML = stats.map(([label, count, note, icon]) => `<div class="stat"><div class="stat-top">${label}<span class="stat-icon">${icon}</span></div><strong>${available ? count : '—'}</strong><small>${available ? note : 'Waiting for workspace data'}</small></div>`).join('');
+  $('#stats').innerHTML = stats.map(([label, count, note, icon], index) => `<div class="stat"><div class="stat-top"><span class="label-with-help">${label}<span class="help"><button type="button" class="help-button" aria-label="About ${escapeHTML(label)}" aria-describedby="stat-help-${index}" aria-expanded="false">ⓘ</button><span class="help-text" role="tooltip" id="stat-help-${index}">${escapeHTML(note)}</span></span></span><span class="stat-icon">${icon}</span></div><strong>${available ? count : '—'}</strong></div>`).join('');
   const upcoming = tasks.filter(task => !isClosed(task)).sort((a, b) => (a.due_at || '9999').localeCompare(b.due_at || '9999')).slice(0, 4);
   $('#up-next').innerHTML = available && upcoming.length ? upcoming.map(task => `<div class="upcoming-task">${checkbox(task)}<div class="upcoming-detail">${titleButton(task)}<small>${escapeHTML(teamPath(task.team_id))} · ${escapeHTML(userName(task.assignee_id))}</small></div><span class="due ${overdue(task) ? 'overdue' : ''}">${formatDate(task.due_at)}</span></div>`).join('') : `<div class="up-next-empty">${available ? 'No upcoming tasks in this view.' : 'Your shared tasks will appear once the workspace is available.'}</div>`;
   $('#progress-percent').innerHTML = `${available ? percent : '—'}<span>%</span>`;
@@ -150,15 +158,11 @@ function render() {
     activeTab = 'overview'; history.replaceState(null, '', '#overview');
   }
   fillScope();
-  const project = viewIsMember() ? state.projects.find(project => project.id === state.project) : null, team = teamById(state.team), subteam = teamById(state.subteam), tasks = scopedTasks();
-  $('#breadcrumb-team').textContent = project?.name || 'EXO Workbench';
-  $('#scope-heading').textContent = `${team?.name || (viewIsAdmin() ? 'All teams' : 'My teams')} / ${subteam?.name || (viewIsAdmin() ? 'All subteams' : 'My groups')}`;
+  const team = teamById(state.team), subteam = teamById(state.subteam), tasks = scopedTasks();
   $('#overview-scope').textContent = subteam?.name || team?.name || (viewIsAdmin() ? 'Across all teams' : 'Across my groups');
   $('#nav-count').textContent = viewIsMember() ? tasks.filter(task => !isClosed(task)).length : '—';
   $('#tab-count').textContent = viewIsMember() ? tasks.length : '—';
   $('#page-title').textContent = { overview: 'Overview', tasks: 'Tasks', administration: 'Administration' }[activeTab];
-  $('#page-description').textContent = { overview: 'An overview of your team’s priorities and progress.', tasks: 'Manage tasks and track work across your team.', administration: 'Manage workspace structure, member access, and EXO chair tools.' }[activeTab];
-  $('#scope-heading').hidden = activeTab === 'administration';
   $('#new-task').hidden = activeTab === 'administration';
   $('#nav-administration').hidden = !chair; $('#tab-administration').hidden = !chair;
   for (const element of document.querySelectorAll('[data-tab]')) {
@@ -181,7 +185,6 @@ function render() {
   else if (!session && !signinDismissed && ['signed-out', 'error'].includes(phase) && !$('#signin-dialog').open) $('#signin-dialog').showModal();
   $('#auth-user').hidden = !session;
   $('#auth-user').textContent = session ? (state.profiles.find(profile => profile.id === session.user.id)?.display_name || session.user.user_metadata?.full_name || 'Signed in') : '';
-  $('#storage-note').textContent = phase === 'ready' ? 'Tasks are saved to Supabase.' : session ? 'Waiting for workspace access.' : 'Sign in to load shared tasks.';
   $('#refresh-data').hidden = !client; $('#refresh-data').disabled = busy || phase === 'loading';
   for (const selector of ['#new-task', '#add-task-row']) $(selector).disabled = busy || Boolean(preview.mode) || !canCreate();
   const creationHint = creationBlockReason();
@@ -206,6 +209,7 @@ function render() {
   $('#view-as').disabled = busy || !state.profiles.length;
   renderPreview();
   if (phase === 'ready') updateConnectedBanner();
+  $('#connection-banner').hidden = phase === 'ready' && viewIsMember() && state.projects.length > 0 && state.teams.length > 0;
   $('main').setAttribute('aria-busy', String(phase === 'loading' || phase === 'connecting'));
   renderOverview(tasks); renderTasks(tasks);
 }
@@ -723,7 +727,7 @@ for (const element of document.querySelectorAll('[data-tab]')) element.addEventL
 $('.tabs').addEventListener('keydown', event => { if (['ArrowRight', 'ArrowLeft', 'Home', 'End'].includes(event.key)) { event.preventDefault(); const tabs = [...$('.tabs').querySelectorAll('[role="tab"]')].filter(tab => !tab.hidden), index = Math.max(0, tabs.findIndex(tab => tab.dataset.tab === activeTab)); const next = event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1 : (index + (event.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length; switchTab(tabs[next].dataset.tab); tabs[next].focus(); } });
 window.addEventListener('hashchange', () => { if (TABS.includes(location.hash.slice(1)) || !location.hash) { activeTab = location.hash.slice(1) || 'overview'; render(); } });
 for (const selector of ['#new-task', '#add-task-row']) $(selector).addEventListener('click', () => openTask());
-for (const selector of ['#see-tasks', '#view-all-tasks']) $(selector).addEventListener('click', () => switchTab('tasks'));
+$('#see-tasks').addEventListener('click', () => switchTab('tasks'));
 for (const selector of ['#close-dialog', '#cancel-dialog']) $(selector).addEventListener('click', () => { if (!busy) $('#task-dialog').close(); });
 $('#task-dialog').addEventListener('cancel', event => { if (busy) event.preventDefault(); });
 $('#task-title').addEventListener('input', () => $('#task-title').setCustomValidity(''));
@@ -762,6 +766,16 @@ $('#close-signin').addEventListener('click', () => { if (!busy) { signinDismisse
 $('#signin-dialog').addEventListener('cancel', event => { if (busy) event.preventDefault(); else signinDismissed = true; });
 $('#signin-reload').addEventListener('click', () => location.reload());
 $('#refresh-data').addEventListener('click', () => loadWorkspace());
+$('#sidebar-toggle').addEventListener('click', () => setSidebarCollapsed(!document.body.classList.contains('sidebar-collapsed')));
+try { setSidebarCollapsed(localStorage.getItem('exo-sidebar-collapsed') === 'true'); } catch { setSidebarCollapsed(false); }
+document.addEventListener('click', event => {
+  const button = event.target.closest('.help-button');
+  for (const help of document.querySelectorAll('.help.is-open')) if (help !== button?.closest('.help')) { help.classList.remove('is-open'); help.querySelector('button').setAttribute('aria-expanded', 'false'); }
+  if (button) { button.closest('.help').classList.remove('is-dismissed'); const open = button.closest('.help').classList.toggle('is-open'); button.setAttribute('aria-expanded', String(open)); }
+});
+document.addEventListener('keydown', event => { if (event.key === 'Escape') for (const help of document.querySelectorAll('.help')) { help.classList.remove('is-open'); help.classList.add('is-dismissed'); help.querySelector('button').setAttribute('aria-expanded', 'false'); } });
+document.addEventListener('focusout', event => { const help = event.target.closest('.help'); if (help && !help.contains(event.relatedTarget)) help.classList.remove('is-dismissed', 'is-open'); });
+document.addEventListener('pointerover', event => event.target.closest('.help')?.classList.remove('is-dismissed'));
 window.addEventListener('focus', refreshGroupAccess);
 document.addEventListener('visibilitychange', refreshGroupAccess);
 setInterval(refreshGroupAccess, 30000);

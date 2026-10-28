@@ -173,7 +173,6 @@ form input:not([type=hidden]), form select, form textarea { width: 100%; font-si
   .scope-selectors { gap: 10px; }
   .scope-field { gap: 6px; }
   .scope-field select { max-width: 205px; }
-  .topbar-right { display: none; }
   main { padding-inline: 22px; }
   .overview-grid { grid-template-columns: 1fr; }
   .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
@@ -347,4 +346,51 @@ body:has(#member-preview:not([hidden])) .topbar { border-bottom-color: #cdbf98; 
   .preview-heading { align-items: flex-start; }
   .member-preview { padding: 17px; }
   .task-toolbar .filters select { min-width: 110px; }
+}
+
+/* Compact navigation and optional contextual help. */
+.sidebar-toggle { position: absolute; top: 30px; right: 9px; width: 25px; height: 30px; display: grid; place-items: center; border: 1px solid var(--line); border-radius: 6px; background: var(--paper); font-size: 21px; }
+.brand { padding-right: 24px; }
+.sidebar-collapsed .sidebar { width: 72px; padding-inline: 12px; overflow: visible; }
+.sidebar-collapsed .shell { margin-left: 72px; }
+.sidebar-collapsed .brand { padding: 0; justify-content: center; margin-bottom: 44px; }
+.sidebar-collapsed .brand-copy, .sidebar-collapsed .nav-text, .sidebar-collapsed .nav-count { display: none; }
+.sidebar-collapsed .sidebar-toggle { top: 77px; right: 23px; }
+.sidebar-collapsed nav a { position: relative; justify-content: center; padding-inline: 0; }
+.sidebar-collapsed nav a:focus-visible::after { content: attr(aria-label); position: absolute; left: calc(100% + 10px); background: var(--ink); color: var(--paper); padding: 7px 10px; border-radius: 5px; font-size: 11px; white-space: nowrap; z-index: 5; }
+.legal-menu { position: relative; }
+.legal-menu summary { width: 34px; padding: 7px; border-radius: 6px; cursor: pointer; list-style: none; text-align: center; color: var(--muted); }
+.legal-menu summary::-webkit-details-marker { display: none; }
+.legal-menu summary:hover { background: var(--soft); }
+.legal-menu .legal-links { position: absolute; bottom: 38px; left: 0; display: grid; justify-content: stretch; gap: 0; min-width: 150px; margin: 0; padding: 7px; background: var(--paper); border: 1px solid var(--line); border-radius: 8px; box-shadow: 0 6px 20px #223e321a; z-index: 5; }
+.legal-menu a { padding: 8px; font-size: 11px; }
+.refresh-button { display: grid; place-items: center; width: 34px; height: 34px; border: 1px solid var(--line); background: var(--paper); border-radius: 7px; font-size: 21px; }
+.label-with-help { display: inline-flex; align-items: center; flex-wrap: wrap; gap: 6px; }
+.help { position: relative; display: inline-flex; flex-shrink: 0; }
+.help-button { display: inline-grid; place-items: center; width: 24px; height: 24px; padding: 0; line-height: 1; text-align: center; color: var(--muted); font-size: 14px; font-weight: 400; border-radius: 4px; }
+.help-button:hover { color: var(--green); background: var(--soft); }
+.help-text { display: none; position: absolute; top: calc(100% + 7px); left: 0; width: 220px; max-width: 65vw; padding: 10px 12px; background: var(--ink); color: var(--paper); border-radius: 7px; box-shadow: 0 5px 16px #223e3220; z-index: 10; font-size: 11px; font-weight: 400; line-height: 1.7; letter-spacing: 0; text-transform: none; }
+.help:hover .help-text, .help:focus-within .help-text, .help.is-open .help-text { display: block; }
+.help.is-dismissed .help-text { display: none; }
+.admin-actions > .panel { position: relative; overflow: visible; }
+.admin-buttons { margin-top: 22px; }
+.membership-help { margin-top: 14px; color: var(--muted); font-size: 11px; }
+.membership-help summary { cursor: pointer; }
+@media (max-width: 1100px) { .topbar { flex-wrap: wrap; } .topbar-right { display: flex; margin-left: auto; } }
+@media (max-width: 760px) {
+  .sidebar { position: relative; flex-wrap: wrap; padding-right: 48px; }
+  .sidebar-toggle { top: 18px; right: 12px; }
+  .sidebar-bottom { display: block; margin: 0; padding: 0; }
+  nav .nav-text { display: none; }
+  .brand { padding: 0; }
+  .sidebar-collapsed .sidebar { width: auto; padding: 15px 48px 15px 18px; }
+  .sidebar-collapsed .shell { margin-left: 0; }
+  .sidebar-collapsed .brand { margin: 0; }
+  .sidebar-collapsed .sidebar-toggle { top: 18px; right: 12px; }
+  .sidebar-collapsed nav a { width: 34px; }
+  .sidebar-collapsed nav a:focus-visible::after { top: calc(100% + 5px); left: auto; right: 0; }
+  .tabs { overflow-x: auto; }
+  .tabs [role=tab] { flex-shrink: 0; }
+  .help-text { width: 180px; }
+  .stat:nth-child(even) .help-text { left: auto; right: 0; }
 }

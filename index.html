@@ -14,22 +14,22 @@
   <script src="app.js" defer></script>
 </head>
 <body>
-  <aside class="sidebar">
-    <a class="brand" href="#overview" aria-label="Exo home"><span class="brand-mark"><img src="assets/project-icon.png" alt=""></span><span><b>EXO</b><small>PROJECT WORKSPACE</small></span></a>
-    <div class="nav-label">WORKSPACE</div>
-    <nav aria-label="Main navigation">
-      <a href="#overview" data-tab="overview"><span class="nav-icon nav-icon-overview" aria-hidden="true"></span>Overview</a>
-      <a href="#tasks" data-tab="tasks"><span class="nav-icon nav-icon-tasks" aria-hidden="true"></span>Tasks<span id="nav-count" class="nav-count"></span></a>
-      <a href="#administration" data-tab="administration" id="nav-administration" hidden><span class="nav-icon nav-icon-administration" aria-hidden="true"></span>Administration</a>
+  <aside class="sidebar" id="workspace-sidebar">
+    <button class="icon-button sidebar-toggle" id="sidebar-toggle" type="button" aria-label="Collapse sidebar" aria-expanded="true" aria-controls="workspace-navigation"><span aria-hidden="true">‹</span></button>
+    <a class="brand" href="#overview" aria-label="Exo home"><span class="brand-mark"><img src="assets/project-icon.png" alt=""></span><span class="brand-copy"><b>EXO</b></span></a>
+    <nav aria-label="Main navigation" id="workspace-navigation">
+      <a href="#overview" data-tab="overview" aria-label="Overview" title="Overview"><span class="nav-icon nav-icon-overview" aria-hidden="true"></span><span class="nav-text">Overview</span></a>
+      <a href="#tasks" data-tab="tasks" aria-label="Tasks" title="Tasks"><span class="nav-icon nav-icon-tasks" aria-hidden="true"></span><span class="nav-text">Tasks</span><span id="nav-count" class="nav-count"></span></a>
+      <a href="#administration" data-tab="administration" aria-label="Administration" title="Administration" id="nav-administration" hidden><span class="nav-icon nav-icon-administration" aria-hidden="true"></span><span class="nav-text">Administration</span></a>
     </nav>
-    <div class="sidebar-bottom"><div class="local-note"><b><span class="status-dot"></span>Supabase workspace</b><small id="storage-note">Sign in to load shared tasks.</small></div><div class="legal-links"><a href="privacy.html" target="_blank" rel="noopener noreferrer">Privacy Policy</a><span aria-hidden="true">·</span><a href="terms.html" target="_blank" rel="noopener noreferrer">Terms of Service</a></div></div>
+    <div class="sidebar-bottom"><details class="legal-menu"><summary aria-label="Legal information" title="Legal information">•••</summary><div class="legal-links"><a href="privacy.html" target="_blank" rel="noopener noreferrer">Privacy Policy</a><a href="terms.html" target="_blank" rel="noopener noreferrer">Terms of Service</a></div></details></div>
   </aside>
   <div class="shell">
-    <header class="topbar"><div class="scope-selectors"><div class="scope-field"><label for="project-select">Project</label><select id="project-select" aria-label="Select project"></select></div><div class="scope-field"><label for="team-select">Team</label><select id="team-select" aria-label="Select team"></select></div><div class="scope-field"><label for="subteam-select">Subteam</label><select id="subteam-select" aria-label="Select subteam"></select></div></div><div class="topbar-right"><span id="auth-user" class="auth-user" hidden></span><button class="button primary" id="auth-button" disabled>Connecting…</button></div></header>
+    <header class="topbar"><div class="scope-selectors"><div class="scope-field"><label for="project-select">Project</label><select id="project-select" aria-label="Select project"></select></div><div class="scope-field"><label for="team-select">Team</label><select id="team-select" aria-label="Select team"></select></div><div class="scope-field"><label for="subteam-select">Subteam</label><select id="subteam-select" aria-label="Select subteam"></select></div></div><div class="topbar-right"><button id="refresh-data" class="icon-button refresh-button" type="button" aria-label="Refresh workspace" title="Refresh workspace" hidden><span aria-hidden="true">↻</span></button><span id="auth-user" class="auth-user" hidden></span><button class="button primary" id="auth-button" disabled>Connecting…</button></div></header>
     <main>
-      <div id="connection-banner" class="connection-banner" role="status" aria-live="polite"><div><strong id="connection-title">Connecting to your workspace</strong><p id="connection-description">Checking your Supabase session…</p></div><button id="refresh-data" class="button secondary" hidden>Refresh</button></div>
-      <div class="breadcrumb">Workspace <span>›</span> <strong id="breadcrumb-team"></strong></div>
-      <div class="page-heading"><div><div class="eyebrow" id="scope-heading"></div><h1 id="page-title">Overview</h1><p id="page-description"></p></div><div class="heading-actions"><button class="button primary" id="new-task"><span aria-hidden="true">＋</span> New task</button></div></div>
+      <div id="connection-banner" class="connection-banner" role="status" aria-live="polite"><div><strong id="connection-title">Connecting to your workspace</strong><p id="connection-description">Checking your Supabase session…</p></div></div>
+
+      <div class="page-heading"><div><h1 id="page-title">Overview</h1></div><div class="heading-actions"><button class="button primary" id="new-task"><span aria-hidden="true">＋</span> New task</button></div></div>
       <section id="member-preview" class="member-preview" aria-label="Workspace preview controls" hidden>
         <div class="preview-heading"><div><span class="eyebrow">EXO CHAIR · TESTING VIEW</span><h2>See the workspace from another perspective.</h2></div><button class="button secondary" id="exit-preview">Exit preview</button></div>
         <div class="preview-fields"><div><label for="preview-mode">Preview as</label><select id="preview-mode"><option value="member">Specific member</option><option value="group">Team / subteam member</option></select></div><div><label id="preview-subject-label" for="preview-subject">Member</label><select id="preview-subject"></select></div></div>
@@ -40,22 +40,22 @@
       <div class="tabs" role="tablist" aria-label="Workspace views"><button role="tab" id="tab-overview" data-tab="overview" aria-controls="overview-view"><span class="nav-icon nav-icon-overview" aria-hidden="true"></span>Overview</button><button role="tab" id="tab-tasks" data-tab="tasks" aria-controls="tasks-view"><span class="nav-icon nav-icon-tasks" aria-hidden="true"></span>Tasks <span id="tab-count" class="tab-count"></span></button><button role="tab" id="tab-administration" data-tab="administration" aria-controls="administration-view" hidden><span class="nav-icon nav-icon-administration" aria-hidden="true"></span>Administration</button></div>
       <section id="administration-view" role="tabpanel" aria-labelledby="tab-administration" hidden>
         <div id="admin-actions" class="admin-actions" aria-label="EXO chair controls" hidden>
-          <section class="panel"><div class="eyebrow">WORKSPACE</div><h2>Projects and groups</h2><p>Create shared projects and organize teams and subteams for task assignments.</p><div class="admin-buttons"><button class="button secondary" id="new-project">＋ New project</button><button class="button secondary" id="new-team">＋ New team</button><button class="button secondary" id="new-subteam">＋ New subteam</button></div></section>
-          <section class="panel"><div class="eyebrow">PEOPLE</div><h2>Member access</h2><p>Add signed-in people to their groups or update existing memberships.</p><div class="admin-buttons"><button class="button secondary" id="manage-members">Manage members</button></div></section>
-          <section class="panel"><div class="eyebrow">TESTING</div><h2>Workspace preview</h2><p>Check the tasks and group selectors a member would see in a read-only preview.</p><div class="admin-buttons"><button class="button secondary" id="view-as" hidden>View as member</button></div></section>
-          <section class="panel"><div class="eyebrow">IMPORT</div><h2>GitHub board</h2><p>Import missing tasks from the EXO board into a project. Automatic synchronization remains inactive.</p><div class="admin-buttons"><button class="button secondary" id="import-github">Import from GitHub</button></div></section>
+          <section class="panel"><div class="eyebrow">WORKSPACE</div><h2 class="label-with-help">Projects and groups<span class="help"><button type="button" class="help-button" aria-label="About Projects and groups" aria-describedby="admin-help-0" aria-expanded="false">ⓘ</button><span class="help-text" role="tooltip" id="admin-help-0">Projects are shared. Teams and subteams determine task access.</span></span></h2><div class="admin-buttons"><button class="button secondary" id="new-project">＋ New project</button><button class="button secondary" id="new-team">＋ New team</button><button class="button secondary" id="new-subteam">＋ New subteam</button></div></section>
+          <section class="panel"><div class="eyebrow">PEOPLE</div><h2 class="label-with-help">Member access<span class="help"><button type="button" class="help-button" aria-label="About Member access" aria-describedby="admin-help-1" aria-expanded="false">ⓘ</button><span class="help-text" role="tooltip" id="admin-help-1">People appear after their first sign-in. Add or remove their group memberships here.</span></span></h2><div class="admin-buttons"><button class="button secondary" id="manage-members">Manage members</button></div></section>
+          <section class="panel"><div class="eyebrow">TESTING</div><h2 class="label-with-help">Workspace preview<span class="help"><button type="button" class="help-button" aria-label="About Workspace preview" aria-describedby="admin-help-2" aria-expanded="false">ⓘ</button><span class="help-text" role="tooltip" id="admin-help-2">Preview a member’s tasks and group selectors. Changes are disabled during preview.</span></span></h2><div class="admin-buttons"><button class="button secondary" id="view-as" hidden>View as member</button></div></section>
+          <section class="panel"><div class="eyebrow">IMPORT</div><h2 class="label-with-help">GitHub board<span class="help"><button type="button" class="help-button" aria-label="About GitHub board" aria-describedby="admin-help-3" aria-expanded="false">ⓘ</button><span class="help-text" role="tooltip" id="admin-help-3">Import missing EXO board tasks into a project. Existing tasks are preserved. Automatic sync is inactive.</span></span></h2><div class="admin-buttons"><button class="button secondary" id="import-github">Import from GitHub</button></div></section>
         </div>
       </section>
       <section id="overview-view" role="tabpanel" aria-labelledby="tab-overview">
-        <div class="welcome-card"><div><span class="eyebrow">PROJECT WORKSPACE</span><h2>Your team. Your work. One place.</h2><p>Track priorities and progress across your teams and subteams.</p></div><button class="button secondary" id="view-all-tasks"><span class="nav-icon nav-icon-tasks" aria-hidden="true"></span>View tasks <span aria-hidden="true">↗</span></button></div>
+
         <div class="section-heading"><h2>At a glance</h2><span id="overview-scope"></span></div>
         <div class="stats" id="stats"></div>
-        <div class="overview-grid"><section class="panel"><div class="panel-heading"><div><h2>Up next</h2><p>A little focus goes a long way.</p></div><button class="text-button" id="see-tasks">All tasks ↗</button></div><div id="up-next"></div></section><section class="panel progress-panel"><div class="panel-heading"><div><h2>Team progress</h2><p>Every finished task moves us forward.</p></div><span class="muted">◔</span></div><div class="progress-summary"><strong id="progress-percent">0<span>%</span></strong><span>of tasks completed</span></div><div class="progress-track"><span id="progress-bar"></span></div><div id="status-breakdown"></div><div class="progress-footer" id="progress-footer"></div></section></div>
-        <div class="workspace-footer"><span>EXO PROJECT WORKSPACE</span><span><a href="privacy.html" target="_blank" rel="noopener noreferrer">Privacy Policy</a> · <a href="terms.html" target="_blank" rel="noopener noreferrer">Terms of Service</a></span></div>
+        <div class="overview-grid"><section class="panel"><div class="panel-heading"><div><h2>Up next</h2></div><button class="text-button" id="see-tasks">All tasks ↗</button></div><div id="up-next"></div></section><section class="panel progress-panel"><div class="panel-heading"><div><h2>Team progress</h2></div><span class="muted">◔</span></div><div class="progress-summary"><strong id="progress-percent">0<span>%</span></strong><span>of tasks completed</span></div><div class="progress-track"><span id="progress-bar"></span></div><div id="status-breakdown"></div><div class="progress-footer" id="progress-footer"></div></section></div>
+
       </section>
       <section id="tasks-view" role="tabpanel" aria-labelledby="tab-tasks" hidden>
         <div class="task-toolbar"><div class="search-wrap"><span aria-hidden="true">⌕</span><input type="search" id="task-search" placeholder="Search tasks…" aria-label="Search tasks"></div><div class="filters"><select id="task-lens" aria-label="Task scope"><option value="all">All workspace tasks</option><option value="team">Teams I can work in</option><option value="assigned">Assigned to me</option></select><select id="status-filter" aria-label="Filter by status"><option value="all">All statuses</option><option>To do</option><option>In progress</option><option>Done</option></select><select id="priority-filter" aria-label="Filter by priority"><option value="all">All priorities</option><option>High</option><option>Medium</option><option>Low</option></select></div></div>
-        <div class="task-panel"><div class="task-list-heading"><h2>Team tasks <span id="list-count"></span></h2><span>Click a task to edit</span></div><div class="table-scroll"><table><thead><tr><th class="check-cell"><span aria-label="Completion">✓</span></th><th>Task name</th><th>Status</th><th>Priority</th><th>Assignee</th><th>Due date</th><th>Subteam</th></tr></thead><tbody id="task-rows"></tbody></table></div><div id="task-empty" class="empty-state" hidden><span>☑</span><h3>No tasks here yet</h3><p id="empty-description"></p></div><button id="add-task-row" class="add-task-row">＋ Add a task</button></div><p class="table-note">A shared plan. A little more breathing room.</p>
+        <div class="task-panel"><div class="task-list-heading"><h2>Team tasks <span id="list-count"></span></h2></div><div class="table-scroll"><table><thead><tr><th class="check-cell"><span aria-label="Completion">✓</span></th><th>Task name</th><th>Status</th><th>Priority</th><th>Assignee</th><th>Due date</th><th>Subteam</th></tr></thead><tbody id="task-rows"></tbody></table></div><div id="task-empty" class="empty-state" hidden><span>☑</span><h3>No tasks here yet</h3><p id="empty-description"></p></div><button id="add-task-row" class="add-task-row">＋ Add a task</button></div>
       </section>
     </main>
   </div>
@@ -73,13 +73,13 @@
   </form></dialog>
   <dialog id="members-dialog" aria-labelledby="members-title"><form id="members-form">
     <div class="dialog-heading"><div><div class="eyebrow">EXO CHAIR · MEMBERSHIP</div><h2 id="members-title">Manage members</h2></div><button type="button" class="icon-button" id="close-members" aria-label="Close member management">×</button></div>
-    <p class="setup-description">Choose someone who has signed in with Google, then add them to a team or subteam. Memberships apply across all projects.</p>
+    <p class="setup-description">Select a person and manage their groups.</p>
     <p id="members-error" class="form-error" role="alert" hidden></p>
     <label for="member-select">Person</label><select id="member-select" required></select>
     <p id="member-summary" class="setup-description" aria-live="polite"></p>
     <ul id="member-groups" class="member-groups" aria-label="Direct group memberships"></ul>
     <label for="member-team">Add to a team or subteam</label><select id="member-team" required></select>
-    <p class="setup-description membership-note">A parent team includes its subteams. Subteam membership does not grant access to its parent or siblings. Leadership roles are separate; removing a group does not revoke a lead or chair role.</p>
+    <details class="membership-help"><summary>How group access works</summary><p class="setup-description membership-note">Parent teams include their subteams. Subteam access excludes parents and siblings. Memberships apply across projects; leadership roles are managed separately.</p></details>
     <p id="members-status" class="setup-description" role="status" aria-live="polite"></p>
     <div class="dialog-footer"><button type="button" class="button secondary" id="refresh-members">Refresh people</button><div><button type="button" class="button secondary" id="done-members">Done</button><button type="submit" class="button primary" id="add-member">Add to group</button></div></div>
   </form></dialog>
@@ -93,7 +93,7 @@
   </form></dialog>
   <dialog id="signin-dialog" class="signin-card" aria-labelledby="signin-title" aria-describedby="signin-description">
     <button class="icon-button signin-close" id="close-signin" type="button" aria-label="Close sign-in card">×</button>
-    <div class="signin-logo"><img src="assets/project-icon.png" alt=""><span><b>EXO</b><small>PROJECT WORKSPACE</small></span></div>
+    <div class="signin-logo"><img src="assets/project-icon.png" alt=""><span class="brand-copy"><b>EXO</b></span></div>
     <div class="eyebrow">YOUR TEAM’S WORKSPACE</div>
     <h2 id="signin-title">Welcome to EXO.</h2>
     <p id="signin-description">Sign in to see your team’s tasks,<br>priorities, and progress in one place.</p>
