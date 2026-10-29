@@ -23,6 +23,27 @@ first verified sign-in. Each approval is consumed once: later sign-ins do not
 restore a membership a chair has removed. Leadership assignments are separate.
 Rows without a clear email/group mapping must be reviewed before approval.
 
+Prepare a private import from the roster workbook with Python and `openpyxl`:
+
+```text
+python supabase/prepare-roster.py "INPUT.xlsx" "PRIVATE_OUTPUT_DIRECTORY"
+```
+
+The output directory must be outside this repository and the website. Review
+`approved-memberships.csv` and `roster-review.json`, then run the generated
+`install-roster.sql` in Supabase SQL Editor as postgres. It installs the onboarding
+triggers, resolves or creates the required groups, saves approvals, and backfills
+existing verified Google accounts in one transaction. Its result lists assigned,
+pending, disabled, and previously consumed approvals. Run the complete script.
+
+Repeated email/group rows collapse to one approval. Explicit alternate emails
+remain separate accepted login addresses with the same group mappings. They do
+not merge Supabase Auth accounts if someone signs in using both. Subteam members
+receive their leaf group; cross-team entries retain their explicitly listed root
+and the uniquely matched subteam from the Teams tab. Ambiguous mappings are
+excluded for review. No chair or lead roles are inferred from the workbook.
+Reruns preserve existing memberships, consumed approvals, and disabled approvals.
+
 ## Activity history, permissions and archiving
 
 Keep email-filled seed scripts and roster exports outside the repository and
