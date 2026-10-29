@@ -95,3 +95,17 @@ GitHub token or private Google roster.
 Future work must implement and test the Edge Function, latest-change-wins
 resolution, retries, project mapping (EXO to exo-leg), and scheduling before
 enabling synchronization. Store any credentials in Supabase secrets.
+
+## Manage and archive projects
+
+For an existing database, run `project-management.sql` after `activity-log.sql`,
+then refresh Workbench. Fresh installations include both in `schema.sql`.
+EXO chairs can open **Administration → Projects and groups → Manage projects**
+to archive or restore a project. Archived projects disappear from working project,
+new-task and import selectors, but remain listed in project management and history.
+
+Archiving also archives the project's active tasks in the same transaction.
+Restoring returns the project to its previous status and restores only tasks
+archived with the project; tasks archived individually stay archived. Task
+progress, assignments, descriptions and history are preserved. Database checks
+reject new or changed tasks in archived projects until the project is restored.

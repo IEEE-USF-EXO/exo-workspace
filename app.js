@@ -141,12 +141,13 @@ function canManageIn(teamId, projectId) {
   const parents = ancestors(teamId), id = viewUserId();
   return viewIsAdmin() || state.leadership.some(role => role.user_id === id && !role.revoked_at && parents.includes(role.team_id) && ((role.role === 'team_lead' && !role.project_id) || (role.role === 'project_lead' && role.project_id === projectId)));
 }
-function canCreate() { return phase === 'ready' && state.projects.some(project => state.teams.some(team => canManageIn(team.id, project.id))); }
+const activeProjects = () => state.projects.filter(project => project.status !== 'archived');
+function canCreate() { return phase === 'ready' && activeProjects().some(project => state.teams.some(team => canManageIn(team.id, project.id))); }
 function creationBlockReason() {
   if (preview.mode) return 'Read-only testing view. Exit preview to create, edit, or delete shared records.';
   if (phase !== 'ready' || canCreate()) return '';
   const prefix = isAdmin() ? 'Your EXO chair role is active. ' : '';
-  if (!state.projects.length) return `${prefix}${isAdmin() ? 'Open Administration to create your first project.' : 'Ask your EXO chair to create a project before adding tasks.'}`;
+  if (!activeProjects().length) return `${prefix}${isAdmin() ? 'Open Administration to create your first project.' : 'Ask your EXO chair to create a project before adding tasks.'}`;
   if (!state.teams.length) return `${prefix}${isAdmin() ? 'Open Administration to create a team and enable task creation.' : 'Ask your EXO chair to create a team.'}`;
   return viewIsMember() ? '' : 'An administrator needs to add you to a group.';
 }
@@ -157,9 +158,9 @@ function scopedTasks() {
   const lens = $('#task-lens').value;
   return state.tasks.filter(task => canWorkIn(task.team_id, task.project_id) && task.project_id === state.project && (activeTab === 'tasks' && $('#archive-filter').value === 'archived' ? Boolean(task.archived_at) : !task.archived_at) && (state.team === 'all' || descendantOf(task.team_id, state.team)) && (state.subteam === 'all' || descendantOf(task.team_id, state.subteam)) && (lens !== 'assigned' || (viewUserId() && task.assignee_id === viewUserId())));
 }
-function clearData() { for (const key of ['tasks', 'teams', 'projects', 'profiles', 'memberships', 'leadership', 'activity']) state[key] = []; activityReady = false; recentKey = ''; ++recentRequest; ++auditRequest; Object.assign(audit, { rows: [], loading: false, more: false, loaded: false, error: '' }); state.project = ''; state.team = 'all'; state.subteam = 'all'; for (const selector of ['#task-dialog', '#setup-dialog', '#members-dialog']) if ($(selector).open) $(selector).close(); if (!session && $('#import-dialog').open) $('#import-dialog').close(); }
+function clearData() { for (const key of ['tasks', 'teams', 'projects', 'profiles', 'memberships', 'leadership', 'activity']) state[key] = []; activityReady = false; recentKey = ''; ++recentRequest; ++auditRequest; Object.assign(audit, { rows: [], loading: false, more: false, loaded: false, error: '' }); state.project = ''; state.team = 'all'; state.subteam = 'all'; for (const selector of ['#task-dialog', '#setup-dialog', '#members-dialog', '#projects-dialog']) if ($(selector).open) $(selector).close(); if (!session && $('#import-dialog').open) $('#import-dialog').close(); }
 function normalizeScope() {
-  if (!state.projects.some(project => project.id === state.project)) state.project = state.projects[0]?.id || '';
+  if (!activeProjects().some(project => project.id === state.project)) state.project = activeProjects()[0]?.id || '';
   const roots = rootsForProject(state.project);
   if (state.team !== 'all' && !roots.some(team => team.id === state.team)) state.team = 'all';
   if (!viewIsAdmin() && roots.length === 1) state.team = roots[0].id;
@@ -169,7 +170,7 @@ function normalizeScope() {
 }
 function fillScope() {
   normalizeScope();
-  $('#project-select').innerHTML = viewIsMember() && state.projects.length ? options(state.projects.map(project => [project.id, project.name])) : '<option value="">No projects loaded</option>';
+  $('#project-select').innerHTML = viewIsMember() && activeProjects().length ? options(activeProjects().map(project => [project.id, project.name])) : '<option value="">No projects loaded</option>';
   $('#project-select').value = state.project;
   const roots = rootsForProject(state.project);
   $('#team-select').innerHTML = options([...(viewIsAdmin() || roots.length !== 1 ? [['all', viewIsAdmin() ? 'All teams' : 'My teams']] : []), ...roots.map(team => [team.id, team.name])]);
@@ -178,7 +179,7 @@ function fillScope() {
   const singleSubteam = !viewIsAdmin() && children.length === 1 && !canWorkIn(state.team, state.project);
   $('#subteam-select').innerHTML = options([...(singleSubteam ? [] : [['all', viewIsAdmin() || canWorkIn(state.team, state.project) ? 'All subteams' : 'My subteams']]), ...children.map(team => [team.id, teamPath(team.id).split(' / ').slice(1).join(' / ')])]);
   $('#subteam-select').value = state.subteam;
-  $('#project-select').disabled = !viewIsMember() || busy || !state.projects.length;
+  $('#project-select').disabled = !viewIsMember() || busy || !activeProjects().length;
   $('#team-select').disabled = phase !== 'ready' || busy || !rootsForProject(state.project).length;
   $('#subteam-select').disabled = phase !== 'ready' || busy || state.team === 'all' || !children.length;
 }
@@ -392,13 +393,18 @@ function render() {
   for (const selector of ['#new-project', '#new-team']) $(selector).disabled = busy || Boolean(preview.mode) || !chair;
   $('#new-subteam').disabled = busy || Boolean(preview.mode) || !chair || !state.teams.some(team => !team.parent_team_id);
   $('#new-subteam').title = state.teams.some(team => !team.parent_team_id) ? '' : 'Create a parent team first.';
+  $('#manage-projects').disabled = busy || Boolean(preview.mode) || !chair;
+  if ($('#projects-dialog').open) {
+    if (phase !== 'ready' || !isAdmin() || preview.mode) $('#projects-dialog').close();
+    else renderProjectManagement();
+  }
   $('#manage-members').disabled = busy || Boolean(preview.mode) || !chair;
   if ($('#members-dialog').open) {
     if (phase !== 'ready' || !isAdmin() || preview.mode) $('#members-dialog').close();
     else lockMembers();
   }
-  $('#import-github').disabled = busy || Boolean(preview.mode) || !chair || !state.projects.length;
-  $('#import-github').title = state.projects.length ? '' : 'Create a destination project first.';
+  $('#import-github').disabled = busy || Boolean(preview.mode) || !chair || !activeProjects().length;
+  $('#import-github').title = activeProjects().length ? '' : 'Create a destination project first.';
   for (const selector of ['#task-search', '#task-lens', '#status-filter', '#priority-filter']) $(selector).disabled = !viewIsMember();
   $('#task-lens option[value="assigned"]').disabled = preview.mode === 'group';
   $('#task-lens option[value="all"]').textContent = viewIsAdmin() ? 'All workspace tasks' : 'My groups’ tasks';
@@ -539,11 +545,11 @@ function resetImportPlan() {
   $('#save-import').textContent = 'Load GitHub tasks'; $('#save-import').disabled = false;
 }
 function openImport() {
-  if (preview.mode || busy || phase !== 'ready' || !isAdmin() || !state.projects.length) return;
+  if (preview.mode || busy || phase !== 'ready' || !isAdmin() || !activeProjects().length) return;
   if (!window.ExoBoard) { toast('The GitHub board reader did not load. Reload the page.'); return; }
   $('#import-form').reset(); resetImportPlan();
-  $('#import-project').innerHTML = options(state.projects.map(project => [project.id, project.name]));
-  $('#import-project').value = state.project || state.projects[0].id;
+  $('#import-project').innerHTML = options(activeProjects().map(project => [project.id, project.name]));
+  $('#import-project').value = state.project || activeProjects()[0].id;
   showDialog($('#import-dialog')); $('#import-project').focus();
 }
 function lockImport(locked) { for (const field of $('#import-form').querySelectorAll('button,input,select')) field.disabled = locked; }
@@ -575,7 +581,7 @@ async function prepareImport() {
 async function executeImport() {
   if (preview.mode) return;
   const owner = session.user.id, version = generation, plan = importPlan;
-  if (!plan || !state.projects.some(project => project.id === plan.projectId)) return;
+  if (!plan || !activeProjects().some(project => project.id === plan.projectId)) return;
   busy = true; lockImport(true); $('#import-error').hidden = true;
   $('#import-progress').textContent = 'Checking existing Supabase records…'; render();
   let imported = 0, failure = null;
@@ -690,6 +696,46 @@ async function saveSetup(event) {
     $('#save-setup').textContent = `Create ${mode}`;
     render();
   }
+}
+function renderProjectManagement() {
+  $('#project-list').innerHTML = state.projects.length ? state.projects.map(project => {
+    const archived = project.status === 'archived';
+    return `<li><div><strong>${escapeHTML(project.name)}</strong><small>${escapeHTML(archived ? 'Archived' : project.status === 'paused' ? 'Paused' : project.status === 'completed' ? 'Completed' : 'Active')}</small></div><button type="button" class="button secondary ${archived ? '' : 'danger'}" data-project-action="${archived ? 'restore' : 'archive'}" data-project-id="${escapeHTML(project.id)}" ${busy ? 'disabled' : ''}>${archived ? 'Restore' : 'Archive'}</button></li>`;
+  }).join('') : '<li>No projects yet. Create a project to get started.</li>';
+  for (const selector of ['#close-projects', '#done-projects']) $(selector).disabled = busy;
+}
+function openProjects() {
+  if (preview.mode || busy || phase !== 'ready' || !isAdmin()) return;
+  $('#projects-error').hidden = true;
+  renderProjectManagement(); showDialog($('#projects-dialog'));
+}
+async function changeProjectArchive(event) {
+  const button = event.target.closest('[data-project-action]');
+  if (!button || preview.mode || busy || phase !== 'ready' || !session || !isAdmin()) return;
+  const project = state.projects.find(project => project.id === button.dataset.projectId);
+  if (!project) return;
+  const action = button.dataset.projectAction;
+  if (!['archive', 'restore'].includes(action)) return;
+  if (!confirm(action === 'archive' ? `Archive “${project.name}” and its active tasks? All history will be kept.` : `Restore “${project.name}” and the tasks archived with it?`)) return;
+  const owner = session.user.id, version = generation;
+  busy = true; $('#projects-error').hidden = true; render();
+  try {
+    const { error } = await client.rpc('manage_project', { p_id: project.id, p_name: null, p_description: null, p_action: action });
+    if (error) throw error;
+    if (owner !== session?.user.id || version !== generation) return;
+    const [projects, tasks] = await Promise.all([readAll('projects', 'id,name,status'), readTaskDataset()]);
+    if (owner !== session?.user.id || version !== generation) return;
+    state.projects = projects; state.tasks = tasks.rows; activityReady = tasks.ready;
+    normalizeScope(); recentKey = ''; audit.loaded = false;
+    loadAdminHistory();
+    savePreferences();
+    toast(action === 'archive' ? 'Project archived. Tasks and history preserved.' : 'Project restored.');
+  } catch (error) {
+    if (owner === session?.user.id && version === generation) {
+      $('#projects-error').textContent = error.code === 'PGRST202' || error.code === '42883' ? 'Project archiving needs the database update. Run supabase/project-management.sql after activity-log.sql in the Supabase SQL Editor, then try again.' : errorMessage(error);
+      $('#projects-error').hidden = false;
+    }
+  } finally { busy = false; render(); }
 }
 function lockMembers() {
   const locked = busy || phase !== 'ready' || !isAdmin() || Boolean(preview.mode);
@@ -927,7 +973,7 @@ function openTask(id) {
     $('#dialog-title').textContent = preview.mode ? 'Task details · testing view' : canEdit(task) ? 'Edit task' : 'Task details · read only';
     $('#save-task').disabled = !canEdit(task);
   } else {
-    const projects = state.projects.filter(project => state.teams.some(team => canManageIn(team.id, project.id)));
+    const projects = activeProjects().filter(project => state.teams.some(team => canManageIn(team.id, project.id)));
     $('#task-project').innerHTML = options(projects.map(project => [project.id, project.name]));
     $('#task-project').value = projects.some(project => project.id === state.project) ? state.project : projects[0]?.id || '';
     populateTaskScope($('#task-project').value, state.team, state.subteam);
@@ -1182,6 +1228,9 @@ $('#setup-form').addEventListener('submit', saveSetup);
 $('#setup-name').addEventListener('input', () => $('#setup-name').setCustomValidity(''));
 $('#setup-dialog').addEventListener('close', () => $('#setup-name').setCustomValidity(''));
 for (const selector of ['#close-setup', '#cancel-setup']) $(selector).addEventListener('click', () => requestDialogClose($('#setup-dialog')));
+$('#manage-projects').addEventListener('click', openProjects);
+$('#project-list').addEventListener('click', changeProjectArchive);
+for (const selector of ['#close-projects', '#done-projects']) $(selector).addEventListener('click', () => requestDialogClose($('#projects-dialog')));
 $('#manage-members').addEventListener('click', openMembers);
 $('#refresh-members').addEventListener('click', refreshMembers);
 $('#member-select').addEventListener('change', () => { if (!busy) { $('#members-error').hidden = true; $('#members-status').textContent = ''; renderMemberGroups(); } });
