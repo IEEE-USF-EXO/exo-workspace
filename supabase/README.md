@@ -61,16 +61,35 @@ Existing tasks assigned to profile IDs continue to work. Deleted or disabled
 approvals do not grant pending access, and consumed approvals do not restore a
 removed membership.
 
+The task assignment picker has separate **Groups** and **People** sections.
+Choosing a group assigns collective responsibility to that group and clears
+both individual assignee fields. Group assignments display the group name rather
+than "Unassigned group work". Existing task groups can change in Edit task;
+`manage_task` requires management rights in both the source and destination
+groups, checks the existing revision, and records the move in task history.
+The project stays unchanged. Ordinary members can still update progress but
+cannot reassign a task or move it to another group.
+
 Exo-chairs and scoped project/team leads can select a roster person in a task's
 Assignee picker before their first sign-in. The person must already have an
 approval or membership for that group. Existing tasks can be reassigned through
 Edit task. Use **Tasks → New subgroup with people** to choose a parent group and
-multiple members, including pending people. The group and all selected members
-save in one database operation. Leads can create below groups they manage in the
-selected project and select people already in the parent scope. Chairs can select
-any approved roster person or existing profile. Groups and memberships remain
-shared across projects, matching the existing access model. This update does not
+multiple members, including pending people. **New team** also supports selecting
+members together. Group creation has no project selector and works even before
+the first project exists. The group and all selected members save in one database
+operation. Leads can create below groups covered by their active team/project
+leadership assignments and select people already in that parent scope. Chairs
+can create standalone root teams and select any approved roster person or existing
+profile. Tasks later choose a project and owning group independently; creating a
+group never writes a project/team link. The older `create_subteam_with_members`
+RPC remains compatible but ignores its former project argument. This update does not
 grant leadership roles to additional accounts.
+
+For an existing installation, run the updated `roster-task-assignment.sql` to
+install project-independent group creation; no roster reimport is needed. Deploy
+`app.js` and `index.html` together to remove the Project field and enable bulk
+selection for both teams and subteams. Rerun the updated migration to also enable
+moving existing tasks between groups from the assignment picker.
 
 Validation: `node supabase/test-roster-ui.mjs` tests UI ownership and scope logic.
 `supabase/test-roster-assignment.mjs` runs against an isolated PGlite PostgreSQL

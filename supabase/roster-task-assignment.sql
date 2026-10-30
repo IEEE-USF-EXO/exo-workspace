@@ -71,26 +71,62 @@ drop trigger if exists exo_task_assignee on public.tasks;
 create trigger exo_task_assignee before insert or update of assignee_id,assignee_person_id,team_id,project_id
   on public.tasks for each row execute function exo_private.check_task_assignee();
 
--- All selected memberships are saved with the subgroup, or all are rolled back.
-create or replace function public.create_subteam_with_members(p_name text,p_description text,p_parent uuid,
-  p_project uuid,p_users uuid[] default '{}',p_people uuid[] default '{}')
+-- Group authority follows the parent scope; creating a group never requires a project.
+create or replace function exo_private.user_has_group_scope(p_user uuid,p_team uuid)
+returns boolean language sql stable security definer set search_path='' as $$
+  with recursive ancestors(id,parent_team_id) as (
+    select id,parent_team_id from public.teams where id=p_team
+    union select t.id,t.parent_team_id from public.teams t join ancestors a on t.id=a.parent_team_id
+  )
+  select exists(select 1 from public.team_members where user_id=p_user and team_id in(select id from ancestors))
+    or exists(select 1 from public.leadership_assignments where user_id=p_user and revoked_at is null
+      and ((role='exo_chair' and team_id is null and project_id is null)
+        or (role in('team_lead','project_lead') and team_id in(select id from ancestors))));
+$$;
+create or replace function exo_private.can_manage_group(p_team uuid)
+returns boolean language sql stable security definer set search_path='' as $$
+  with recursive ancestors(id,parent_team_id) as (
+    select id,parent_team_id from public.teams where id=p_team
+    union select t.id,t.parent_team_id from public.teams t join ancestors a on t.id=a.parent_team_id
+  )
+  select exo_private.is_admin() or exists(select 1 from public.leadership_assignments
+    where user_id=auth.uid() and revoked_at is null and role in('team_lead','project_lead')
+      and team_id in(select id from ancestors));
+$$;
+create or replace function exo_private.person_has_group_scope(p_person uuid,p_team uuid)
+returns boolean language sql stable security definer set search_path='' as $$
+  with recursive ancestors(id,parent_team_id) as (
+    select id,parent_team_id from public.teams where id=p_team
+    union select t.id,t.parent_team_id from public.teams t join ancestors a on t.id=a.parent_team_id
+  )
+  select exists(select 1 from exo_private.roster_memberships r where person_id=p_person and disabled_at is null
+    and ((team_id in(select id from ancestors) and (claimed_at is null or exists(
+      select 1 from public.team_members m where m.user_id=r.claimed_by and m.team_id=r.team_id)))
+      or (claimed_by is not null and exo_private.user_has_group_scope(claimed_by,p_team))));
+$$;
+revoke all on function exo_private.user_has_group_scope(uuid,uuid),exo_private.can_manage_group(uuid),
+  exo_private.person_has_group_scope(uuid,uuid) from public,anon,authenticated;
+
+-- Save a standalone team or subgroup and all selected memberships atomically.
+create or replace function public.create_group_with_members(p_name text,p_description text,p_parent uuid default null,
+  p_users uuid[] default '{}',p_people uuid[] default '{}')
 returns setof public.teams language plpgsql security definer set search_path='' as $$
 declare new_team public.teams; person uuid; account_id uuid;
 begin
-  if auth.uid() is null or not exo_private.can_manage_in(p_parent,p_project) then
-    raise exception 'Only a scoped lead or chair can create this subgroup' using errcode='42501'; end if;
-  if not exists(select 1 from public.projects where id=p_project and status<>'archived') then
-    raise exception 'Choose an active project'; end if;
+  if auth.uid() is null or (p_parent is null and not exo_private.is_admin())
+    or (p_parent is not null and (not exo_private.can_manage_group(p_parent)
+      or not exists(select 1 from public.teams where id=p_parent))) then
+    raise exception 'Only a scoped lead or chair can create this group' using errcode='42501'; end if;
   if p_name is null or length(btrim(p_name)) not between 1 and 120
     or coalesce(cardinality(p_users),0)+coalesce(cardinality(p_people),0)>500 then
     raise exception 'Invalid group name or member selection'; end if;
   if exists(select 1 from unnest(p_users) u where u is null
     or not exists(select 1 from public.profiles where id=u)
-    or (not exo_private.is_admin() and not exo_private.user_can_access_group(u,p_parent,p_project)))
+    or (not exo_private.is_admin() and not exo_private.user_has_group_scope(u,p_parent)))
     or exists(select 1 from unnest(p_people) p where p is null
     or not exists(select 1 from public.roster_people where id=p)
     or not exists(select 1 from exo_private.roster_memberships where person_id=p and disabled_at is null)
-    or (not exo_private.is_admin() and not exo_private.person_can_access_group(p,p_parent,p_project))) then
+    or (not exo_private.is_admin() and not exo_private.person_has_group_scope(p,p_parent))) then
     raise exception 'Choose people within your parent group' using errcode='42501'; end if;
   insert into public.teams(name,description,parent_team_id)
     values(btrim(p_name),nullif(btrim(p_description),''),p_parent) returning * into new_team;
@@ -108,6 +144,14 @@ begin
   end loop;
   return next new_team;
 end $$;
+revoke all on function public.create_group_with_members(text,text,uuid,uuid[],uuid[]) from public,anon;
+grant execute on function public.create_group_with_members(text,text,uuid,uuid[],uuid[]) to authenticated,service_role;
+-- Compatibility for an already-open older frontend. The project argument is ignored.
+create or replace function public.create_subteam_with_members(p_name text,p_description text,p_parent uuid,
+  p_project uuid,p_users uuid[] default '{}',p_people uuid[] default '{}')
+returns setof public.teams language sql security invoker set search_path='' as $$
+  select * from public.create_group_with_members(p_name,p_description,p_parent,p_users,p_people);
+$$;
 revoke all on function public.create_subteam_with_members(text,text,uuid,uuid,uuid[],uuid[]) from public,anon;
 grant execute on function public.create_subteam_with_members(text,text,uuid,uuid,uuid[],uuid[]) to authenticated,service_role;
 create or replace function public.manage_task(p_task uuid,p_expected timestamptz,p_values jsonb)
@@ -121,9 +165,13 @@ begin
   if existing.archived_at is not null and p_values-array['archived']<>'{}'::jsonb then
     raise exception 'Restore this task before editing it' using errcode='42501'; end if;
   if p_values is null or jsonb_typeof(p_values)<>'object' or
-    p_values-array['title','description','status','priority','assignee_id','assignee_person_id','due_at','milestone_id','archived']<>'{}'::jsonb then
+    p_values-array['title','description','status','priority','assignee_id','assignee_person_id','team_id','due_at','milestone_id','archived']<>'{}'::jsonb then
     raise exception 'Unsupported task fields'; end if;
+  if p_values?'team_id' and ((p_values->>'team_id') is null or
+    not exo_private.can_manage_in((p_values->>'team_id')::uuid,existing.project_id)) then
+    raise exception 'You must manage the destination group to move this task' using errcode='42501'; end if;
   return query update public.tasks t set
+    team_id=case when p_values?'team_id' then (p_values->>'team_id')::uuid else t.team_id end,
     title=case when p_values?'title' then p_values->>'title' else t.title end,
     description=case when p_values?'description' then p_values->>'description' else t.description end,
     status=case when p_values?'status' then p_values->>'status' else t.status end,

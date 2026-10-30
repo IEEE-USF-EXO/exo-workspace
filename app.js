@@ -135,22 +135,36 @@ function personHasGroupAccess(personId, teamId, projectId) {
   return state.rosterGroups.some(group => group.person_id === personId && parents.includes(group.team_id)) ||
     state.rosterAccounts.some(account => account.person_id === personId && userHasGroupAccess(account.user_id, teamId, projectId));
 }
-function assignmentPeople(teamId, projectId, all = false) {
-  const roster = state.rosterPeople.filter(person => all || personHasGroupAccess(person.id, teamId, projectId))
+function userHasIndependentGroupAccess(userId, teamId) {
+  const parents = ancestors(teamId);
+  return userIsAdmin(userId) || state.memberships.some(member => member.user_id === userId && parents.includes(member.team_id)) ||
+    state.leadership.some(role => role.user_id === userId && !role.revoked_at && parents.includes(role.team_id) && ['team_lead', 'project_lead'].includes(role.role));
+}
+function personHasIndependentGroupAccess(personId, teamId) {
+  const parents = ancestors(teamId);
+  return state.rosterGroups.some(group => group.person_id === personId && parents.includes(group.team_id)) ||
+    state.rosterAccounts.some(account => account.person_id === personId && userHasIndependentGroupAccess(account.user_id, teamId));
+}
+function canManageGroup(teamId) {
+  return phase === 'ready' && !preview.mode && (isAdmin() || state.leadership.some(role => role.user_id === session?.user.id && !role.revoked_at &&
+    ancestors(teamId).includes(role.team_id) && ['team_lead', 'project_lead'].includes(role.role)));
+}
+function assignmentPeople(teamId, projectId, all = false, independent = false) {
+  const roster = state.rosterPeople.filter(person => all || (independent ? personHasIndependentGroupAccess(person.id, teamId) : personHasGroupAccess(person.id, teamId, projectId)))
     .map(person => ({ value: `person:${person.id}`, name: person.display_name,
       pending: !state.rosterAccounts.some(account => account.person_id === person.id) }));
   const profiles = state.profiles.filter(profile => !state.rosterAccounts.some(account => account.user_id === profile.id) &&
-    (all || userHasGroupAccess(profile.id, teamId, projectId)))
+    (all || (independent ? userHasIndependentGroupAccess(profile.id, teamId) : userHasGroupAccess(profile.id, teamId, projectId))))
     .map(profile => ({ value: profile.id, name: profile.display_name || 'Workspace member', pending: false }));
   return [...roster, ...profiles].sort((a, b) => a.name.localeCompare(b.name));
 }
 function assigneeValues(value) {
   const person = value.startsWith('person:') ? value.slice(7) : null;
-  return { assignee_id: person ? null : value || null, ...(rosterReady ? { assignee_person_id: person } : {}) };
+  return { assignee_id: person || value.startsWith('group:') ? null : value || null, ...(rosterReady ? { assignee_person_id: person } : {}) };
 }
-function taskAssigneeValue(task) { return task?.assignee_person_id ? `person:${task.assignee_person_id}` : task?.assignee_id || ''; }
+function taskAssigneeValue(task) { return task?.assignee_person_id ? `person:${task.assignee_person_id}` : task?.assignee_id || (task?.team_id ? `group:${task.team_id}` : ''); }
 function taskAssigneeName(task) {
-  return task.assignee_person_id ? state.rosterPeople.find(person => person.id === task.assignee_person_id)?.display_name || 'Roster member' : task.assignee_id ? userName(task.assignee_id) : 'Unassigned group work';
+  return task.assignee_person_id ? state.rosterPeople.find(person => person.id === task.assignee_person_id)?.display_name || 'Roster member' : task.assignee_id ? userName(task.assignee_id) : task.team_id ? teamPath(task.team_id) : 'Group work';
 }
 function taskAssignedTo(task, userId) {
   return Boolean(userId) && (task.assignee_id === userId || Boolean(task.assignee_person_id &&
@@ -158,10 +172,17 @@ function taskAssignedTo(task, userId) {
 }
 function fillTaskAssignees(projectId, teamId, preferred = $('#task-assignee').value) {
   const people = assignmentPeople(teamId, projectId);
-  $('#task-assignee').innerHTML = options([['', 'Unassigned group work'], ...people.map(person => [person.value, `${person.name}${person.pending ? ' · Not signed in yet' : ''}`])]);
+  const groups = state.teams.filter(team => team.id === teamId || canManageIn(team.id, projectId));
+  $('#task-assignee').innerHTML = `<optgroup label="Groups">${options(groups.map(team => [`group:${team.id}`, teamPath(team.id)]))}</optgroup><optgroup label="People in the selected group">${options(people.map(person => [person.value, `${person.name}${person.pending ? ' · Not signed in yet' : ''}`]))}</optgroup>`;
+  if (!preferred || preferred.startsWith('group:')) preferred = `group:${teamId}`;
   const existing = state.tasks.find(task => task.id === $('#task-id').value);
-  if (preferred && taskAssigneeValue(existing) === preferred && !people.some(person => person.value === preferred)) $('#task-assignee').insertAdjacentHTML('beforeend', options([[preferred, `${taskAssigneeName(existing)} · check group access`]]));
-  if (people.some(person => person.value === preferred) || taskAssigneeValue(existing) === preferred) $('#task-assignee').value = preferred || '';
+  const legacy = existing?.team_id === teamId && taskAssigneeValue(existing) === preferred;
+  if (preferred && !preferred.startsWith('group:') && legacy && !people.some(person => person.value === preferred)) $('#task-assignee').insertAdjacentHTML('beforeend', options([[preferred, `${taskAssigneeName(existing)} · check group access`]]));
+  $('#task-assignee').value = people.some(person => person.value === preferred) || preferred.startsWith('group:') || legacy ? preferred : `group:${teamId}`;
+}
+function assignmentHasAccess(value, teamId, projectId) {
+  return !value || (value.startsWith('group:') ? value.slice(6) === teamId && canManageIn(teamId, projectId) :
+    value.startsWith('person:') ? personHasGroupAccess(value.slice(7), teamId, projectId) : userHasGroupAccess(value, teamId, projectId));
 }
 function canManageIn(teamId, projectId) {
   if (!canWorkIn(teamId, projectId) || preview.mode === 'group') return false;
@@ -170,7 +191,7 @@ function canManageIn(teamId, projectId) {
 }
 const activeProjects = () => state.projects.filter(project => project.status !== 'archived');
 function canCreate() { return phase === 'ready' && activeProjects().some(project => state.teams.some(team => canManageIn(team.id, project.id))); }
-function canCreateSubteam() { return rosterReady && !preview.mode && canCreate(); }
+function canCreateSubteam() { return rosterReady && state.teams.some(team => canManageGroup(team.id)); }
 function creationBlockReason() {
   if (preview.mode) return 'Read-only testing view. Exit preview to create, edit, or delete shared records.';
   if (phase !== 'ready' || canCreate()) return '';
@@ -343,7 +364,7 @@ function renderTasks(tasks) {
   $('#task-rows').innerHTML = visible.map(task => {
     const name = taskAssigneeName(task);
     const group = groupFor(task), heading = previous === group ? '' : `<tr class="task-section"><th colspan="${showGroups ? 6 : 5}" scope="rowgroup">${group}</th></tr>`; previous = group;
-    return `${heading}<tr class="task-item ${task.status === 'done' ? 'is-done' : ''}"><td class="check-cell">${checkbox(task)}</td><td class="task-name-cell">${titleButton(task)}${!(task.assignee_id || task.assignee_person_id) ? '<small class="task-subtitle">Unassigned group work</small>' : ''}${['urgent', 'high'].includes(task.priority) ? `<small class="priority ${task.priority}">${PRIORITY[task.priority]}</small>` : ''}</td><td data-label="Status"><span class="badge ${STATUS_CLASS[task.status] || 'todo'}">${escapeHTML(STATUS[task.status] || task.status)}</span></td><td data-label="Due" class="due ${overdue(task) ? 'overdue' : ''}">${formatDate(task.due_at)}</td><td data-label="Assignee"><div class="assignee"><span class="avatar">${escapeHTML((task.assignee_id || task.assignee_person_id) ? name.split(/\s+/).map(part => part[0]).slice(0, 2).join('').toUpperCase() : '–')}</span>${escapeHTML((task.assignee_id || task.assignee_person_id) ? name : 'Group work')}</div></td><td data-label="Group" ${showGroups ? '' : 'hidden'}>${escapeHTML(teamPath(task.team_id))}</td></tr>`;
+    return `${heading}<tr class="task-item ${task.status === 'done' ? 'is-done' : ''}"><td class="check-cell">${checkbox(task)}</td><td class="task-name-cell">${titleButton(task)}${!(task.assignee_id || task.assignee_person_id) ? '<small class="task-subtitle">Group assignment</small>' : ''}${['urgent', 'high'].includes(task.priority) ? `<small class="priority ${task.priority}">${PRIORITY[task.priority]}</small>` : ''}</td><td data-label="Status"><span class="badge ${STATUS_CLASS[task.status] || 'todo'}">${escapeHTML(STATUS[task.status] || task.status)}</span></td><td data-label="Due" class="due ${overdue(task) ? 'overdue' : ''}">${formatDate(task.due_at)}</td><td data-label="Assignee"><div class="assignee"><span class="avatar">${escapeHTML((task.assignee_id || task.assignee_person_id) ? name.split(/\s+/).map(part => part[0]).slice(0, 2).join('').toUpperCase() : '–')}</span>${escapeHTML(name)}</div></td><td data-label="Group" ${showGroups ? '' : 'hidden'}>${escapeHTML(teamPath(task.team_id))}</td></tr>`;
   }).join('');
   previous = '';
   $('#task-cards').innerHTML = visible.map(task => {
@@ -694,7 +715,7 @@ async function submitImport(event) {
 }
 function renderSetupPeople(reset = false) {
   const selected = reset ? new Set() : new Set([...$('#setup-people-list').querySelectorAll('input:checked')].map(field => field.value));
-  const people = assignmentPeople($('#setup-parent').value, $('#setup-project').value, isAdmin());
+  const people = assignmentPeople(setupMode === 'subteam' ? $('#setup-parent').value : null, null, isAdmin(), true);
   $('#setup-people-list').innerHTML = people.map(person => `<label class="setup-person"><input type="checkbox" name="setup-person" value="${escapeHTML(person.value)}" ${selected.has(person.value) ? 'checked' : ''}><span>${escapeHTML(person.name)}${person.pending ? '<small>Not signed in yet</small>' : ''}</span></label>`).join('');
   filterSetupPeople();
 }
@@ -707,14 +728,14 @@ function filterSetupPeople() {
 }
 function fillSetupParents() {
   const previous = $('#setup-parent').value;
-  const teams = state.teams.filter(team => canManageIn(team.id, $('#setup-project').value));
+  const teams = state.teams.filter(team => canManageGroup(team.id));
   $('#setup-parent').innerHTML = options(teams.map(team => [team.id, teamPath(team.id)]));
   if (teams.some(team => team.id === previous)) $('#setup-parent').value = previous;
   else if (teams.some(team => team.id === state.team)) $('#setup-parent').value = state.team;
   renderSetupPeople();
 }
 function openSetup(mode) {
-  if (preview.mode || busy || phase !== 'ready' || !(mode === 'subteam' ? canCreate() : isAdmin()) || !['project', 'team', 'subteam'].includes(mode)) return;
+  if (preview.mode || busy || phase !== 'ready' || !(mode === 'subteam' ? state.teams.some(team => canManageGroup(team.id)) : isAdmin()) || !['project', 'team', 'subteam'].includes(mode)) return;
   const roots = state.teams.filter(team => !team.parent_team_id);
   if (mode === 'subteam' && !roots.length) return;
   setupMode = mode;
@@ -732,25 +753,21 @@ function openSetup(mode) {
   $('#setup-parent-field').hidden = mode !== 'subteam'; $('#setup-parent').required = mode === 'subteam';
   $('#setup-parent').innerHTML = options(roots.map(team => [team.id, team.name]));
   if (roots.some(team => team.id === state.team)) $('#setup-parent').value = state.team;
-  $('#setup-project-field').hidden = mode !== 'subteam' || !rosterReady;
-  $('#setup-project').required = mode === 'subteam' && rosterReady;
-  $('#setup-people-field').hidden = mode !== 'subteam';
-  if (mode === 'subteam') {
+  $('#setup-people-field').hidden = mode === 'project';
+  if (mode !== 'project') {
     if (!rosterReady) {
       $('#setup-people-list').replaceChildren();
       $('#setup-people-summary').textContent = 'Install the roster task assignment update to select people during subgroup creation.';
     } else {
-      const projects = activeProjects().filter(project => state.teams.some(team => canManageIn(team.id, project.id)));
-      $('#setup-project').innerHTML = options(projects.map(project => [project.id, project.name]));
-      if (projects.some(project => project.id === state.project)) $('#setup-project').value = state.project;
-      $('#setup-people-list').replaceChildren(); fillSetupParents();
-      $('#setup-description').textContent = 'Choose a parent group and everyone who belongs in the new subgroup. Save them together.';
+      $('#setup-people-list').replaceChildren();
+      if (mode === 'subteam') fillSetupParents(); else renderSetupPeople(true);
+      $('#setup-description').textContent = mode === 'subteam' ? 'Choose a parent group and its people. This subgroup exists independently of projects.' : 'Choose the people for this team. It exists independently of projects.';
     }
   }
   showDialog($('#setup-dialog')); $('#setup-name').focus();
 }
 async function saveSetup(event) {
-  event.preventDefault(); if (preview.mode || busy || phase !== 'ready' || !session || !(setupMode === 'subteam' ? canCreate() : isAdmin())) return;
+  event.preventDefault(); if (preview.mode || busy || phase !== 'ready' || !session || !(setupMode === 'subteam' ? state.teams.some(team => canManageGroup(team.id)) : isAdmin())) return;
   const name = $('#setup-name').value.trim(), description = $('#setup-notes').value.trim() || null;
   if (!name) { $('#setup-name').setCustomValidity('Enter a name.'); $('#setup-name').reportValidity(); return; }
   const owner = session.user.id, version = generation, mode = setupMode;
@@ -765,8 +782,8 @@ async function saveSetup(event) {
   $('#save-setup').textContent = 'Saving to Supabase…'; render();
   try {
     const selected = [...$('#setup-people-list').querySelectorAll('input:checked')].map(field => field.value);
-    const query = mode === 'subteam' && rosterReady ? client.rpc('create_subteam_with_members', {
-      p_name: name, p_description: description, p_parent: values.parent_team_id, p_project: $('#setup-project').value,
+    const query = mode !== 'project' && rosterReady ? client.rpc('create_group_with_members', {
+      p_name: name, p_description: description, p_parent: values.parent_team_id,
       p_users: selected.filter(value => !value.startsWith('person:')),
       p_people: selected.filter(value => value.startsWith('person:')).map(value => value.slice(7))
     }) : client.from(table).insert(values);
@@ -778,7 +795,7 @@ async function saveSetup(event) {
     else state.teams.push(data);
     savePreferences(); updateConnectedBanner(); $('#setup-dialog').close();
     toast(`${mode === 'subteam' ? 'Subteam' : mode === 'team' ? 'Team' : 'Project'} created in Supabase.`);
-    if (mode === 'subteam' && rosterReady) { busy = false; await loadWorkspace(); }
+    if (mode !== 'project' && rosterReady) { busy = false; await loadWorkspace(); }
   } catch (error) {
     if (owner === session?.user.id && version === generation) {
       $('#setup-error').textContent = error.code === '23505' ? 'This record already exists. Close this dialog and refresh to see the latest data.' : errorMessage(error);
@@ -1022,7 +1039,7 @@ async function saveAITasks() {
   if (!aiTaskPlan) { aiTaskError('Review the agent response before creating tasks.'); return; }
   const projectId = $('#task-project').value, teamId = $('#task-subteam').value, assignee = $('#task-assignee').value || null;
   if (!canManageIn(teamId, projectId)) { aiTaskError('Choose a project and group you lead.'); return; }
-  if (assignee && !(assignee.startsWith('person:') ? personHasGroupAccess(assignee.slice(7), teamId, projectId) : userHasGroupAccess(assignee, teamId, projectId))) { aiTaskError('The assignee needs access to this group first.'); return; }
+  if (!assignmentHasAccess(assignee || '', teamId, projectId)) { aiTaskError('The assignee needs access to this group first.'); return; }
   try { checkAIDuplicates(aiTaskPlan, projectId, teamId); } catch (error) { aiTaskError(error.message); return; }
   const owner = session.user.id, version = generation;
   const rows = aiTaskPlan.map(task => ({ id: task.id, title: task.title, description: task.description, priority: task.priority, status: 'todo', due_at: task.date ? new Date(`${task.date}T23:59:59`).toISOString() : null, project_id: projectId, team_id: teamId, ...assigneeValues(assignee || ''), created_by: owner }));
@@ -1064,7 +1081,9 @@ function openTask(id) {
     $('#task-project').innerHTML = options([[task.project_id, state.projects.find(project => project.id === task.project_id)?.name || 'Project']]);
     $('#task-team').innerHTML = options([[rootId(task.team_id), teamById(rootId(task.team_id))?.name || 'Team']]);
     $('#task-subteam').innerHTML = options([[task.team_id, teamPath(task.team_id)]]);
-    for (const selector of ['#task-project', '#task-team', '#task-subteam']) $(selector).disabled = true;
+    if (canEdit(task) && rosterReady) populateTaskScope(task.project_id, rootId(task.team_id), task.team_id);
+    $('#task-project').disabled = true;
+    if (!rosterReady) for (const selector of ['#task-team', '#task-subteam']) $(selector).disabled = true;
     if (!canEdit(task)) for (const field of $('#task-form').querySelectorAll('input,select,textarea')) field.disabled = true;
     $('#dialog-title').textContent = preview.mode ? 'Task details · testing view' : canEdit(task) ? 'Edit task' : 'Task details · read only';
     $('#save-task').disabled = !canEdit(task);
@@ -1162,7 +1181,9 @@ async function saveTask(event) {
   const values = { title, description: $('#task-description').value.trim(), status: $('#task-status').value, priority: $('#task-priority').value, ...assigneeValues($('#task-assignee').value),
     due_at: !date ? null : existing && dueDate(existing) === date ? existing.due_at : new Date(`${date}T23:59:59`).toISOString() };
   const teamId = $('#task-subteam').value, projectId = $('#task-project').value;
-  if (!existing && !canManageIn(teamId, projectId)) { formError(new Error('Choose a project and group you lead.')); return; }
+  if (!canManageIn(teamId, projectId)) { formError(new Error('Choose a project and group you lead.')); return; }
+  if (!assignmentHasAccess($('#task-assignee').value, teamId, projectId)) { formError(new Error('Choose a group or a person with access to the selected group.')); return; }
+  if (existing && existing.team_id !== teamId) values.team_id = teamId;
   const owner = session.user.id, version = generation;
   busy = true; lockForm(true); render();
   try {
@@ -1314,6 +1335,13 @@ $('#task-ai-response').addEventListener('input', invalidateAITasks);
 $('#task-project').addEventListener('change', () => populateTaskScope($('#task-project').value));
 $('#task-team').addEventListener('change', () => populateTaskScope($('#task-project').value, $('#task-team').value));
 $('#task-subteam').addEventListener('change', () => fillTaskAssignees($('#task-project').value, $('#task-subteam').value));
+$('#task-assignee').addEventListener('change', () => {
+  const value = $('#task-assignee').value;
+  if (!value.startsWith('group:')) return;
+  const groupId = value.slice(6);
+  populateTaskScope($('#task-project').value, rootId(groupId), groupId);
+  if ($('#task-creation-mode').value === 'ai') { $('#task-ai-prompt').value = taskAIPrompt(); invalidateAITasks(); }
+});
 for (const selector of ['#task-project', '#task-team', '#task-subteam']) $(selector).addEventListener('change', () => { if ($('#task-creation-mode').value === 'ai') { $('#task-ai-prompt').value = taskAIPrompt(); invalidateAITasks(); } });
 for (const selector of ['#task-search', '#status-filter', '#priority-filter']) $(selector).addEventListener(selector === '#task-search' ? 'input' : 'change', () => renderTasks(scopedTasks()));
 document.addEventListener('click', event => { const button = event.target.closest('[data-edit]'); if (button) openTask(button.dataset.edit); });
@@ -1321,7 +1349,6 @@ document.addEventListener('change', toggleTask);
 $('#task-form').addEventListener('submit', saveTask);
 for (const [selector, mode] of [['#new-project', 'project'], ['#new-team', 'team'], ['#new-subteam', 'subteam']]) $(selector).addEventListener('click', () => openSetup(mode));
 $('#new-task-subteam').addEventListener('click', () => openSetup('subteam'));
-$('#setup-project').addEventListener('change', fillSetupParents);
 $('#setup-parent').addEventListener('change', () => renderSetupPeople());
 $('#setup-people-search').addEventListener('input', filterSetupPeople);
 $('#setup-people-list').addEventListener('change', filterSetupPeople);

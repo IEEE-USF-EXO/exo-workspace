@@ -22,6 +22,16 @@ for (const path of ['schema.sql', 'supabase/roster-memberships.sql', 'supabase/r
 const id = n => `00000000-0000-4000-8000-${String(n).padStart(12, '0')}`;
 const [chair, lead, member, alternate, outsider, late] = [1,2,3,4,5,6].map(id);
 const [project, otherProject, parent, otherParent, person] = [10,11,12,13,14].map(id);
+// Teams and member selection must work before the workspace has any projects.
+await db.query("insert into auth.users(id,email,email_confirmed_at) values($1,'owner@example.com',now())",[id(900)]);
+await db.query("insert into public.leadership_assignments(user_id,role) values($1,'exo_chair')",[id(900)]);
+await as(id(900));
+assert.equal((await db.query('select * from public.projects')).rows.length,0);
+const standalone = (await db.query("select id from public.create_group_with_members('Independent team','',null,array[$1::uuid],'{}')",[id(900)])).rows[0].id;
+assert.equal((await db.query('select parent_team_id from public.teams where id=$1',[standalone])).rows[0].parent_team_id,null);
+assert.equal((await db.query('select * from public.team_members where team_id=$1',[standalone])).rows.length,1);
+await db.exec('reset role');
+await db.query("select set_config('request.jwt.claim.sub','',false)");
 await db.exec(`
   insert into auth.users(id,email,email_confirmed_at) values
     ('${chair}','chair@example.com',now()),('${lead}','lead@example.com',now()),('${outsider}','outsider@example.com',now());
@@ -49,11 +59,27 @@ const group = (await db.query(`select id from public.create_subteam_with_members
 await db.query(`insert into public.tasks(id,title,project_id,team_id,assignee_person_id)
   values($1,'Subgroup before signup',$2,$3,$4)`,[id(21),project,group,person]);
 await rejected(`select * from public.create_subteam_with_members('Not allowed','',$1,$2,'{}',array[$3::uuid])`,[otherParent,project,person]);
-await rejected(`select * from public.create_subteam_with_members('Wrong project','',$1,$2,'{}','{}')`,[parent,otherProject]);
+// The old RPC remains compatible, but its former project selector has no effect.
+assert.equal((await db.query(`select * from public.create_subteam_with_members('Project-independent subgroup','',$1,$2,'{}','{}')`,[parent,otherProject])).rows.length,1);
+await rejected("select * from public.create_group_with_members('Lead cannot create root','',null,'{}','{}')");
 await rejected(`select * from public.create_subteam_with_members('Outside person','',$1,$2,array[$3::uuid],'{}')`,[parent,project,outsider]);
 await rejected(`insert into public.tasks(title,project_id,team_id,assignee_person_id) values('Wrong group',$1,$2,$3)`,[project,otherParent,person]);
 const created = (await db.query('select updated_at from public.tasks where id=$1',[id(20)])).rows[0];
 await db.query('select * from public.manage_task($1,$2,$3)',[id(20),created.updated_at,{title:'Assigned before signup',assignee_id:null,assignee_person_id:person}]);
+// Reassign an existing task to a group while checking BOTH source and destination.
+let revision = (await db.query('select updated_at from public.tasks where id=$1',[id(20)])).rows[0].updated_at;
+await rejected('select * from public.manage_task($1,$2,$3)',[id(20),revision,{team_id:otherParent,assignee_id:null,assignee_person_id:null}]);
+await rejected('select * from public.manage_task($1,$2,$3)',[id(20),revision,{project_id:otherProject}]);
+let moved = (await db.query('select * from public.manage_task($1,$2,$3)',[id(20),revision,{team_id:group,assignee_id:null,assignee_person_id:null}])).rows[0];
+assert.equal(moved.team_id,group);
+assert.equal(moved.assignee_id,null);
+assert.equal(moved.assignee_person_id,null);
+assert.equal(moved.project_id,project);
+assert.ok((await db.query("select * from public.task_activity where task_id=$1 and changes?'team_id'",[id(20)])).rows.length>0);
+await as(outsider);
+await rejected('select * from public.manage_task($1,$2,$3)',[id(20),moved.updated_at,{team_id:otherParent}]);
+await as(lead);
+await db.query('select * from public.manage_task($1,$2,$3)',[id(20),moved.updated_at,{team_id:parent,assignee_id:null,assignee_person_id:person}]);
 
 // Signup triggers must grant both existing and newly selected subgroup approvals.
 await db.exec('reset role');
@@ -76,6 +102,9 @@ for (const [user,email] of [[member,'future@example.com'],[alternate,'alias@exam
 
 // A failed selection must leave no empty group behind.
 await as(chair);
+await db.query(`insert into public.tasks(title,project_id,team_id,assignee_id)
+  values('Assign later from a project',$1,$2,$3)`,[project,standalone,id(900)]);
+assert.equal((await db.query('select * from public.project_teams where team_id=$1',[standalone])).rows.length,0);
 await rejected(`select * from public.create_subteam_with_members('Atomic failure','',$1,$2,array[$3::uuid],'{}')`,[parent,project,id(999)]);
 assert.equal((await db.query("select id from public.teams where name='Atomic failure'")).rows.length,0);
 // Chair can select an existing account from outside the parent group.
