@@ -99,16 +99,18 @@ function errorMessage(error) {
 }
 // Follow ancestors using IDs, including arbitrarily nested teams without name collisions.
 function ancestors(id) { const result = [], seen = new Set(); while (id && !seen.has(id)) { result.push(id); seen.add(id); id = teamById(id)?.parent_team_id; } return result; }
+function teamIsArchived(id) { return ancestors(id).some(parent => Boolean(teamById(parent)?.archived_at)); }
+function activeTeams() { return state.teams.filter(team => !teamIsArchived(team.id)); }
 function rootId(id) { return ancestors(id).at(-1) || id; }
 function teamPath(id) { return ancestors(id).reverse().map(id => teamById(id)?.name || 'Unknown team').join(' / '); }
 function descendantOf(id, parent) { return ancestors(id).includes(parent); }
 function rootsForProject(projectId) {
   if (!viewIsMember()) return [];
-  const ids = new Set(state.teams.filter(team => canWorkIn(team.id, projectId)).map(team => rootId(team.id)));
+  const ids = new Set(state.teams.filter(team => (activeTab === 'tasks' && $('#archive-filter').value === 'archived' || !teamIsArchived(team.id)) && canWorkIn(team.id, projectId)).map(team => rootId(team.id)));
   return state.teams.filter(team => ids.has(team.id));
 }
 function subteamsForScope() {
-  return state.teams.filter(team => team.id !== state.team && descendantOf(team.id, state.team) && canWorkIn(team.id, state.project));
+  return state.teams.filter(team => (activeTab === 'tasks' && $('#archive-filter').value === 'archived' || !teamIsArchived(team.id)) && team.id !== state.team && descendantOf(team.id, state.team) && canWorkIn(team.id, state.project));
 }
 function isAdmin() { return state.leadership.some(role => role.user_id === session?.user.id && role.role === 'exo_chair' && !role.revoked_at && !role.team_id && !role.project_id); }
 function viewUserId() { return preview.mode === 'member' ? preview.subject : preview.mode === 'group' ? null : session?.user.id; }
@@ -147,7 +149,7 @@ function personHasIndependentGroupAccess(personId, teamId) {
     state.rosterAccounts.some(account => account.person_id === personId && userHasIndependentGroupAccess(account.user_id, teamId));
 }
 function canManageGroup(teamId) {
-  return phase === 'ready' && !preview.mode && (isAdmin() || state.leadership.some(role => role.user_id === session?.user.id && !role.revoked_at &&
+  return phase === 'ready' && !preview.mode && !teamIsArchived(teamId) && (isAdmin() || state.leadership.some(role => role.user_id === session?.user.id && !role.revoked_at &&
     ancestors(teamId).includes(role.team_id) && ['team_lead', 'project_lead'].includes(role.role)));
 }
 function assignmentPeople(teamId, projectId, all = false, independent = false) {
@@ -186,7 +188,7 @@ function assignmentHasAccess(value, teamId, projectId) {
     value.startsWith('person:') ? personHasGroupAccess(value.slice(7), teamId, projectId) : userHasGroupAccess(value, teamId, projectId));
 }
 function canManageIn(teamId, projectId) {
-  if (!canWorkIn(teamId, projectId) || preview.mode === 'group') return false;
+  if (!canWorkIn(teamId, projectId) || teamIsArchived(teamId) || preview.mode === 'group') return false;
   const parents = ancestors(teamId), id = viewUserId();
   return viewIsAdmin() || state.leadership.some(role => role.user_id === id && !role.revoked_at && parents.includes(role.team_id) && ((role.role === 'team_lead' && !role.project_id) || (role.role === 'project_lead' && role.project_id === projectId)));
 }
@@ -198,17 +200,17 @@ function creationBlockReason() {
   if (phase !== 'ready' || canCreate()) return '';
   const prefix = isAdmin() ? 'Your EXO chair role is active. ' : '';
   if (!activeProjects().length) return `${prefix}${isAdmin() ? 'Open Administration to create your first project.' : 'Ask your EXO chair to create a project before adding tasks.'}`;
-  if (!state.teams.length) return `${prefix}${isAdmin() ? 'Open Administration to create a team and enable task creation.' : 'Ask your EXO chair to create a team.'}`;
+  if (!activeTeams().length) return `${prefix}${isAdmin() ? 'Open Administration to create a team and enable task creation.' : 'Ask your EXO chair to create a team.'}`;
   return viewIsMember() ? '' : 'An administrator needs to add you to a group.';
 }
 function canEdit(task) { return !busy && !preview.mode && !task.archived_at && canManageIn(task.team_id, task.project_id); }
-function canProgress(task) { return !busy && !preview.mode && !task.archived_at && task.status !== 'cancelled' && canWorkIn(task.team_id, task.project_id); }
+function canProgress(task) { return !busy && !preview.mode && !task.archived_at && !teamIsArchived(task.team_id) && task.status !== 'cancelled' && canWorkIn(task.team_id, task.project_id); }
 function scopedTasks() {
   if (!viewIsMember()) return [];
   const lens = $('#task-lens').value;
-  return state.tasks.filter(task => canWorkIn(task.team_id, task.project_id) && task.project_id === state.project && (activeTab === 'tasks' && $('#archive-filter').value === 'archived' ? Boolean(task.archived_at) : !task.archived_at) && (state.team === 'all' || descendantOf(task.team_id, state.team)) && (state.subteam === 'all' || descendantOf(task.team_id, state.subteam)) && (lens !== 'assigned' || (viewUserId() && taskAssignedTo(task, viewUserId()))));
+  return state.tasks.filter(task => canWorkIn(task.team_id, task.project_id) && task.project_id === state.project && (activeTab === 'tasks' && $('#archive-filter').value === 'archived' ? Boolean(task.archived_at) || teamIsArchived(task.team_id) : !task.archived_at && !teamIsArchived(task.team_id)) && (state.team === 'all' || descendantOf(task.team_id, state.team)) && (state.subteam === 'all' || descendantOf(task.team_id, state.subteam)) && (lens !== 'assigned' || (viewUserId() && taskAssignedTo(task, viewUserId()))));
 }
-function clearData() { for (const key of ['tasks', 'teams', 'projects', 'profiles', 'memberships', 'leadership', 'activity', 'rosterPeople', 'rosterAccounts', 'rosterGroups']) state[key] = []; activityReady = false; rosterReady = false; recentKey = ''; ++recentRequest; ++auditRequest; Object.assign(audit, { rows: [], loading: false, more: false, loaded: false, error: '' }); state.project = ''; state.team = 'all'; state.subteam = 'all'; for (const selector of ['#task-dialog', '#setup-dialog', '#members-dialog', '#projects-dialog']) if ($(selector).open) $(selector).close(); if (!session && $('#import-dialog').open) $('#import-dialog').close(); }
+function clearData() { for (const key of ['tasks', 'teams', 'projects', 'profiles', 'memberships', 'leadership', 'activity', 'rosterPeople', 'rosterAccounts', 'rosterGroups']) state[key] = []; activityReady = false; rosterReady = false; recentKey = ''; ++recentRequest; ++auditRequest; Object.assign(audit, { rows: [], loading: false, more: false, loaded: false, error: '' }); state.project = ''; state.team = 'all'; state.subteam = 'all'; for (const selector of ['#task-dialog', '#setup-dialog', '#members-dialog', '#projects-dialog', '#teams-dialog']) if ($(selector).open) $(selector).close(); if (!session && $('#import-dialog').open) $('#import-dialog').close(); }
 function normalizeScope() {
   if (!activeProjects().some(project => project.id === state.project)) state.project = activeProjects()[0]?.id || '';
   const roots = rootsForProject(state.project);
@@ -396,14 +398,14 @@ function render() {
     try { const saved = localStorage.getItem(`exo-task-layout:${taskLayoutUser}`); if (['list', 'table'].includes(saved)) taskLayoutChoice = saved; } catch { /* The default layout remains usable. */ }
   }
   if (taskLensUser !== session?.user.id) { taskLensChosen = false; taskLensUser = session?.user.id || ''; }
-  const groupTasks = state.tasks.filter(task => !task.archived_at && task.project_id === state.project && canWorkIn(task.team_id, task.project_id) && (state.team === 'all' || descendantOf(task.team_id, state.team)) && (state.subteam === 'all' || descendantOf(task.team_id, state.subteam)));
+  const groupTasks = state.tasks.filter(task => !task.archived_at && !teamIsArchived(task.team_id) && task.project_id === state.project && canWorkIn(task.team_id, task.project_id) && (state.team === 'all' || descendantOf(task.team_id, state.team)) && (state.subteam === 'all' || descendantOf(task.team_id, state.subteam)));
   const personalTasks = groupTasks.some(task => taskAssignedTo(task, viewUserId()));
   if (phase === 'ready' && preview.mode !== 'group' && !taskLensChosen) $('#task-lens').value = viewIsAdmin() ? 'all' : personalTasks ? 'assigned' : 'team';
   $('#task-scope-note').hidden = !viewIsMember() || viewIsAdmin() || preview.mode === 'group' || taskLensChosen || personalTasks || !groupTasks.length;
   $('#task-scope-note').textContent = 'No individual assignments here. Showing your group’s work.';
   for (const button of document.querySelectorAll('[data-task-scope]')) { button.setAttribute('aria-pressed', String(button.dataset.taskScope === 'assigned' ? $('#task-lens').value === 'assigned' : $('#task-lens').value !== 'assigned')); button.disabled = !viewIsMember() || (preview.mode === 'group' && button.dataset.taskScope === 'assigned'); }
   $('#group-tasks-button').textContent = viewIsAdmin() ? 'All groups' : 'My group';
-  const managesTasks = state.teams.some(team => canManageIn(team.id, state.project));
+  const managesTasks = viewIsAdmin() || state.teams.some(team => canManageIn(team.id, state.project) || teamIsArchived(team.id) && canWorkIn(team.id, state.project));
   $('#archive-filter').hidden = !managesTasks || !activityReady;
   if (!managesTasks || !activityReady) $('#archive-filter').value = 'active';
   const team = teamById(state.team), subteam = teamById(state.subteam), tasks = scopedTasks();
@@ -442,10 +444,13 @@ function render() {
   for (const selector of ['#new-task', '#add-task-row']) $(selector).title = creationHint;
   $('#admin-actions').hidden = !chair;
   for (const selector of ['#new-project', '#new-team']) $(selector).disabled = busy || Boolean(preview.mode) || !chair;
-  $('#new-subteam').disabled = busy || Boolean(preview.mode) || !chair || !state.teams.some(team => !team.parent_team_id);
-  $('#new-subteam').title = state.teams.some(team => !team.parent_team_id) ? '' : 'Create a parent team first.';
   $('#new-task-subteam').hidden = !canCreateSubteam();
   $('#new-task-subteam').disabled = busy;
+  $('#manage-teams').disabled = busy || Boolean(preview.mode) || !chair;
+  if ($('#teams-dialog').open) {
+    if (phase !== 'ready' || !isAdmin() || preview.mode) $('#teams-dialog').close();
+    else renderTeamManagement();
+  }
   $('#manage-projects').disabled = busy || Boolean(preview.mode) || !chair;
   if ($('#projects-dialog').open) {
     if (phase !== 'ready' || !isAdmin() || preview.mode) $('#projects-dialog').close();
@@ -543,6 +548,13 @@ async function readTaskDataset() {
     }
   }
 }
+async function readTeams() {
+  try { return await readAll('teams', 'id,name,parent_team_id,archived_at'); }
+  catch (error) {
+    if (!['PGRST204', '42703'].includes(error.code)) throw error;
+    return readAll('teams', 'id,name,parent_team_id');
+  }
+}
 async function readRosterData() {
   try {
     const [rosterPeople, rosterAccounts, rosterGroups] = await Promise.all([
@@ -564,7 +576,7 @@ async function loadWorkspace() {
   phase = 'loading'; setBanner('Loading shared workspace', 'Reading projects, teams, members, and tasks from Supabase…'); render();
   try {
     const [teams, projects, profiles, memberships, leadership, tasks, roster] = await Promise.all([
-      readAll('teams', 'id,name,parent_team_id'), readAll('projects', 'id,name,status'),
+      readTeams(), readAll('projects', 'id,name,status'),
       readAll('profiles', 'id,display_name'),
       readAll('team_members', 'team_id,user_id', 'team_id,user_id'),
       readAll('leadership_assignments', 'id,user_id,role,team_id,project_id,revoked_at'), readTaskDataset(), readRosterData()
@@ -663,7 +675,7 @@ async function executeImport() {
   function assertSession() { if (owner !== session?.user.id || version !== generation) throw new Error('The signed-in account changed. Import stopped.'); }
   try {
     // Refresh before writing so manually added records and other imports are reused.
-    const [teams, tasks] = await Promise.all([readAll('teams', 'id,name,parent_team_id'), readAll('tasks', 'id')]);
+    const [teams, tasks] = await Promise.all([readTeams(), readAll('tasks', 'id')]);
     assertSession();
     const pending = plan.entries.filter(entry => !tasks.some(task => task.id === entry.id));
     // INSERT ... ON CONFLICT DO NOTHING makes retries safe across tabs/devices.
@@ -729,43 +741,45 @@ function filterSetupPeople() {
   const selected = $('#setup-people-list').querySelectorAll('input:checked').length;
   $('#setup-people-summary').textContent = `${selected} selected · ${total} people available${total ? '' : ' in this parent group'}`;
 }
-function fillSetupParents() {
-  const previous = $('#setup-parent').value;
+function updateSetupType() {
+  if (setupMode === 'project') return;
+  setupMode = $('#setup-parent').value ? 'subteam' : 'team';
+  const label = setupMode === 'subteam' ? 'Sub-Team' : 'Team';
+  $('#setup-title').textContent = `New ${label}`;
+  $('#save-setup').textContent = `Create ${label}`;
+  $('#setup-description').textContent = setupMode === 'subteam'
+    ? 'Create a Sub-Team within the selected parent team. It exists independently of projects.'
+    : 'Create a workspace Team, or choose a parent team to make it a Sub-Team. It exists independently of projects.';
+  if (rosterReady) renderSetupPeople();
+}
+function fillSetupParents(selectParent = false) {
   const teams = state.teams.filter(team => canManageGroup(team.id));
-  $('#setup-parent').innerHTML = options(teams.map(team => [team.id, teamPath(team.id)]));
-  if (teams.some(team => team.id === previous)) $('#setup-parent').value = previous;
-  else if (teams.some(team => team.id === state.team)) $('#setup-parent').value = state.team;
-  renderSetupPeople();
+  $('#setup-parent').innerHTML = (isAdmin() ? options([['', 'No parent (Team)']]) : '') + options(teams.map(team => [team.id, teamPath(team.id)]));
+  if (selectParent && teams.some(team => team.id === state.team)) $('#setup-parent').value = state.team;
+  else if (selectParent && teams.length) $('#setup-parent').value = teams[0].id;
+  updateSetupType();
 }
 function openSetup(mode) {
   if (preview.mode || busy || phase !== 'ready' || !(mode === 'subteam' ? state.teams.some(team => canManageGroup(team.id)) : isAdmin()) || !['project', 'team', 'subteam'].includes(mode)) return;
-  const roots = state.teams.filter(team => !team.parent_team_id);
-  if (mode === 'subteam' && !roots.length) return;
   setupMode = mode;
   $('#setup-form').reset(); $('#setup-error').hidden = true;
   for (const field of $('#setup-form').querySelectorAll('input,select,textarea,button')) field.disabled = false;
-  const labels = { project: 'New project', team: 'New team', subteam: 'New subteam' };
-  $('#setup-title').textContent = labels[mode];
-  $('#save-setup').textContent = `Create ${mode}`;
-  $('#setup-description').textContent = {
-    project: 'Create a project shared across the workspace. Assign its tasks to any team or subteam.',
-    team: 'Create a workspace team. It can receive tasks from any project.',
-    subteam: 'Create a group within a parent team. It can receive tasks from any project.'
-  }[mode];
+  $('#setup-title').textContent = 'New project';
+  $('#save-setup').textContent = 'Create project';
+  $('#setup-description').textContent = 'Create a project shared across the workspace. Assign its tasks to any team or subteam.';
   $('#setup-name').maxLength = mode === 'project' ? 160 : 120;
-  $('#setup-parent-field').hidden = mode !== 'subteam'; $('#setup-parent').required = mode === 'subteam';
-  $('#setup-parent').innerHTML = options(roots.map(team => [team.id, team.name]));
-  if (roots.some(team => team.id === state.team)) $('#setup-parent').value = state.team;
+  $('#setup-parent-field').hidden = mode === 'project';
+  $('#setup-parent').required = mode !== 'project' && !isAdmin();
+  $('#setup-parent-optional').hidden = !isAdmin();
+  $('#setup-parent-help').textContent = isAdmin()
+    ? 'Choose a parent to create a Sub-Team, or leave it empty to create a Team.'
+    : 'Choose the parent team for this Sub-Team.';
+  $('#setup-parent').replaceChildren();
   $('#setup-people-field').hidden = mode === 'project';
+  $('#setup-people-list').replaceChildren();
   if (mode !== 'project') {
-    if (!rosterReady) {
-      $('#setup-people-list').replaceChildren();
-      $('#setup-people-summary').textContent = 'Install the roster task assignment update to select people during subgroup creation.';
-    } else {
-      $('#setup-people-list').replaceChildren();
-      if (mode === 'subteam') fillSetupParents(); else renderSetupPeople(true);
-      $('#setup-description').textContent = mode === 'subteam' ? 'Choose a parent group and its people. This subgroup exists independently of projects.' : 'Choose the people for this team. It exists independently of projects.';
-    }
+    fillSetupParents(mode === 'subteam');
+    if (!rosterReady) $('#setup-people-summary').textContent = 'Install the roster task assignment update to select people during group creation.';
   }
   showDialog($('#setup-dialog')); $('#setup-name').focus();
 }
@@ -778,7 +792,7 @@ async function saveSetup(event) {
   if (mode === 'project') { table = 'projects'; values = { name, description, status: 'active', created_by: owner }; fields = 'id,name,status'; }
   else {
     table = 'teams'; values = { name, description, parent_team_id: mode === 'subteam' ? $('#setup-parent').value : null }; fields = 'id,name,parent_team_id';
-    if (mode === 'subteam' && !state.teams.some(team => team.id === values.parent_team_id)) return;
+    if (mode === 'subteam' && !state.teams.some(team => team.id === values.parent_team_id && canManageGroup(team.id))) return;
   }
   busy = true; $('#setup-error').hidden = true;
   for (const field of $('#setup-form').querySelectorAll('input,select,textarea,button')) field.disabled = true;
@@ -797,7 +811,7 @@ async function saveSetup(event) {
     if (mode === 'project') { state.projects.push(data); state.project = data.id; state.team = 'all'; state.subteam = 'all'; }
     else state.teams.push(data);
     savePreferences(); updateConnectedBanner(); $('#setup-dialog').close();
-    toast(`${mode === 'subteam' ? 'Subteam' : mode === 'team' ? 'Team' : 'Project'} created in Supabase.`);
+    toast(`${mode === 'subteam' ? 'Sub-Team' : mode === 'team' ? 'Team' : 'Project'} created in Supabase.`);
     if (mode !== 'project' && rosterReady) { busy = false; await loadWorkspace(); }
   } catch (error) {
     if (owner === session?.user.id && version === generation) {
@@ -807,7 +821,7 @@ async function saveSetup(event) {
   } finally {
     busy = false;
     for (const field of $('#setup-form').querySelectorAll('input,select,textarea,button')) field.disabled = false;
-    $('#save-setup').textContent = `Create ${mode}`;
+    $('#save-setup').textContent = `Create ${mode === 'subteam' ? 'Sub-Team' : mode === 'team' ? 'Team' : 'project'}`;
     render();
   }
 }
@@ -848,6 +862,54 @@ async function changeProjectArchive(event) {
     if (owner === session?.user.id && version === generation) {
       $('#projects-error').textContent = error.code === 'PGRST202' || error.code === '42883' ? 'Project archiving needs the database update. Run supabase/project-management.sql after activity-log.sql in the Supabase SQL Editor, then try again.' : errorMessage(error);
       $('#projects-error').hidden = false;
+    }
+  } finally { busy = false; render(); }
+}
+function renderTeamManagement() {
+  const teams = [...state.teams].sort((a, b) => teamPath(a.id).localeCompare(teamPath(b.id)));
+  $('#team-list').innerHTML = teams.length ? teams.map(team => {
+    const archived = Boolean(team.archived_at);
+    const parentArchived = team.parent_team_id && teamIsArchived(team.parent_team_id);
+    const status = parentArchived ? 'Archived with parent team' : archived ? 'Archived' : 'Active';
+    return `<li><div><strong>${escapeHTML(teamPath(team.id))}</strong><small>${team.parent_team_id ? 'Sub-Team' : 'Team'} &middot; ${status}${parentArchived && archived ? ' (also archived separately)' : ''}</small></div><button type="button" class="button secondary ${archived ? '' : 'danger'}" data-team-action="${archived ? 'restore' : 'archive'}" data-team-id="${escapeHTML(team.id)}" aria-label="${archived ? 'Restore' : 'Archive'} ${escapeHTML(teamPath(team.id))}" ${busy || parentArchived ? 'disabled' : ''} ${parentArchived ? 'title="Restore the parent team first"' : ''}>${archived ? 'Restore' : 'Archive'}</button></li>`;
+  }).join('') : '<li>No teams yet. Create a team to get started.</li>';
+  for (const selector of ['#close-teams', '#done-teams']) $(selector).disabled = busy;
+}
+function openTeams() {
+  if (preview.mode || busy || phase !== 'ready' || !isAdmin()) return;
+  $('#teams-error').hidden = true;
+  renderTeamManagement(); showDialog($('#teams-dialog'));
+}
+async function changeTeamArchive(event) {
+  const button = event.target.closest('[data-team-action]');
+  if (!button || preview.mode || busy || phase !== 'ready' || !session || !isAdmin()) return;
+  const team = teamById(button.dataset.teamId), action = button.dataset.teamAction;
+  if (!team || !['archive', 'restore'].includes(action) || team.parent_team_id && teamIsArchived(team.parent_team_id)) return;
+  if (!confirm(action === 'archive'
+    ? `Archive "${teamPath(team.id)}" and hide its subteams and tasks from active work? Tasks, memberships, and history will be kept.`
+    : `Restore "${teamPath(team.id)}"? Separately archived subteams and tasks will stay archived.`)) return;
+  const owner = session.user.id, version = generation;
+  busy = true; $('#teams-error').hidden = true; render();
+  let saved = false;
+  try {
+    const { data, error } = await client.rpc('manage_team', { p_id: team.id, p_action: action });
+    if (error) throw error;
+    if (owner !== session?.user.id || version !== generation) return;
+    saved = true;
+    // Apply the returned record before refreshing so a failed read cannot leave it active locally.
+    Object.assign(team, data);
+    const teams = await readTeams();
+    if (owner !== session?.user.id || version !== generation) return;
+    state.teams = teams;
+    normalizeScope(); recentKey = ''; audit.loaded = false;
+    savePreferences(); loadAdminHistory();
+    toast(action === 'archive' ? 'Team archived. Tasks, memberships, and history preserved.' : 'Team restored.');
+  } catch (error) {
+    if (owner === session?.user.id && version === generation) {
+      $('#teams-error').textContent = error.code === 'PGRST202' || error.code === '42883'
+        ? 'Team archiving needs the database update. Run supabase/team-management.sql in the Supabase SQL Editor, then try again.'
+        : `${saved ? 'The team was updated, but the latest teams could not be reloaded. Refresh the workspace. ' : ''}${errorMessage(error)}`;
+      $('#teams-error').hidden = false;
     }
   } finally { busy = false; render(); }
 }
@@ -901,7 +963,7 @@ function renderMemberGroups() {
   const userId = $('#member-select').value;
   const groups = state.memberships.filter(member => member.user_id === userId);
   const roles = state.leadership.filter(role => role.user_id === userId && !role.revoked_at);
-  const available = state.teams.filter(team => !groups.some(member => member.team_id === team.id));
+  const available = activeTeams().filter(team => !groups.some(member => member.team_id === team.id));
   const previousTeam = $('#member-team').value;
   $('#member-groups').innerHTML = groups.map(member => `<li><span>${escapeHTML(teamPath(member.team_id))}<small>${state.teams.some(team => team.parent_team_id === member.team_id) ? 'Includes descendant subteams' : 'Direct membership'}</small></span><button type="button" class="button danger" data-remove-membership="${escapeHTML(member.team_id)}" aria-label="Remove ${escapeHTML(userName(userId))} from ${escapeHTML(teamPath(member.team_id))}">Remove</button></li>`).join('');
   $('#member-summary').textContent = !userId ? (state.profiles.length ? 'Select a person to view their groups.' : 'No profiles found. Members appear after their first Google sign-in; use Refresh people afterward.') : `${groups.length} direct group${groups.length === 1 ? '' : 's'}${roles.length ? ` · Active roles: ${[...new Set(roles.map(role => role.role.replaceAll('_', ' ')))].join(', ')}` : groups.length ? '' : ' · Membership needed for workspace access'}`;
@@ -918,7 +980,7 @@ function fillMemberPeople() {
 }
 async function readMemberData(owner, version) {
   const [profiles, teams, memberships, leadership, roster] = await Promise.all([
-    readAll('profiles', 'id,display_name'), readAll('teams', 'id,name,parent_team_id'),
+    readAll('profiles', 'id,display_name'), readTeams(),
     readAll('team_members', 'team_id,user_id', 'team_id,user_id'),
     readAll('leadership_assignments', 'id,user_id,role,team_id,project_id,revoked_at'), readRosterData()
   ]);
@@ -1159,6 +1221,7 @@ function openTask(id) {
     $('#delete-task').textContent = task.archived_at ? 'Restore task' : 'Archive task';
     $('#delete-task').disabled = !activityReady;
     $('#delete-task').title = activityReady ? '' : 'The activity database update is needed first.';
+    if (teamIsArchived(task.team_id)) $('#task-detail-meta').insertAdjacentHTML('beforeend', '<span class="badge cancelled">Team archived</span>');
     if (task.archived_at) $('#task-detail-meta').insertAdjacentHTML('beforeend', '<span class="badge cancelled">Archived</span>');
   }
   showDialog($('#task-dialog'));
@@ -1389,15 +1452,18 @@ for (const selector of ['#task-search', '#status-filter', '#priority-filter']) $
 document.addEventListener('click', event => { const button = event.target.closest('[data-edit]'); if (button) openTask(button.dataset.edit); });
 document.addEventListener('change', toggleTask);
 $('#task-form').addEventListener('submit', saveTask);
-for (const [selector, mode] of [['#new-project', 'project'], ['#new-team', 'team'], ['#new-subteam', 'subteam']]) $(selector).addEventListener('click', () => openSetup(mode));
+for (const [selector, mode] of [['#new-project', 'project'], ['#new-team', 'team']]) $(selector).addEventListener('click', () => openSetup(mode));
 $('#new-task-subteam').addEventListener('click', () => openSetup('subteam'));
-$('#setup-parent').addEventListener('change', () => renderSetupPeople());
+$('#setup-parent').addEventListener('change', updateSetupType);
 $('#setup-people-search').addEventListener('input', filterSetupPeople);
 $('#setup-people-list').addEventListener('change', filterSetupPeople);
 $('#setup-form').addEventListener('submit', saveSetup);
 $('#setup-name').addEventListener('input', () => $('#setup-name').setCustomValidity(''));
 $('#setup-dialog').addEventListener('close', () => $('#setup-name').setCustomValidity(''));
 for (const selector of ['#close-setup', '#cancel-setup']) $(selector).addEventListener('click', () => requestDialogClose($('#setup-dialog')));
+$('#manage-teams').addEventListener('click', openTeams);
+$('#team-list').addEventListener('click', changeTeamArchive);
+for (const selector of ['#close-teams', '#done-teams']) $(selector).addEventListener('click', () => requestDialogClose($('#teams-dialog')));
 $('#manage-projects').addEventListener('click', openProjects);
 $('#project-list').addEventListener('click', changeProjectArchive);
 for (const selector of ['#close-projects', '#done-projects']) $(selector).addEventListener('click', () => requestDialogClose($('#projects-dialog')));

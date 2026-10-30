@@ -1,0 +1,76 @@
+import fs from 'node:fs/promises';
+import assert from 'node:assert/strict';
+const { PGlite } = await import(process.env.EXO_PGLITE_MODULE || '@electric-sql/pglite');
+const db = new PGlite();
+const sql = path => fs.readFile(new URL('../' + path, import.meta.url), 'utf8');
+await db.exec(`
+  create role anon; create role authenticated; create role service_role bypassrls;
+  create schema auth;
+  create table auth.users(id uuid primary key, email text, raw_user_meta_data jsonb default '{}');
+  create function auth.uid() returns uuid language sql stable as
+    $$ select nullif(current_setting('request.jwt.claim.sub',true),'')::uuid $$;
+  grant usage on schema auth to authenticated,service_role;
+  grant execute on function auth.uid() to authenticated,service_role;
+`);
+await db.exec(await sql('schema.sql'));
+const id = async (query, args = []) => (await db.query(query, args)).rows[0].id;
+const chair = await id("insert into auth.users(id,email) values(gen_random_uuid(),'chair@example.test') returning id");
+const member = await id("insert into auth.users(id,email) values(gen_random_uuid(),'member@example.test') returning id");
+await db.query("insert into public.leadership_assignments(user_id,role) values($1,'exo_chair')", [chair]);
+const root = await id("insert into public.teams(name) values('Parent') returning id");
+const child = await id("insert into public.teams(name,parent_team_id) values('Child',$1) returning id", [root]);
+const separate = await id("insert into public.teams(name,parent_team_id) values('Separate archive',$1) returning id", [root]);
+const project = await id("insert into public.projects(name,created_by) values('Project',$1) returning id", [chair]);
+await db.query('insert into public.team_members(team_id,user_id) values($1,$2)', [root, member]);
+await db.query("select set_config('request.jwt.claim.sub',$1,false)", [chair]);
+const task = await id("insert into public.tasks(title,project_id,team_id) values('Active',$1,$2) returning id", [project, child]);
+const archived = await id("insert into public.tasks(title,project_id,team_id,archived_at) values('Already archived',$1,$2,now()) returning id", [project, child]);
+async function as(user) {
+  await db.exec('reset role');
+  await db.query("select set_config('request.jwt.claim.sub',$1,false)", [user]);
+  await db.exec('set role authenticated');
+}
+const manage = (team, action) => db.query('select public.manage_team($1,$2)', [team, action]);
+const isArchived = async team => {
+  await db.exec('reset role');
+  const result = (await db.query('select exo_private.team_is_archived($1) as archived', [team])).rows[0].archived;
+  await as(chair);
+  return result;
+};
+const taskFlags = async () => (await db.query('select id,archived_at,archived_by from public.tasks order by id')).rows;
+await as(member);
+await assert.rejects(manage(root, 'archive'), /chair access/);
+await as(chair);
+const before = await taskFlags();
+await manage(separate, 'archive');
+await manage(root, 'archive');
+assert.equal(await isArchived(child), true);
+assert.deepEqual(await taskFlags(), before);
+assert.equal((await db.query('select * from public.team_members where team_id=$1', [root])).rows.length, 1);
+await assert.rejects(manage(child, 'restore'), /parent team/);
+await assert.rejects(db.query("insert into public.tasks(title,project_id,team_id) values('Blocked',$1,$2)", [project, child]), /Restore the team/);
+await assert.rejects(db.query("update public.tasks set status='done' where id=$1", [task]), /Restore the team/);
+await assert.rejects(db.query("select * from public.manage_task($1,(select updated_at from public.tasks where id=$1),$2)", [archived, { archived: false }]), /Restore the team/);
+await assert.rejects(db.query("insert into public.teams(name,parent_team_id) values('Blocked',$1)", [child]), /Restore the parent/);
+// Project archive/restore must work while the team is archived, in either order.
+await db.query("select public.manage_project($1,null,null,'archive')", [project]);
+await db.query("select public.manage_project($1,null,null,'restore')", [project]);
+assert.deepEqual(await taskFlags(), before);
+await db.query("select public.manage_project($1,null,null,'archive')", [project]);
+await manage(root, 'restore');
+assert.equal(await isArchived(child), false);
+assert.equal(await isArchived(separate), true);
+assert.ok((await db.query('select archived_at from public.tasks where id=$1', [task])).rows[0].archived_at);
+await db.query("select public.manage_project($1,null,null,'restore')", [project]);
+assert.deepEqual(await taskFlags(), before);
+await db.query("update public.tasks set status='done' where id=$1", [task]);
+await assert.rejects(manage(root, 'unknown'), /Unknown team action/);
+assert.equal((await db.query('delete from public.teams where id=$1 returning id', [separate])).rows.length, 0);
+await db.exec('reset role');
+await db.exec(await sql('supabase/team-management.sql'));
+await db.exec(await sql('supabase/team-management.sql'));
+await as(chair);
+assert.equal(await isArchived(separate), true);
+assert.deepEqual(await taskFlags(), before);
+await db.close();
+console.log('Team archive database checks passed: permissions, hierarchy, task preservation, project overlap, write guards, and migration reruns.');

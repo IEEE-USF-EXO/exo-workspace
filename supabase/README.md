@@ -192,3 +192,14 @@ Restoring returns the project to its previous status and restores only tasks
 archived with the project; tasks archived individually stay archived. Task
 progress, assignments, descriptions and history are preserved. Database checks
 reject new or changed tasks in archived projects until the project is restored.
+
+## Team archiving
+
+Run `team-management.sql` after `activity-log.sql` (and `project-management.sql`
+when installed), then refresh Workbench. Fresh installations include this in
+`schema.sql`. Administration > Manage teams provides Archive and Restore.
+Archiving a parent hides its descendants from active work without rewriting
+subteam archive flags. Restoring it leaves independently archived subteams hidden.
+Tasks, task archive flags, memberships, roster approvals, and history remain intact.
+Tasks in archived teams appear in the task archive view and cannot be edited until
+the team is restored. Project archive/restore continues to work independently.
