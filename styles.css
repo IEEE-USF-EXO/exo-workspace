@@ -5,6 +5,10 @@
 .setup-people-list .setup-person[hidden] { display: none; }
 .setup-people-list input[type=checkbox] { width: 18px; height: 18px; flex: 0 0 18px; margin: 0; }
 .setup-person small { display: block; font-weight: normal; color: #65736a; }
+#member-list-dialog { width: min(720px, calc(100% - 28px)); }
+#member-list-dialog th, #member-list-dialog td { text-align: left; vertical-align: top; white-space: normal; }
+#member-list-dialog th:first-child { width: 35%; }
+.member-list-note { display: block; color: var(--muted); margin-top: 4px; font-weight: normal; }
 :root {
   --bg: #f4f5f4;
   --paper: #fff;

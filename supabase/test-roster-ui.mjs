@@ -47,6 +47,14 @@ assert.equal(run("assignmentPeople('leaf',null,false,true).some(person=>person.n
 assert.equal(run("JSON.stringify(assigneeValues('person:future'))"),JSON.stringify({assignee_id:null,assignee_person_id:'future'}));
 assert.equal(run("JSON.stringify(assigneeValues('lead'))"),JSON.stringify({assignee_id:'lead',assignee_person_id:null}));
 assert.equal(run("JSON.stringify(assigneeValues(''))"),JSON.stringify({assignee_id:null,assignee_person_id:null}));
+assert.equal(run('memberListRows().length'),3);
+assert.equal(run("JSON.stringify(memberListRows().find(row=>row.name==='One person').groups)"),JSON.stringify(['Engineering']));
+assert.equal(run("memberListRows().find(row=>row.name==='Future person').pending"),true);
+assert.equal(run("memberListRows().find(row=>row.name==='Lead').groups.length"),0);
+run('renderMemberList()');
+assert.ok(fields.get('#member-list-rows').innerHTML.includes('Not signed in yet'));
+assert.ok(fields.get('#member-list-rows').innerHTML.includes('No groups assigned'));
+assert.ok(!fields.get('#member-list-rows').innerHTML.includes('<button'));
 run("preview.mode='member'; preview.subject='a'");
 assert.equal(run('canCreateSubteam()'),false);
 console.log('UI model checks passed: deduplication, pending labels, alias ownership, scope, assignment switching, and read-only preview.');

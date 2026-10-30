@@ -13,6 +13,7 @@ let rosterReady = false;
 let activityReady = false, recentKey = '', recentRequest = 0, recentLoading = false, recentError = '';
 let recentExpanded = false, recentScope = '';
 let auditRequest = 0;
+let memberListRequest = 0;
 const audit = { rows: [], loading: false, more: false, loaded: false, error: '' };
 let taskHistoryRequest = 0;
 const taskHistory = { taskId: '', rows: [], more: false, loading: false };
@@ -451,6 +452,8 @@ function render() {
     else renderProjectManagement();
   }
   $('#manage-members').disabled = busy || Boolean(preview.mode) || !chair;
+  $('#member-list').disabled = busy || Boolean(preview.mode) || !chair;
+  if ($('#member-list-dialog').open && (phase !== 'ready' || !isAdmin() || preview.mode)) $('#member-list-dialog').close();
   if ($('#members-dialog').open) {
     if (phase !== 'ready' || !isAdmin() || preview.mode) $('#members-dialog').close();
     else lockMembers();
@@ -847,6 +850,45 @@ async function changeProjectArchive(event) {
       $('#projects-error').hidden = false;
     }
   } finally { busy = false; render(); }
+}
+function memberListRows() {
+  const linked = new Set(state.rosterAccounts.map(account => account.user_id));
+  const rows = state.rosterPeople.map(person => {
+    const accounts = state.rosterAccounts.filter(account => account.person_id === person.id).map(account => account.user_id);
+    const groups = new Set([
+      ...state.rosterGroups.filter(group => group.person_id === person.id).map(group => group.team_id),
+      ...state.memberships.filter(member => accounts.includes(member.user_id)).map(member => member.team_id)
+    ]);
+    return { name: person.display_name, pending: accounts.length === 0, groups: [...groups].map(teamPath).sort((a, b) => a.localeCompare(b)) };
+  });
+  for (const profile of state.profiles.filter(profile => !linked.has(profile.id))) {
+    rows.push({ name: profile.display_name || 'Workspace member', pending: false,
+      groups: [...new Set(state.memberships.filter(member => member.user_id === profile.id).map(member => member.team_id))].map(teamPath).sort((a, b) => a.localeCompare(b)) });
+  }
+  return rows.sort((a, b) => a.name.localeCompare(b.name));
+}
+function renderMemberList() {
+  const rows = memberListRows();
+  $('#member-list-rows').innerHTML = rows.length ? rows.map(row => `<tr><td>${escapeHTML(row.name)}${row.pending ? '<small class="member-list-note">Not signed in yet</small>' : ''}</td><td>${row.groups.length ? row.groups.map(escapeHTML).join('<br>') : '<span class="muted">No groups assigned</span>'}</td></tr>`).join('') : '<tr><td colspan="2">No members found.</td></tr>';
+  $('#member-list-status').textContent = `${rows.length} ${rows.length === 1 ? 'person' : 'people'}`;
+}
+async function openMemberList() {
+  if (busy || preview.mode || phase !== 'ready' || !isAdmin()) return;
+  const owner = session.user.id, version = generation, request = ++memberListRequest;
+  $('#member-list-error').hidden = true;
+  $('#member-list-status').textContent = 'Loading members and groups…';
+  $('#member-list-rows').replaceChildren();
+  showDialog($('#member-list-dialog'));
+  try {
+    if (!await readMemberData(owner, version) || request !== memberListRequest || !$('#member-list-dialog').open) return;
+    if (!isAdmin() || preview.mode) { render(); return; }
+    renderMemberList();
+  } catch (error) {
+    if (owner !== session?.user.id || version !== generation || request !== memberListRequest || !$('#member-list-dialog').open) return;
+    $('#member-list-status').textContent = '';
+    $('#member-list-error').textContent = errorMessage(error);
+    $('#member-list-error').hidden = false;
+  }
 }
 function lockMembers() {
   const locked = busy || phase !== 'ready' || !isAdmin() || Boolean(preview.mode);
@@ -1365,6 +1407,9 @@ $('#member-select').addEventListener('change', () => { if (!busy) { $('#members-
 $('#members-form').addEventListener('submit', event => { event.preventDefault(); changeMembership($('#member-team').value); });
 $('#member-groups').addEventListener('click', event => { const button = event.target.closest('[data-remove-membership]'); if (button) changeMembership(button.dataset.removeMembership, true); });
 for (const selector of ['#close-members', '#done-members']) $(selector).addEventListener('click', () => requestDialogClose($('#members-dialog')));
+$('#member-list').addEventListener('click', openMemberList);
+for (const selector of ['#close-member-list', '#done-member-list']) $(selector).addEventListener('click', () => requestDialogClose($('#member-list-dialog')));
+$('#member-list-dialog').addEventListener('close', () => { ++memberListRequest; });
 $('#import-github').addEventListener('click', openImport);
 $('#import-form').addEventListener('submit', submitImport);
 for (const selector of ['#import-project', '#import-closed']) $(selector).addEventListener('change', resetImportPlan);

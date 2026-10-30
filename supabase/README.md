@@ -101,6 +101,13 @@ to production. The Python roster extraction tests remain in `test_prepare_roster
 
 ## Activity history, permissions and archiving
 
+Administration → Member access → **Member list** opens a read-only table of
+people and their direct groups or pending roster assignments. Linked Google
+accounts appear once per roster person; inherited subgroups are not expanded.
+People with no group are listed explicitly. The table refreshes on opening and
+has no membership-editing actions. Use **Manage members** to make changes.
+This frontend addition does not require a database migration.
+
 Keep email-filled seed scripts and roster exports outside the repository and
 website directory. Only the generic roster migration belongs in Git. Ignore
 rules help prevent accidental commits but do not protect a file already tracked
