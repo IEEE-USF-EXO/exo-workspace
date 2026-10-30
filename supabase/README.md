@@ -44,6 +44,42 @@ and the uniquely matched subteam from the Teams tab. Ambiguous mappings are
 excluded for review. No chair or lead roles are inferred from the workbook.
 Reruns preserve existing memberships, consumed approvals, and disabled approvals.
 
+## Assign before sign-in and create subgroups with people
+
+Run the newly generated private `install-roster.sql` to upgrade an existing roster.
+It includes `roster-task-assignment.sql` and the workbook's person/alias mappings.
+Running only the generic migration adds the feature but does not populate people's
+names; run the private import too. Both scripts require the activity/history
+extension. Publish the updated `app.js`, `index.html`, and `styles.css` together.
+
+`roster_people` stores one member-visible name and stable ID per roster person.
+Private email approvals reference that person. The `roster_accounts` and
+`roster_groups` views expose account IDs and current group scopes without emails.
+Tasks may use `assignee_person_id` instead of `assignee_id`. The stable person
+assignment remains after signup; both verified aliases match **Assigned to me**.
+Existing tasks assigned to profile IDs continue to work. Deleted or disabled
+approvals do not grant pending access, and consumed approvals do not restore a
+removed membership.
+
+Exo-chairs and scoped project/team leads can select a roster person in a task's
+Assignee picker before their first sign-in. The person must already have an
+approval or membership for that group. Existing tasks can be reassigned through
+Edit task. Use **Tasks → New subgroup with people** to choose a parent group and
+multiple members, including pending people. The group and all selected members
+save in one database operation. Leads can create below groups they manage in the
+selected project and select people already in the parent scope. Chairs can select
+any approved roster person or existing profile. Groups and memberships remain
+shared across projects, matching the existing access model. This update does not
+grant leadership roles to additional accounts.
+
+Validation: `node supabase/test-roster-ui.mjs` tests UI ownership and scope logic.
+`supabase/test-roster-assignment.mjs` runs against an isolated PGlite PostgreSQL
+instance (provide the module using `EXO_PGLITE_MODULE`). It verifies pre-signup
+assignment, Google aliases, lead permissions, subgroup atomicity, revocation,
+email verification, privacy, and migration reruns. Optionally set
+`EXO_PRIVATE_ROSTER_SQL` to validate a private generated import without connecting
+to production. The Python roster extraction tests remain in `test_prepare_roster.py`.
+
 ## Activity history, permissions and archiving
 
 Keep email-filled seed scripts and roster exports outside the repository and

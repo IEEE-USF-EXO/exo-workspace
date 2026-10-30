@@ -7,6 +7,7 @@ import csv
 import json
 import re
 import sys
+import uuid
 from pathlib import Path
 
 import openpyxl
@@ -57,14 +58,37 @@ def prepare(workbook):
             targets = matches if local else targets + matches
             if not local:
                 review.append(dict(item, reason='Resolved cross-team subteam from Teams tab; both memberships included'))
-        # Used only to describe aliases in the private report, never for login.
+        # Group workbook aliases into one roster person. Login matching remains
+        # exclusively by verified email, never by this name/GitHub key.
         person = key(github) or key(name)
         people.setdefault(person, {'name': name, 'emails': set()})['emails'].add(email)
         for parent, child in targets:
             memberships.setdefault((email, parent, child), dict(
                 email=email, team=parent, subteam=child, source_row=row_number))
-    return list(memberships.values()), review, [dict(name=p['name'], emails=sorted(p['emails']))
-                                              for p in people.values()]
+    return list(memberships.values()), review, [dict(name=p['name'], key=k, emails=sorted(p['emails']))
+                                              for k, p in people.items()]
+
+
+def people_sql(people):
+    """Link explicit workbook aliases to stable people; never match auth by name."""
+    statements = ['do $people$\ndeclare existing_ids uuid[]; target uuid;\nbegin']
+    for person in people:
+        person_id = str(uuid.uuid5(uuid.NAMESPACE_URL, 'exo-workbench-roster:' + person['key']))
+        emails = ','.join(quote(email) for email in person['emails'])
+        statements.append(f"""
+  select array_agg(distinct person_id) into existing_ids from exo_private.roster_memberships
+    where email in ({emails}) and person_id is not null;
+  if coalesce(cardinality(existing_ids),0)>1 then
+    raise exception 'Conflicting existing person mappings. Review aliases before merging.';
+  end if;
+  target := coalesce(existing_ids[1], {quote(person_id)}::uuid);
+  insert into public.roster_people(id,display_name) values(target,{quote(person['name'])})
+    on conflict(id) do nothing;
+  update exo_private.roster_memberships set person_id=target where email in ({emails})
+    and person_id is null;
+""")
+    statements.append('end;\n$people$;\n')
+    return '\n'.join(statements)
 
 
 def seed_sql(records):
@@ -160,8 +184,11 @@ def main():
     migration = Path(__file__).with_name('roster-memberships.sql').read_text(encoding='utf-8')
     # Install triggers and seed in one transaction so signups cannot fall between.
     migration = migration.replace('begin;', '', 1).replace('commit;', '', 1)
+    assignment_migration = Path(__file__).with_name('roster-task-assignment.sql').read_text(encoding='utf-8')
+    assignment_migration = assignment_migration.replace('begin;', '', 1).rsplit('commit;', 1)[0]
     seed = seed_sql(records)
-    combined = seed.replace('begin;', 'begin;\n' + migration, 1)
+    combined = seed.replace('begin;', 'begin;\n' + migration + '\n' + assignment_migration, 1)
+    combined = combined.rsplit('commit;', 1)[0] + people_sql(people) + 'commit;\n'
     output.mkdir(parents=True, exist_ok=True)
     (output / 'install-roster.sql').write_text(combined, encoding='utf-8')
     report = dict(source=str(source), people=len(people), email_accounts=len({r['email'] for r in records}),

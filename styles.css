@@ -1,3 +1,10 @@
+.group-create-action { display: flex; justify-content: flex-end; margin-bottom: 12px; }
+#setup-people-field { margin: 16px 0; padding: 14px; border: 1px solid #d8ded9; border-radius: 10px; }
+.setup-people-list { max-height: 260px; overflow-y: auto; margin: 10px 0; }
+.setup-people-list .setup-person { display: flex; gap: 12px; align-items: center; padding: 9px 4px; cursor: pointer; }
+.setup-people-list .setup-person[hidden] { display: none; }
+.setup-people-list input[type=checkbox] { width: 18px; height: 18px; flex: 0 0 18px; margin: 0; }
+.setup-person small { display: block; font-weight: normal; color: #65736a; }
 :root {
   --bg: #f4f5f4;
   --paper: #fff;

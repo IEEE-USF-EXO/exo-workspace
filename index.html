@@ -61,6 +61,7 @@
 
       </section>
       <section id="tasks-view" role="tabpanel" aria-labelledby="tab-tasks" hidden>
+        <div class="group-create-action"><button type="button" class="button secondary" id="new-task-subteam" hidden>＋ New subgroup with people</button></div>
         <div class="task-toolbar"><div class="search-wrap"><span aria-hidden="true">⌕</span><input type="search" id="task-search" placeholder="Search tasks…" aria-label="Search tasks"></div><div class="filters"><div class="task-scope-buttons" role="group" aria-label="Task scope"><button type="button" data-task-scope="assigned" aria-pressed="false">Assigned to me</button><button type="button" data-task-scope="team" aria-pressed="true" id="group-tasks-button">My group</button></div><select id="task-lens" aria-label="Task scope" hidden><option value="all">All workspace tasks</option><option value="team">Teams I can work in</option><option value="assigned">Assigned to me</option></select><select id="status-filter" aria-label="Filter by status"><option value="all">All statuses</option><option>To do</option><option>In progress</option><option>Done</option></select><select id="archive-filter" aria-label="Active or archived tasks" hidden><option value="active">Active tasks</option><option value="archived">Archived tasks</option></select><select id="priority-filter" aria-label="Filter by priority"><option value="all">All priorities</option><option>High</option><option>Medium</option><option>Low</option></select></div></div>
         <p id="task-scope-note" class="task-scope-note" role="status" hidden></p><div class="task-panel"><div class="task-list-heading"><h2><span id="task-list-title">Group tasks</span> <span id="list-count"></span></h2><div class="task-view-actions"><div class="task-scope-buttons" role="group" aria-label="Task presentation"><button type="button" data-task-layout="list" aria-pressed="false">List</button><button type="button" data-task-layout="table" aria-pressed="false">Table</button></div><button type="button" class="text-button" id="show-closed" aria-expanded="false">Completed</button></div></div><div id="task-cards" class="task-cards" hidden></div><div class="table-scroll" id="task-table-view"><table><thead><tr><th class="check-cell"><span aria-label="Completion">✓</span></th><th>Task name</th><th>Status</th><th>Due date</th><th>Assignee</th><th id="task-group-heading">Group</th></tr></thead><tbody id="task-rows"></tbody></table></div><div id="task-empty" class="empty-state" hidden><span>☑</span><h3>No tasks here yet</h3><p id="empty-description"></p><button type="button" class="button secondary" id="empty-group-tasks" hidden>View group tasks</button></div><button id="add-task-row" class="add-task-row">＋ Add a task</button></div>
       </section>
@@ -118,11 +119,20 @@
     <div class="dialog-footer"><button type="button" class="button secondary" id="refresh-members">Refresh people</button><div><button type="button" class="button secondary" id="done-members">Done</button><button type="submit" class="button primary" id="add-member">Add to group</button></div></div>
   </form></dialog>
   <dialog id="setup-dialog" aria-labelledby="setup-title"><form id="setup-form">
-    <div class="dialog-heading"><div><div class="eyebrow">EXO CHAIR · WORKSPACE SETUP</div><h2 id="setup-title">New project</h2></div><button type="button" class="icon-button" id="close-setup" aria-label="Close setup">×</button></div>
+    <div class="dialog-heading"><div><div class="eyebrow">WORKSPACE SETUP</div><h2 id="setup-title">New project</h2></div><button type="button" class="icon-button" id="close-setup" aria-label="Close setup">×</button></div>
     <p id="setup-description" class="setup-description"></p>
     <p id="setup-error" class="form-error" role="alert" hidden></p>
     <div id="setup-name-field"><label for="setup-name">Name</label><input id="setup-name" maxlength="120" required placeholder="Give it a name"><label for="setup-notes">Description <span class="muted">(optional)</span></label><textarea id="setup-notes" rows="3" maxlength="2000" placeholder="What will this group or project work on?"></textarea></div>
-    <div id="setup-parent-field" hidden><label for="setup-parent">Parent team</label><select id="setup-parent"></select></div>
+    <div class="form-grid">
+      <div id="setup-project-field" hidden><label for="setup-project">Project</label><select id="setup-project"></select></div>
+      <div id="setup-parent-field" hidden><label for="setup-parent">Parent team</label><select id="setup-parent"></select></div>
+    </div>
+    <fieldset id="setup-people-field" hidden><legend>People in this subgroup</legend>
+      <label for="setup-people-search">Find people</label><input id="setup-people-search" type="search" placeholder="Search by name">
+      <p id="setup-people-summary" class="setup-description" aria-live="polite"></p>
+      <div id="setup-people-list" class="setup-people-list"></div>
+      <p class="setup-description">Selected people join together. People who have not signed in receive access when they connect with an approved Google account.</p>
+    </fieldset>
     <div class="dialog-footer"><div><button type="button" class="button secondary" id="cancel-setup">Cancel</button><button type="submit" class="button primary" id="save-setup">Create project</button></div></div>
   </form></dialog>
   <dialog id="signin-dialog" class="signin-card" aria-labelledby="signin-title" aria-describedby="signin-description">

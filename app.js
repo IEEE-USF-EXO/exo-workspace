@@ -8,14 +8,15 @@ const STATUS_CLASS = { todo: 'todo', in_progress: 'progress', blocked: 'blocked'
 const CORE_TASK_FIELDS = 'id,project_id,team_id,milestone_id,title,description,status,priority,assignee_id,due_at,completed_at,created_by,created_at,updated_at';
 const TASK_FIELDS = `${CORE_TASK_FIELDS},archived_at,archived_by`;
 const ACTIVITY_FIELDS = 'id,task_id,actor_id,actor_name,task_title,project_id,team_id,action,changes,created_at';
-const state = { tasks: [], teams: [], projects: [], profiles: [], memberships: [], leadership: [], activity: [], project: '', team: 'all', subteam: 'all' };
+const state = { tasks: [], teams: [], projects: [], profiles: [], memberships: [], leadership: [], activity: [], rosterPeople: [], rosterAccounts: [], rosterGroups: [], project: '', team: 'all', subteam: 'all' };
+let rosterReady = false;
 let activityReady = false, recentKey = '', recentRequest = 0, recentLoading = false, recentError = '';
 let recentExpanded = false, recentScope = '';
 let auditRequest = 0;
 const audit = { rows: [], loading: false, more: false, loaded: false, error: '' };
 let taskHistoryRequest = 0;
 const taskHistory = { taskId: '', rows: [], more: false, loading: false };
-const taskFields = () => activityReady ? TASK_FIELDS : CORE_TASK_FIELDS;
+const taskFields = () => `${activityReady ? TASK_FIELDS : CORE_TASK_FIELDS}${rosterReady ? ',assignee_person_id' : ''}`;
 const TABS = ['overview', 'tasks', 'administration'];
 let client, session = null, phase = 'connecting', busy = false, generation = 0, authReady = false, activeTab = TABS.includes(location.hash.slice(1)) ? location.hash.slice(1) : 'overview';
 let pendingAuthError = '';
@@ -129,12 +130,38 @@ function userHasGroupAccess(userId, teamId, projectId) {
   const parents = ancestors(teamId);
   return userIsAdmin(userId) || state.memberships.some(member => member.user_id === userId && parents.includes(member.team_id)) || state.leadership.some(role => role.user_id === userId && !role.revoked_at && parents.includes(role.team_id) && ((role.role === 'team_lead' && !role.project_id) || (role.role === 'project_lead' && role.project_id === projectId)));
 }
+function personHasGroupAccess(personId, teamId, projectId) {
+  const parents = ancestors(teamId);
+  return state.rosterGroups.some(group => group.person_id === personId && parents.includes(group.team_id)) ||
+    state.rosterAccounts.some(account => account.person_id === personId && userHasGroupAccess(account.user_id, teamId, projectId));
+}
+function assignmentPeople(teamId, projectId, all = false) {
+  const roster = state.rosterPeople.filter(person => all || personHasGroupAccess(person.id, teamId, projectId))
+    .map(person => ({ value: `person:${person.id}`, name: person.display_name,
+      pending: !state.rosterAccounts.some(account => account.person_id === person.id) }));
+  const profiles = state.profiles.filter(profile => !state.rosterAccounts.some(account => account.user_id === profile.id) &&
+    (all || userHasGroupAccess(profile.id, teamId, projectId)))
+    .map(profile => ({ value: profile.id, name: profile.display_name || 'Workspace member', pending: false }));
+  return [...roster, ...profiles].sort((a, b) => a.name.localeCompare(b.name));
+}
+function assigneeValues(value) {
+  const person = value.startsWith('person:') ? value.slice(7) : null;
+  return { assignee_id: person ? null : value || null, ...(rosterReady ? { assignee_person_id: person } : {}) };
+}
+function taskAssigneeValue(task) { return task?.assignee_person_id ? `person:${task.assignee_person_id}` : task?.assignee_id || ''; }
+function taskAssigneeName(task) {
+  return task.assignee_person_id ? state.rosterPeople.find(person => person.id === task.assignee_person_id)?.display_name || 'Roster member' : task.assignee_id ? userName(task.assignee_id) : 'Unassigned group work';
+}
+function taskAssignedTo(task, userId) {
+  return Boolean(userId) && (task.assignee_id === userId || Boolean(task.assignee_person_id &&
+    state.rosterAccounts.some(account => account.person_id === task.assignee_person_id && account.user_id === userId)));
+}
 function fillTaskAssignees(projectId, teamId, preferred = $('#task-assignee').value) {
-  const people = state.profiles.filter(profile => userHasGroupAccess(profile.id, teamId, projectId));
-  $('#task-assignee').innerHTML = options([['', 'Unassigned group work'], ...people.map(profile => [profile.id, profile.display_name || 'Workspace member'])]);
+  const people = assignmentPeople(teamId, projectId);
+  $('#task-assignee').innerHTML = options([['', 'Unassigned group work'], ...people.map(person => [person.value, `${person.name}${person.pending ? ' · Not signed in yet' : ''}`])]);
   const existing = state.tasks.find(task => task.id === $('#task-id').value);
-  if (existing?.assignee_id === preferred && !people.some(profile => profile.id === preferred)) $('#task-assignee').insertAdjacentHTML('beforeend', options([[preferred, `${userName(preferred)} · check group access`]]));
-  if (people.some(profile => profile.id === preferred) || existing?.assignee_id === preferred) $('#task-assignee').value = preferred || '';
+  if (preferred && taskAssigneeValue(existing) === preferred && !people.some(person => person.value === preferred)) $('#task-assignee').insertAdjacentHTML('beforeend', options([[preferred, `${taskAssigneeName(existing)} · check group access`]]));
+  if (people.some(person => person.value === preferred) || taskAssigneeValue(existing) === preferred) $('#task-assignee').value = preferred || '';
 }
 function canManageIn(teamId, projectId) {
   if (!canWorkIn(teamId, projectId) || preview.mode === 'group') return false;
@@ -143,6 +170,7 @@ function canManageIn(teamId, projectId) {
 }
 const activeProjects = () => state.projects.filter(project => project.status !== 'archived');
 function canCreate() { return phase === 'ready' && activeProjects().some(project => state.teams.some(team => canManageIn(team.id, project.id))); }
+function canCreateSubteam() { return rosterReady && !preview.mode && canCreate(); }
 function creationBlockReason() {
   if (preview.mode) return 'Read-only testing view. Exit preview to create, edit, or delete shared records.';
   if (phase !== 'ready' || canCreate()) return '';
@@ -156,9 +184,9 @@ function canProgress(task) { return !busy && !preview.mode && !task.archived_at 
 function scopedTasks() {
   if (!viewIsMember()) return [];
   const lens = $('#task-lens').value;
-  return state.tasks.filter(task => canWorkIn(task.team_id, task.project_id) && task.project_id === state.project && (activeTab === 'tasks' && $('#archive-filter').value === 'archived' ? Boolean(task.archived_at) : !task.archived_at) && (state.team === 'all' || descendantOf(task.team_id, state.team)) && (state.subteam === 'all' || descendantOf(task.team_id, state.subteam)) && (lens !== 'assigned' || (viewUserId() && task.assignee_id === viewUserId())));
+  return state.tasks.filter(task => canWorkIn(task.team_id, task.project_id) && task.project_id === state.project && (activeTab === 'tasks' && $('#archive-filter').value === 'archived' ? Boolean(task.archived_at) : !task.archived_at) && (state.team === 'all' || descendantOf(task.team_id, state.team)) && (state.subteam === 'all' || descendantOf(task.team_id, state.subteam)) && (lens !== 'assigned' || (viewUserId() && taskAssignedTo(task, viewUserId()))));
 }
-function clearData() { for (const key of ['tasks', 'teams', 'projects', 'profiles', 'memberships', 'leadership', 'activity']) state[key] = []; activityReady = false; recentKey = ''; ++recentRequest; ++auditRequest; Object.assign(audit, { rows: [], loading: false, more: false, loaded: false, error: '' }); state.project = ''; state.team = 'all'; state.subteam = 'all'; for (const selector of ['#task-dialog', '#setup-dialog', '#members-dialog', '#projects-dialog']) if ($(selector).open) $(selector).close(); if (!session && $('#import-dialog').open) $('#import-dialog').close(); }
+function clearData() { for (const key of ['tasks', 'teams', 'projects', 'profiles', 'memberships', 'leadership', 'activity', 'rosterPeople', 'rosterAccounts', 'rosterGroups']) state[key] = []; activityReady = false; rosterReady = false; recentKey = ''; ++recentRequest; ++auditRequest; Object.assign(audit, { rows: [], loading: false, more: false, loaded: false, error: '' }); state.project = ''; state.team = 'all'; state.subteam = 'all'; for (const selector of ['#task-dialog', '#setup-dialog', '#members-dialog', '#projects-dialog']) if ($(selector).open) $(selector).close(); if (!session && $('#import-dialog').open) $('#import-dialog').close(); }
 function normalizeScope() {
   if (!activeProjects().some(project => project.id === state.project)) state.project = activeProjects()[0]?.id || '';
   const roots = rootsForProject(state.project);
@@ -199,7 +227,7 @@ function activityVerb(event) {
     if (status?.from === 'done') return 'reopened';
     if (status?.to === 'blocked') return 'marked blocked';
     if (status?.to === 'review') return 'submitted for review';
-    if (event.changes?.assignee_id) return 'reassigned';
+    if (event.changes?.assignee_id || event.changes?.assignee_person_id) return 'reassigned';
   }
   if (event.entity_type === 'team_members') return event.action === 'deleted' ? 'removed membership for' : 'added membership for';
   return { created: 'created', updated: 'updated', deleted: 'deleted', archived: 'archived', restored: 'restored' }[event.action] || event.action;
@@ -208,6 +236,7 @@ function historyValue(field, value) {
   if (value == null || value === '') return 'None';
   if (field === 'status') return STATUS[value] || value;
   if (field === 'priority') return PRIORITY[value] || value;
+  if (field === 'assignee_person_id') return state.rosterPeople.find(person => person.id === value)?.display_name || 'Roster member';
   if (['assignee_id', 'created_by', 'user_id', 'assigned_by', 'added_by', 'author_id'].includes(field)) return userName(value);
   if (field === 'team_id') return teamById(value) ? teamPath(value) : String(value);
   if (field === 'project_id') return state.projects.find(project => project.id === value)?.name || String(value);
@@ -287,7 +316,7 @@ function renderOverview(tasks) {
   const stats = [['Total tasks', tasks.length, 'Across this workspace view', '<span class="nav-icon nav-icon-tasks" aria-hidden="true"></span>'], ['In progress', inProgress, 'Work currently underway', '◷'], ['Completed', done, 'Tasks marked as done', '✓'], ['Overdue', tasks.filter(overdue).length, 'Tasks past their due date', '⚑']];
   $('#stats').innerHTML = stats.map(([label, count, note, icon], index) => `<div class="stat"><div class="stat-top"><span class="label-with-help">${label}<span class="help"><button type="button" class="help-button" aria-label="About ${escapeHTML(label)}" aria-describedby="stat-help-${index}" aria-expanded="false">ⓘ</button><span class="help-text" role="tooltip" id="stat-help-${index}">${escapeHTML(note)}</span></span></span><span class="stat-icon">${icon}</span></div><strong>${available ? count : '—'}</strong></div>`).join('');
   const upcoming = tasks.filter(task => !isClosed(task)).sort((a, b) => (a.due_at || '9999').localeCompare(b.due_at || '9999')).slice(0, 4);
-  $('#up-next').innerHTML = available && upcoming.length ? upcoming.map(task => `<div class="upcoming-task">${checkbox(task)}<div class="upcoming-detail">${titleButton(task)}<small>${escapeHTML(teamPath(task.team_id))} · ${escapeHTML(userName(task.assignee_id))}</small></div><span class="due ${overdue(task) ? 'overdue' : ''}">${formatDate(task.due_at)}</span></div>`).join('') : `<div class="up-next-empty">${available ? 'No upcoming tasks in this view.' : 'Your shared tasks will appear once the workspace is available.'}</div>`;
+  $('#up-next').innerHTML = available && upcoming.length ? upcoming.map(task => `<div class="upcoming-task">${checkbox(task)}<div class="upcoming-detail">${titleButton(task)}<small>${escapeHTML(teamPath(task.team_id))} · ${escapeHTML(taskAssigneeName(task))}</small></div><span class="due ${overdue(task) ? 'overdue' : ''}">${formatDate(task.due_at)}</span></div>`).join('') : `<div class="up-next-empty">${available ? 'No upcoming tasks in this view.' : 'Your shared tasks will appear once the workspace is available.'}</div>`;
   $('#progress-percent').innerHTML = `${available ? percent : '—'}<span>%</span>`;
   $('#progress-bar').style.width = `${available ? percent : 0}%`;
   $('#status-breakdown').innerHTML = Object.entries(STATUS).map(([value, label]) => `<div class="breakdown-row"><span class="legend-dot ${STATUS_CLASS[value]}"></span>${label}<strong>${available ? tasks.filter(task => task.status === value).length : '—'}</strong></div>`).join('');
@@ -296,7 +325,7 @@ function renderOverview(tasks) {
 }
 function renderTasks(tasks) {
   const query = $('#task-search').value.toLowerCase().trim();
-  const filtered = tasks.filter(task => `${task.title} ${task.description} ${userName(task.assignee_id)} ${teamPath(task.team_id)}`.toLowerCase().includes(query) && ($('#status-filter').value === 'all' || task.status === $('#status-filter').value) && ($('#priority-filter').value === 'all' || task.priority === $('#priority-filter').value));
+  const filtered = tasks.filter(task => `${task.title} ${task.description} ${taskAssigneeName(task)} ${teamPath(task.team_id)}`.toLowerCase().includes(query) && ($('#status-filter').value === 'all' || task.status === $('#status-filter').value) && ($('#priority-filter').value === 'all' || task.priority === $('#priority-filter').value));
   const archivedView = $('#archive-filter').value === 'archived';
   const closed = filtered.filter(isClosed), includeClosed = archivedView || showClosedTasks || ['done', 'cancelled'].includes($('#status-filter').value);
   const visible = filtered.filter(task => !isClosed(task) || includeClosed);
@@ -312,16 +341,16 @@ function renderTasks(tasks) {
   $('#show-closed').setAttribute('aria-expanded', String(includeClosed));
   let previous = '';
   $('#task-rows').innerHTML = visible.map(task => {
-    const name = userName(task.assignee_id);
+    const name = taskAssigneeName(task);
     const group = groupFor(task), heading = previous === group ? '' : `<tr class="task-section"><th colspan="${showGroups ? 6 : 5}" scope="rowgroup">${group}</th></tr>`; previous = group;
-    return `${heading}<tr class="task-item ${task.status === 'done' ? 'is-done' : ''}"><td class="check-cell">${checkbox(task)}</td><td class="task-name-cell">${titleButton(task)}${!task.assignee_id ? '<small class="task-subtitle">Unassigned group work</small>' : ''}${['urgent', 'high'].includes(task.priority) ? `<small class="priority ${task.priority}">${PRIORITY[task.priority]}</small>` : ''}</td><td data-label="Status"><span class="badge ${STATUS_CLASS[task.status] || 'todo'}">${escapeHTML(STATUS[task.status] || task.status)}</span></td><td data-label="Due" class="due ${overdue(task) ? 'overdue' : ''}">${formatDate(task.due_at)}</td><td data-label="Assignee"><div class="assignee"><span class="avatar">${escapeHTML(task.assignee_id ? name.split(/\s+/).map(part => part[0]).slice(0, 2).join('').toUpperCase() : '–')}</span>${escapeHTML(task.assignee_id ? name : 'Group work')}</div></td><td data-label="Group" ${showGroups ? '' : 'hidden'}>${escapeHTML(teamPath(task.team_id))}</td></tr>`;
+    return `${heading}<tr class="task-item ${task.status === 'done' ? 'is-done' : ''}"><td class="check-cell">${checkbox(task)}</td><td class="task-name-cell">${titleButton(task)}${!(task.assignee_id || task.assignee_person_id) ? '<small class="task-subtitle">Unassigned group work</small>' : ''}${['urgent', 'high'].includes(task.priority) ? `<small class="priority ${task.priority}">${PRIORITY[task.priority]}</small>` : ''}</td><td data-label="Status"><span class="badge ${STATUS_CLASS[task.status] || 'todo'}">${escapeHTML(STATUS[task.status] || task.status)}</span></td><td data-label="Due" class="due ${overdue(task) ? 'overdue' : ''}">${formatDate(task.due_at)}</td><td data-label="Assignee"><div class="assignee"><span class="avatar">${escapeHTML((task.assignee_id || task.assignee_person_id) ? name.split(/\s+/).map(part => part[0]).slice(0, 2).join('').toUpperCase() : '–')}</span>${escapeHTML((task.assignee_id || task.assignee_person_id) ? name : 'Group work')}</div></td><td data-label="Group" ${showGroups ? '' : 'hidden'}>${escapeHTML(teamPath(task.team_id))}</td></tr>`;
   }).join('');
   previous = '';
   $('#task-cards').innerHTML = visible.map(task => {
     const group = groupFor(task), heading = previous === group ? '' : `<h3 class="task-card-section">${group}</h3>`; previous = group;
     const description = (task.description || '').split('\n\nImported from: https://github.com/orgs/IEEE-USF-EXO/projects/3')[0].replace(/\s+/g, ' ').trim();
     const showOwner = $('#task-lens').value !== 'assigned';
-    return `${heading}<article class="compact-task ${task.status === 'done' ? 'is-done' : ''}" data-task-card="${escapeHTML(task.id)}"><div class="task-card-heading"><h3>${titleButton(task)}</h3>${['urgent', 'high'].includes(task.priority) ? `<span class="priority ${task.priority}">${PRIORITY[task.priority]}</span>` : ''}<span class="task-card-arrow" aria-hidden="true">↗</span></div><div class="task-card-meta"><span class="badge ${STATUS_CLASS[task.status] || 'todo'}">${escapeHTML(STATUS[task.status] || task.status)}</span>${task.due_at ? `<span class="due ${overdue(task) ? 'overdue' : ''}">${formatDate(task.due_at)}</span>` : ''}${showOwner ? `<span>${escapeHTML(task.assignee_id ? userName(task.assignee_id) : 'Unassigned group work')}</span>` : ''}${showGroups ? `<span>${escapeHTML(teamPath(task.team_id))}</span>` : ''}</div>${description ? `<p class="task-card-description">${escapeHTML(description.slice(0, 180))}${description.length > 180 ? '…' : ''}</p>` : ''}</article>`;
+    return `${heading}<article class="compact-task ${task.status === 'done' ? 'is-done' : ''}" data-task-card="${escapeHTML(task.id)}"><div class="task-card-heading"><h3>${titleButton(task)}</h3>${['urgent', 'high'].includes(task.priority) ? `<span class="priority ${task.priority}">${PRIORITY[task.priority]}</span>` : ''}<span class="task-card-arrow" aria-hidden="true">↗</span></div><div class="task-card-meta"><span class="badge ${STATUS_CLASS[task.status] || 'todo'}">${escapeHTML(STATUS[task.status] || task.status)}</span>${task.due_at ? `<span class="due ${overdue(task) ? 'overdue' : ''}">${formatDate(task.due_at)}</span>` : ''}${showOwner ? `<span>${escapeHTML(taskAssigneeName(task))}</span>` : ''}${showGroups ? `<span>${escapeHTML(teamPath(task.team_id))}</span>` : ''}</div>${description ? `<p class="task-card-description">${escapeHTML(description.slice(0, 180))}${description.length > 180 ? '…' : ''}</p>` : ''}</article>`;
   }).join('');
   const layout = taskLayout();
   $('#task-cards').hidden = layout !== 'list'; $('#task-table-view').hidden = layout !== 'table';
@@ -346,7 +375,7 @@ function render() {
   }
   if (taskLensUser !== session?.user.id) { taskLensChosen = false; taskLensUser = session?.user.id || ''; }
   const groupTasks = state.tasks.filter(task => !task.archived_at && task.project_id === state.project && canWorkIn(task.team_id, task.project_id) && (state.team === 'all' || descendantOf(task.team_id, state.team)) && (state.subteam === 'all' || descendantOf(task.team_id, state.subteam)));
-  const personalTasks = groupTasks.some(task => task.assignee_id === viewUserId());
+  const personalTasks = groupTasks.some(task => taskAssignedTo(task, viewUserId()));
   if (phase === 'ready' && preview.mode !== 'group' && !taskLensChosen) $('#task-lens').value = viewIsAdmin() ? 'all' : personalTasks ? 'assigned' : 'team';
   $('#task-scope-note').hidden = !viewIsMember() || viewIsAdmin() || preview.mode === 'group' || taskLensChosen || personalTasks || !groupTasks.length;
   $('#task-scope-note').textContent = 'No individual assignments here. Showing your group’s work.';
@@ -393,6 +422,8 @@ function render() {
   for (const selector of ['#new-project', '#new-team']) $(selector).disabled = busy || Boolean(preview.mode) || !chair;
   $('#new-subteam').disabled = busy || Boolean(preview.mode) || !chair || !state.teams.some(team => !team.parent_team_id);
   $('#new-subteam').title = state.teams.some(team => !team.parent_team_id) ? '' : 'Create a parent team first.';
+  $('#new-task-subteam').hidden = !canCreateSubteam();
+  $('#new-task-subteam').disabled = busy;
   $('#manage-projects').disabled = busy || Boolean(preview.mode) || !chair;
   if ($('#projects-dialog').open) {
     if (phase !== 'ready' || !isAdmin() || preview.mode) $('#projects-dialog').close();
@@ -478,10 +509,26 @@ async function readAll(table, fields, order = 'id') {
   }
 }
 async function readTaskDataset() {
-  try { return { rows: await readAll('tasks', TASK_FIELDS), ready: true }; }
+  try { return { rows: await readAll('tasks', `${TASK_FIELDS},assignee_person_id`), ready: true }; }
   catch (error) {
     if (!['PGRST204', '42703'].includes(error.code)) throw error;
-    return { rows: await readAll('tasks', CORE_TASK_FIELDS), ready: false };
+    try { return { rows: await readAll('tasks', TASK_FIELDS), ready: true }; }
+    catch (legacy) {
+      if (!['PGRST204', '42703'].includes(legacy.code)) throw legacy;
+      return { rows: await readAll('tasks', CORE_TASK_FIELDS), ready: false };
+    }
+  }
+}
+async function readRosterData() {
+  try {
+    const [rosterPeople, rosterAccounts, rosterGroups] = await Promise.all([
+      readAll('roster_people', 'id,display_name'), readAll('roster_accounts', 'person_id,user_id', 'person_id,user_id'),
+      readAll('roster_groups', 'person_id,team_id', 'person_id,team_id')
+    ]);
+    return { rosterPeople, rosterAccounts, rosterGroups, ready: true };
+  } catch (error) {
+    if (!['42P01', 'PGRST205'].includes(error.code)) throw error;
+    return { rosterPeople: [], rosterAccounts: [], rosterGroups: [], ready: false };
   }
 }
 async function loadWorkspace() {
@@ -492,14 +539,16 @@ async function loadWorkspace() {
   if (!session) { phase = 'signed-out'; setBanner('Sign in to your workspace', pendingAuthError || 'Use Google sign-in to load your teams, projects, and shared tasks.'); render(); return; }
   phase = 'loading'; setBanner('Loading shared workspace', 'Reading projects, teams, members, and tasks from Supabase…'); render();
   try {
-    const [teams, projects, profiles, memberships, leadership, tasks] = await Promise.all([
+    const [teams, projects, profiles, memberships, leadership, tasks, roster] = await Promise.all([
       readAll('teams', 'id,name,parent_team_id'), readAll('projects', 'id,name,status'),
       readAll('profiles', 'id,display_name'),
       readAll('team_members', 'team_id,user_id', 'team_id,user_id'),
-      readAll('leadership_assignments', 'id,user_id,role,team_id,project_id,revoked_at'), readTaskDataset()
+      readAll('leadership_assignments', 'id,user_id,role,team_id,project_id,revoked_at'), readTaskDataset(), readRosterData()
     ]);
     if (current !== generation || userId !== session?.user.id) return;
     activityReady = tasks.ready;
+    rosterReady = roster.ready;
+    Object.assign(state, { rosterPeople: roster.rosterPeople, rosterAccounts: roster.rosterAccounts, rosterGroups: roster.rosterGroups });
     Object.assign(state, { teams, projects, profiles, memberships, leadership, tasks: tasks.rows });
     const prefs = previewScope || readPreferences(); state.project = prefs.project || ''; state.team = prefs.team || 'all'; state.subteam = prefs.subteam || 'all';
     const member = memberships.some(member => member.user_id === userId) || leadership.some(role => role.user_id === userId && !role.revoked_at && ['exo_chair', 'permanent_project_lead', 'project_lead', 'team_lead'].includes(role.role));
@@ -521,12 +570,14 @@ async function refreshGroupAccess() {
   const owner = session.user.id, version = generation;
   checkingGroupAccess = true;
   try {
-    const [memberships, leadership] = await Promise.all([
+    const [memberships, leadership, roster] = await Promise.all([
       readAll('team_members', 'team_id,user_id', 'team_id,user_id'),
-      readAll('leadership_assignments', 'id,user_id,role,team_id,project_id,revoked_at')
+      readAll('leadership_assignments', 'id,user_id,role,team_id,project_id,revoked_at'), readRosterData()
     ]);
     if (owner !== session?.user.id || version !== generation || busy || document.querySelector('dialog[open]')) return;
-    if (JSON.stringify(memberships) !== JSON.stringify(state.memberships) || JSON.stringify(leadership) !== JSON.stringify(state.leadership)) await loadWorkspace();
+    if (JSON.stringify(memberships) !== JSON.stringify(state.memberships) || JSON.stringify(leadership) !== JSON.stringify(state.leadership) ||
+      roster.ready !== rosterReady || JSON.stringify(roster.rosterAccounts) !== JSON.stringify(state.rosterAccounts) ||
+      JSON.stringify(roster.rosterGroups) !== JSON.stringify(state.rosterGroups) || JSON.stringify(roster.rosterPeople) !== JSON.stringify(state.rosterPeople)) await loadWorkspace();
   } catch { /* Keep the current view during a network outage. RLS remains authoritative. */ }
   finally { checkingGroupAccess = false; }
 }
@@ -641,8 +692,29 @@ async function submitImport(event) {
   event.preventDefault(); if (preview.mode || busy || !session || phase !== 'ready' || !isAdmin()) return;
   if (importPlan) await executeImport(); else await prepareImport();
 }
+function renderSetupPeople(reset = false) {
+  const selected = reset ? new Set() : new Set([...$('#setup-people-list').querySelectorAll('input:checked')].map(field => field.value));
+  const people = assignmentPeople($('#setup-parent').value, $('#setup-project').value, isAdmin());
+  $('#setup-people-list').innerHTML = people.map(person => `<label class="setup-person"><input type="checkbox" name="setup-person" value="${escapeHTML(person.value)}" ${selected.has(person.value) ? 'checked' : ''}><span>${escapeHTML(person.name)}${person.pending ? '<small>Not signed in yet</small>' : ''}</span></label>`).join('');
+  filterSetupPeople();
+}
+function filterSetupPeople() {
+  const query = $('#setup-people-search').value.trim().toLowerCase();
+  for (const row of $('#setup-people-list').querySelectorAll('label')) row.hidden = !row.textContent.toLowerCase().includes(query);
+  const total = $('#setup-people-list').querySelectorAll('input').length;
+  const selected = $('#setup-people-list').querySelectorAll('input:checked').length;
+  $('#setup-people-summary').textContent = `${selected} selected · ${total} people available${total ? '' : ' in this parent group'}`;
+}
+function fillSetupParents() {
+  const previous = $('#setup-parent').value;
+  const teams = state.teams.filter(team => canManageIn(team.id, $('#setup-project').value));
+  $('#setup-parent').innerHTML = options(teams.map(team => [team.id, teamPath(team.id)]));
+  if (teams.some(team => team.id === previous)) $('#setup-parent').value = previous;
+  else if (teams.some(team => team.id === state.team)) $('#setup-parent').value = state.team;
+  renderSetupPeople();
+}
 function openSetup(mode) {
-  if (preview.mode || busy || phase !== 'ready' || !isAdmin() || !['project', 'team', 'subteam'].includes(mode)) return;
+  if (preview.mode || busy || phase !== 'ready' || !(mode === 'subteam' ? canCreate() : isAdmin()) || !['project', 'team', 'subteam'].includes(mode)) return;
   const roots = state.teams.filter(team => !team.parent_team_id);
   if (mode === 'subteam' && !roots.length) return;
   setupMode = mode;
@@ -660,10 +732,25 @@ function openSetup(mode) {
   $('#setup-parent-field').hidden = mode !== 'subteam'; $('#setup-parent').required = mode === 'subteam';
   $('#setup-parent').innerHTML = options(roots.map(team => [team.id, team.name]));
   if (roots.some(team => team.id === state.team)) $('#setup-parent').value = state.team;
+  $('#setup-project-field').hidden = mode !== 'subteam' || !rosterReady;
+  $('#setup-project').required = mode === 'subteam' && rosterReady;
+  $('#setup-people-field').hidden = mode !== 'subteam';
+  if (mode === 'subteam') {
+    if (!rosterReady) {
+      $('#setup-people-list').replaceChildren();
+      $('#setup-people-summary').textContent = 'Install the roster task assignment update to select people during subgroup creation.';
+    } else {
+      const projects = activeProjects().filter(project => state.teams.some(team => canManageIn(team.id, project.id)));
+      $('#setup-project').innerHTML = options(projects.map(project => [project.id, project.name]));
+      if (projects.some(project => project.id === state.project)) $('#setup-project').value = state.project;
+      $('#setup-people-list').replaceChildren(); fillSetupParents();
+      $('#setup-description').textContent = 'Choose a parent group and everyone who belongs in the new subgroup. Save them together.';
+    }
+  }
   showDialog($('#setup-dialog')); $('#setup-name').focus();
 }
 async function saveSetup(event) {
-  event.preventDefault(); if (preview.mode || busy || phase !== 'ready' || !session || !isAdmin()) return;
+  event.preventDefault(); if (preview.mode || busy || phase !== 'ready' || !session || !(setupMode === 'subteam' ? canCreate() : isAdmin())) return;
   const name = $('#setup-name').value.trim(), description = $('#setup-notes').value.trim() || null;
   if (!name) { $('#setup-name').setCustomValidity('Enter a name.'); $('#setup-name').reportValidity(); return; }
   const owner = session.user.id, version = generation, mode = setupMode;
@@ -671,13 +758,19 @@ async function saveSetup(event) {
   if (mode === 'project') { table = 'projects'; values = { name, description, status: 'active', created_by: owner }; fields = 'id,name,status'; }
   else {
     table = 'teams'; values = { name, description, parent_team_id: mode === 'subteam' ? $('#setup-parent').value : null }; fields = 'id,name,parent_team_id';
-    if (mode === 'subteam' && !state.teams.some(team => team.id === values.parent_team_id && !team.parent_team_id)) return;
+    if (mode === 'subteam' && !state.teams.some(team => team.id === values.parent_team_id)) return;
   }
   busy = true; $('#setup-error').hidden = true;
   for (const field of $('#setup-form').querySelectorAll('input,select,textarea,button')) field.disabled = true;
   $('#save-setup').textContent = 'Saving to Supabase…'; render();
   try {
-    const { data, error } = await client.from(table).insert(values).select(fields).maybeSingle();
+    const selected = [...$('#setup-people-list').querySelectorAll('input:checked')].map(field => field.value);
+    const query = mode === 'subteam' && rosterReady ? client.rpc('create_subteam_with_members', {
+      p_name: name, p_description: description, p_parent: values.parent_team_id, p_project: $('#setup-project').value,
+      p_users: selected.filter(value => !value.startsWith('person:')),
+      p_people: selected.filter(value => value.startsWith('person:')).map(value => value.slice(7))
+    }) : client.from(table).insert(values);
+    const { data, error } = await query.select(fields).maybeSingle();
     if (error) throw error;
     if (!data) throw new Error('Supabase did not return a saved record. Check your permissions and refresh.');
     if (owner !== session?.user.id || version !== generation) return;
@@ -685,6 +778,7 @@ async function saveSetup(event) {
     else state.teams.push(data);
     savePreferences(); updateConnectedBanner(); $('#setup-dialog').close();
     toast(`${mode === 'subteam' ? 'Subteam' : mode === 'team' ? 'Team' : 'Project'} created in Supabase.`);
+    if (mode === 'subteam' && rosterReady) { busy = false; await loadWorkspace(); }
   } catch (error) {
     if (owner === session?.user.id && version === generation) {
       $('#setup-error').textContent = error.code === '23505' ? 'This record already exists. Close this dialog and refresh to see the latest data.' : errorMessage(error);
@@ -764,13 +858,15 @@ function fillMemberPeople() {
   renderMemberGroups();
 }
 async function readMemberData(owner, version) {
-  const [profiles, teams, memberships, leadership] = await Promise.all([
+  const [profiles, teams, memberships, leadership, roster] = await Promise.all([
     readAll('profiles', 'id,display_name'), readAll('teams', 'id,name,parent_team_id'),
     readAll('team_members', 'team_id,user_id', 'team_id,user_id'),
-    readAll('leadership_assignments', 'id,user_id,role,team_id,project_id,revoked_at')
+    readAll('leadership_assignments', 'id,user_id,role,team_id,project_id,revoked_at'), readRosterData()
   ]);
   if (owner !== session?.user.id || version !== generation) return false;
   Object.assign(state, { profiles, teams, memberships, leadership });
+  rosterReady = roster.ready;
+  Object.assign(state, { rosterPeople: roster.rosterPeople, rosterAccounts: roster.rosterAccounts, rosterGroups: roster.rosterGroups });
   fillMemberPeople(); return true;
 }
 async function refreshMembers() {
@@ -926,10 +1022,10 @@ async function saveAITasks() {
   if (!aiTaskPlan) { aiTaskError('Review the agent response before creating tasks.'); return; }
   const projectId = $('#task-project').value, teamId = $('#task-subteam').value, assignee = $('#task-assignee').value || null;
   if (!canManageIn(teamId, projectId)) { aiTaskError('Choose a project and group you lead.'); return; }
-  if (assignee && !userHasGroupAccess(assignee, teamId, projectId)) { aiTaskError('The assignee needs access to this group first.'); return; }
+  if (assignee && !(assignee.startsWith('person:') ? personHasGroupAccess(assignee.slice(7), teamId, projectId) : userHasGroupAccess(assignee, teamId, projectId))) { aiTaskError('The assignee needs access to this group first.'); return; }
   try { checkAIDuplicates(aiTaskPlan, projectId, teamId); } catch (error) { aiTaskError(error.message); return; }
   const owner = session.user.id, version = generation;
-  const rows = aiTaskPlan.map(task => ({ id: task.id, title: task.title, description: task.description, priority: task.priority, status: 'todo', due_at: task.date ? new Date(`${task.date}T23:59:59`).toISOString() : null, project_id: projectId, team_id: teamId, assignee_id: assignee, created_by: owner }));
+  const rows = aiTaskPlan.map(task => ({ id: task.id, title: task.title, description: task.description, priority: task.priority, status: 'todo', due_at: task.date ? new Date(`${task.date}T23:59:59`).toISOString() : null, project_id: projectId, team_id: teamId, ...assigneeValues(assignee || ''), created_by: owner }));
   busy = true; aiTaskError(''); lockForm(true); render();
   try {
     // One atomic batch. Stable IDs make retrying a lost response safe without updating existing tasks.
@@ -979,7 +1075,7 @@ function openTask(id) {
     populateTaskScope($('#task-project').value, state.team, state.subteam);
   }
   $('#delete-task').hidden = !task || !canEdit(task);
-  if (task) fillTaskAssignees(task.project_id, task.team_id, task.assignee_id);
+  if (task) fillTaskAssignees(task.project_id, task.team_id, taskAssigneeValue(task));
   taskEditing = !task;
   $('#task-detail-view').hidden = !task;
   $('#task-edit-fields').hidden = Boolean(task);
@@ -995,7 +1091,7 @@ function openTask(id) {
     $('#task-detail-title').textContent = task.title;
     $('#task-detail-meta').innerHTML = `<span class="badge ${STATUS_CLASS[task.status]}">${STATUS[task.status]}</span><span class="priority ${task.priority}">${escapeHTML(PRIORITY[task.priority])}</span>`;
     setLinkedText($('#task-instructions'), task.description || 'No instructions added yet.');
-    $('#task-detail-facts').innerHTML = [['Assignee', task.assignee_id ? userName(task.assignee_id) : 'Unassigned group work'], ['Due date', formatDate(task.due_at)], ['Group', teamPath(task.team_id)], ['Project', state.projects.find(project => project.id === task.project_id)?.name || 'Project']].map(([label, value]) => `<div><dt>${label}</dt><dd>${escapeHTML(value)}</dd></div>`).join('');
+    $('#task-detail-facts').innerHTML = [['Assignee', taskAssigneeName(task)], ['Due date', formatDate(task.due_at)], ['Group', teamPath(task.team_id)], ['Project', state.projects.find(project => project.id === task.project_id)?.name || 'Project']].map(([label, value]) => `<div><dt>${label}</dt><dd>${escapeHTML(value)}</dd></div>`).join('');
     loadTaskReferences(task);
     loadTaskHistory(task, true);
     $('#delete-task').hidden = Boolean(preview.mode) || !canManageIn(task.team_id, task.project_id);
@@ -1063,7 +1159,7 @@ async function saveTask(event) {
   if (!title) { $('#task-title').setCustomValidity('Give your task a name.'); $('#task-title').reportValidity(); return; }
   if (existing && !canEdit(existing)) return;
   const date = $('#task-due').value;
-  const values = { title, description: $('#task-description').value.trim(), status: $('#task-status').value, priority: $('#task-priority').value, assignee_id: $('#task-assignee').value || null,
+  const values = { title, description: $('#task-description').value.trim(), status: $('#task-status').value, priority: $('#task-priority').value, ...assigneeValues($('#task-assignee').value),
     due_at: !date ? null : existing && dueDate(existing) === date ? existing.due_at : new Date(`${date}T23:59:59`).toISOString() };
   const teamId = $('#task-subteam').value, projectId = $('#task-project').value;
   if (!existing && !canManageIn(teamId, projectId)) { formError(new Error('Choose a project and group you lead.')); return; }
@@ -1111,7 +1207,7 @@ async function deleteTask() {
   if (!task || busy || !activityReady || !canManageIn(task.team_id, task.project_id) || !confirm(task.archived_at ? 'Restore this task to the active workspace?' : 'Archive this task? Its instructions and history will be kept.')) return;
   const owner = session.user.id, version = generation; busy = true; lockForm(true); render();
   try {
-    const { data, error } = await client.rpc('manage_task', { p_task: task.id, p_expected: task.updated_at, p_values: { archived: !task.archived_at } }).select(TASK_FIELDS).maybeSingle();
+    const { data, error } = await client.rpc('manage_task', { p_task: task.id, p_expected: task.updated_at, p_values: { archived: !task.archived_at } }).select(taskFields()).maybeSingle();
     if (error) throw error; if (!data) throw new Error('Task changed or access was removed. Refresh and try again.');
     if (owner !== session?.user.id || version !== generation) return;
     state.tasks = state.tasks.map(item => item.id === task.id ? data : item); recentKey = ''; audit.loaded = false;
@@ -1224,6 +1320,11 @@ document.addEventListener('click', event => { const button = event.target.closes
 document.addEventListener('change', toggleTask);
 $('#task-form').addEventListener('submit', saveTask);
 for (const [selector, mode] of [['#new-project', 'project'], ['#new-team', 'team'], ['#new-subteam', 'subteam']]) $(selector).addEventListener('click', () => openSetup(mode));
+$('#new-task-subteam').addEventListener('click', () => openSetup('subteam'));
+$('#setup-project').addEventListener('change', fillSetupParents);
+$('#setup-parent').addEventListener('change', () => renderSetupPeople());
+$('#setup-people-search').addEventListener('input', filterSetupPeople);
+$('#setup-people-list').addEventListener('change', filterSetupPeople);
 $('#setup-form').addEventListener('submit', saveSetup);
 $('#setup-name').addEventListener('input', () => $('#setup-name').setCustomValidity(''));
 $('#setup-dialog').addEventListener('close', () => $('#setup-name').setCustomValidity(''));

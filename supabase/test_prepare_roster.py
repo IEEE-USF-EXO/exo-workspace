@@ -71,6 +71,16 @@ class RosterTests(unittest.TestCase):
         report = sql.split('$import$;', 1)[1]
         self.assertIn('with input(email, parent_name, child_name, source_row) as (values', report)
 
+    def test_person_alias_seed_preserves_existing_ids_and_rejects_conflicts(self):
+        people = [{'name': "A person's name", 'key': 'one-person',
+                   'emails': ['a@example.com', 'b@example.com']}]
+        sql = roster.people_sql(people)
+        self.assertEqual(sql, roster.people_sql(people))
+        self.assertIn("'A person''s name'", sql)
+        self.assertIn("email in ('a@example.com','b@example.com')", sql)
+        self.assertIn('cardinality(existing_ids),0)>1', sql)
+        self.assertIn('coalesce(existing_ids[1]', sql)
+
 
 if __name__ == '__main__':
     unittest.main()
