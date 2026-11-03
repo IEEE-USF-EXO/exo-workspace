@@ -13,6 +13,7 @@
     <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2/dist/umd/supabase.js" defer></script>
     <script src="config.js" defer></script>
     <script src="github-board.js" defer></script>
+    <script src="file-library.js" defer></script>
     <script src="app.js" defer></script>
   </head>
   <body>
@@ -38,7 +39,7 @@
         </span>
       </a>
 
-      <!-- Tab links use URL hashes; app.js switches views without a page reload. Files currently has no content panel. -->
+      <!-- Tab links use URL hashes; app.js switches views without a page reload. -->
       <nav aria-label="Main navigation" id="workspace-navigation">
         <a href="#overview" data-tab="overview" aria-label="Overview" title="Overview">
           <span class="nav-icon nav-icon-overview" aria-hidden="true"></span>
@@ -159,6 +160,7 @@
         <div class="tabs" role="tablist" aria-label="Workspace views">
           <button role="tab" id="tab-overview" data-tab="overview" aria-controls="overview-view"><span class="nav-icon nav-icon-overview" aria-hidden="true"></span>Overview</button>
           <button role="tab" id="tab-tasks" data-tab="tasks" aria-controls="tasks-view"><span class="nav-icon nav-icon-tasks" aria-hidden="true"></span>Tasks <span id="tab-count" class="tab-count"></span></button>
+          <button role="tab" id="tab-files" data-tab="files" aria-controls="files-view"><span class="nav-icon nav-icon-files" aria-hidden="true"></span>Files</button>
           <button
             role="tab"
             id="tab-administration"
@@ -369,6 +371,40 @@
               <button type="button" class="button secondary" id="empty-group-tasks" hidden>View group tasks</button>
             </div>
             <button id="add-task-row" class="add-task-row">＋ Add a task</button>
+          </div>
+        </section>
+        <!-- Files tab: team folders follow the signed-in or previewed profile. -->
+        <section id="files-view" role="tabpanel" aria-labelledby="tab-files" hidden>
+          <!-- Drive supplies the contents and enforces its own sharing permissions. -->
+          <div class="panel files-panel">
+            <div class="panel-heading files-heading">
+              <div>
+                <h2>Shared files</h2>
+                <p id="files-description">Your team's documents and folders on Google Drive.</p>
+              </div>
+              <div class="task-view-actions">
+                <div id="files-folder-field" class="scope-field" hidden>
+                  <label for="files-folder-select">Folder</label>
+                  <select id="files-folder-select" aria-label="Choose a team folder"></select>
+                </div>
+                <div class="task-scope-buttons" role="group" aria-label="File presentation">
+                  <button type="button" data-files-layout="grid" aria-pressed="true">Grid</button>
+                  <button type="button" data-files-layout="list" aria-pressed="false">List</button>
+                </div>
+                <a id="files-open" class="text-button" target="_blank" rel="noopener noreferrer" hidden>Open in Drive &#8599;</a>
+              </div>
+            </div>
+            <div id="files-empty" class="files-empty" role="status">
+              <h3 id="files-empty-title">Sign in to view your folders</h3>
+              <p id="files-empty-description">Folders are shown according to your workspace memberships.</p>
+            </div>
+            <iframe
+              id="files-frame"
+              title="EXO shared Google Drive files"
+              referrerpolicy="strict-origin-when-cross-origin"
+              hidden
+            ></iframe>
+            <p id="files-access-note" class="files-access-note" hidden>Use Google Drive to upload or organize files. If the folder is not visible, open it in Drive with your team's Google account.</p>
           </div>
         </section>
       </main>

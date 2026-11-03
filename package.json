@@ -1,0 +1,7 @@
+{
+  "name": "exo-workbench",
+  "private": true,
+  "scripts": {
+    "test:files": "node --test files/*.test.mjs"
+  }
+}

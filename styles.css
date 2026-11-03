@@ -1,3 +1,18 @@
+/* Files tab: use the shared panel and view controls from the other tabs. */
+.files-heading { border-bottom: 1px solid var(--line); }
+#files-frame { display: block; width: 100%; height: 560px; border: 0; background: var(--paper); }
+#files-frame[hidden], #files-folder-field[hidden] { display: none; }
+.files-empty { padding: 60px 22px; text-align: center; color: var(--muted); }
+.files-empty[hidden] { display: none; }
+.files-empty h3 { color: var(--ink); }
+.files-empty p { margin-top: 7px; font-size: 12px; }
+#files-folder-select { max-width: 180px; padding: 7px 10px; font-size: 11px; }
+.files-access-note { padding: 14px 22px; border-top: 1px solid var(--line); color: var(--muted); font-size: 11px; }
+@media (max-width: 650px) {
+  .files-heading { align-items: flex-start; flex-direction: column; }
+  #files-frame { height: 480px; }
+}
+
 .group-create-action { display: flex; justify-content: flex-end; margin-bottom: 12px; }
 #setup-people-field { margin: 16px 0; padding: 14px; border: 1px solid #d8ded9; border-radius: 10px; }
 .setup-people-list { max-height: 260px; overflow-y: auto; margin: 10px 0; }
