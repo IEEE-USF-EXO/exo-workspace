@@ -1,4 +1,4 @@
--- Run this WHOLE file in Supabase SQL Editor for an existing Workbench database.
+-- Run this WHOLE file in Supabase SQL Editor for an existing Workspace database.
 -- Projects are shared across the workspace. Teams/subteams receive tasks from
 -- any project without a project_teams record. Existing task data is preserved.
 begin;

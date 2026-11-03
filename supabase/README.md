@@ -1,7 +1,7 @@
 # Supabase SQL
 
 For the current dashboard update, run `independent-teams.sql` once in the
-Supabase SQL Editor, then refresh Workbench. It removes the task requirement for
+Supabase SQL Editor, then refresh Workspace. It removes the task requirement for
 project/team links without deleting existing tasks or legacy links. Members can
 view all projects; existing team and leadership scopes still control task edits.
 Fresh installations use the updated root `schema.sql` instead.
@@ -114,7 +114,7 @@ rules help prevent accidental commits but do not protect a file already tracked
 or prevent a static server from serving a local file.
 
 For an existing database, run `activity-log.sql` as one script in SQL Editor,
-then refresh Workbench. The updated root `schema.sql` includes this extension
+then refresh Workspace. The updated root `schema.sql` includes this extension
 for fresh installations too. Before installation, existing task reads still work;
 the new activity and archive controls remain unavailable.
 
@@ -150,7 +150,7 @@ In New task, choose **Tasks from AI**. Select the shared project, group and
 assignee, then copy the prompt to your agent and add your work notes. Paste its
 JSON response back and choose **Review tasks**, then **Create tasks**. The prompt
 uses the existing Deliverable/Evidence and Decision/Question task conventions.
-No AI service is called by Workbench and no API key is needed. The copied prompt
+No AI service is called by Workspace and no API key is needed. The copied prompt
 includes project/group names and formatting instructions, not the member roster.
 
 Responses accept 1–30 tasks with title, description, priority and due_date only.
@@ -182,7 +182,7 @@ enabling synchronization. Store any credentials in Supabase secrets.
 ## Manage and archive projects
 
 For an existing database, run `project-management.sql` after `activity-log.sql`,
-then refresh Workbench. Fresh installations include both in `schema.sql`.
+then refresh Workspace. Fresh installations include both in `schema.sql`.
 EXO chairs can open **Administration → Projects and groups → Manage projects**
 to archive or restore a project. Archived projects disappear from working project,
 new-task and import selectors, but remain listed in project management and history.
@@ -196,7 +196,7 @@ reject new or changed tasks in archived projects until the project is restored.
 ## Team archiving
 
 Run `team-management.sql` after `activity-log.sql` (and `project-management.sql`
-when installed), then refresh Workbench. Fresh installations include this in
+when installed), then refresh Workspace. Fresh installations include this in
 `schema.sql`. Administration > Manage teams provides Archive and Restore.
 Archiving a parent hides its descendants from active work without rewriting
 subteam archive flags. Restoring it leaves independently archived subteams hidden.

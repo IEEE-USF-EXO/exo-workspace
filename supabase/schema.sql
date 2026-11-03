@@ -1,4 +1,4 @@
--- EXO Workbench: complete core schema for Supabase Postgres.
+-- EXO Workspace: complete core schema for Supabase Postgres.
 -- Reconstructed from the seven supplied tables and the task requirements.
 -- This is NOT the unrecovered SQL attachment from the earlier chat.
 -- Runs on a fresh project OR alongside the seven UUID tables supplied by you.

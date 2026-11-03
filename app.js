@@ -1106,9 +1106,9 @@ function populateTaskScope(projectId, preferredRoot, preferredTeam) {
 function taskAIPrompt() {
   const project = state.projects.find(item => item.id === $('#task-project').value)?.name || 'the selected project';
   const group = teamPath($('#task-subteam').value);
-  return `Convert the user's work notes below into practical EXO Workbench tasks.
+  return `Convert the user's work notes below into practical EXO Workspace tasks.
 Project: ${project}. Group: ${group}. Today: ${today()}.
-Use these task-writing conventions: concise action titles, descriptions beginning with "Deliverable:" and followed by "Evidence:", and "Decision: [topic]" titles for decisions. Preserve only dates, priorities, dependencies, links, and requirements stated in the notes. Interpret "today" as ${today()} and "tomorrow" as the next calendar day. If the notes request one task, return one task; otherwise split independent deliverables into separate tasks. The assignee is selected in EXO Workbench, so do not include an assignee field.
+Use these task-writing conventions: concise action titles, descriptions beginning with "Deliverable:" and followed by "Evidence:", and "Decision: [topic]" titles for decisions. Preserve only dates, priorities, dependencies, links, and requirements stated in the notes. Interpret "today" as ${today()} and "tomorrow" as the next calendar day. If the notes request one task, return one task; otherwise split independent deliverables into separate tasks. The assignee is selected in EXO Workspace, so do not include an assignee field.
 Respond with only one JSON object in this shape, with no Markdown or explanation. If your interface wraps the response in a one-item JSON array, that format is also accepted:
 {"tasks":[{"title":"Verify sensor readings on the bench","description":"Deliverable: Compare sensor readings against a known reference.\\nEvidence: Results and discrepancies are documented.","priority":"medium","due_date":null}]}
 Each task must contain only title, description, priority, and due_date. Use priority low, medium, high, or urgent. Use null for an unstated due date.

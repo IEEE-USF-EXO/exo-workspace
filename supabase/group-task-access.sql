@@ -1,4 +1,4 @@
--- Run after independent-teams.sql in Supabase SQL Editor, then refresh Workbench.
+-- Run after independent-teams.sql in Supabase SQL Editor, then refresh Workspace.
 -- No tasks or memberships are deleted. Saved group membership controls reads as
 -- well as writes, including membership changes made directly in Supabase.
 begin;

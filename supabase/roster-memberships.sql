@@ -75,7 +75,7 @@ create trigger exo_enroll_roster_identity after insert or update of identity_dat
   for each row execute function exo_private.enroll_roster_user();
 commit;
 
--- An approval is consumed once. Removing a saved membership in Workbench does
+-- An approval is consumed once. Removing a saved membership in Workspace does
 -- not reset claimed_at, so a later login cannot silently restore revoked access.
 -- To cancel an UNUSED approval, set disabled_at=now() in SQL Editor.
 -- To approve a returning member again, explicitly add their membership through
