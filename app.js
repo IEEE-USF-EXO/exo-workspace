@@ -18,7 +18,7 @@ const audit = { rows: [], loading: false, more: false, loaded: false, error: '' 
 let taskHistoryRequest = 0;
 const taskHistory = { taskId: '', rows: [], more: false, loading: false };
 const taskFields = () => `${activityReady ? TASK_FIELDS : CORE_TASK_FIELDS}${rosterReady ? ',assignee_person_id' : ''}`;
-const TABS = ['overview', 'tasks', 'administration'];
+const TABS = ['overview', 'tasks', 'files', 'administration'];
 let client, session = null, phase = 'connecting', busy = false, generation = 0, authReady = false, activeTab = TABS.includes(location.hash.slice(1)) ? location.hash.slice(1) : 'overview';
 let pendingAuthError = '';
 let signinDismissed = false, signinError = '';
@@ -412,8 +412,8 @@ function render() {
   $('#overview-scope').textContent = subteam?.name || team?.name || (viewIsAdmin() ? 'Across all teams' : 'Across my groups');
   $('#nav-count').textContent = viewIsMember() ? tasks.filter(task => !isClosed(task)).length : '—';
   $('#tab-count').textContent = viewIsMember() ? tasks.length : '—';
-  $('#page-title').textContent = { overview: 'Overview', tasks: 'Tasks', administration: 'Administration' }[activeTab];
-  $('#new-task').hidden = activeTab === 'administration' || (phase === 'ready' && !canCreate());
+  $('#page-title').textContent = { overview: 'Overview', tasks: 'Tasks', files: 'Files', administration: 'Administration' }[activeTab];
+  $('#new-task').hidden = ['administration', 'files'].includes(activeTab) || (phase === 'ready' && !canCreate());
   $('#add-task-row').hidden = phase === 'ready' && !canCreate();
   $('#nav-administration').hidden = !chair; $('#tab-administration').hidden = !chair;
   for (const element of document.querySelectorAll('[data-tab]')) {
@@ -422,6 +422,8 @@ function render() {
     else if (active) element.setAttribute('aria-current', 'page'); else element.removeAttribute('aria-current');
   }
   $('#overview-view').hidden = activeTab !== 'overview'; $('#tasks-view').hidden = activeTab !== 'tasks';
+  $('#files-view').hidden = activeTab !== 'files';
+  renderFiles();
   $('#administration-view').hidden = !chair || activeTab !== 'administration';
   $('#auth-button').disabled = !authReady || busy;
   $('#auth-button').textContent = !authReady ? 'Connecting…' : session ? 'Sign out' : 'Sign in with Google';
@@ -440,7 +442,7 @@ function render() {
   for (const selector of ['#new-task', '#add-task-row']) $(selector).disabled = busy || Boolean(preview.mode) || !canCreate();
   const creationHint = creationBlockReason();
   $('#creation-hint').textContent = creationHint;
-  $('#creation-hint').hidden = !creationHint || activeTab === 'administration';
+  $('#creation-hint').hidden = !creationHint || ['administration', 'files'].includes(activeTab);
   for (const selector of ['#new-task', '#add-task-row']) $(selector).title = creationHint;
   $('#admin-actions').hidden = !chair;
   for (const selector of ['#new-project', '#new-team']) $(selector).disabled = busy || Boolean(preview.mode) || !chair;
@@ -481,6 +483,60 @@ function render() {
   const key = `${generation}|${state.project}|${state.team}|${state.subteam}|${preview.mode}|${preview.subject}`;
   if (phase === 'ready' && activityReady && recentKey !== key) { recentKey = key; setTimeout(refreshRecentActivity, 0); }
 }
+// Keep file navigation independent of the project/task filters. A profile change
+// clears the previous folder immediately, including when Files is not selected.
+let filesSelection = '', filesIdentity = '', filesLayout = 'grid';
+function profileFolders() {
+  return EXO_FILES.foldersForProfile({
+    ready: viewIsMember(), userId: viewUserId(),
+    previewTeamId: preview.mode === 'group' ? preview.subject : null,
+    teams: state.teams, memberships: state.memberships, leadership: state.leadership,
+    rootFolder: EXO_CONFIG.driveRootFolder, teamFolders: EXO_CONFIG.driveTeamFolders,
+  });
+}
+function renderFiles() {
+  const frame = $('#files-frame');
+  const identity = `${session?.user.id || ''}|${preview.mode}|${preview.subject}`;
+  if (identity !== filesIdentity) {
+    filesIdentity = identity; filesSelection = '';
+    frame.removeAttribute('src');
+  }
+  const folders = profileFolders();
+  const folder = folders.find(folder => folder.id === filesSelection) || folders[0];
+  filesSelection = folder?.id || '';
+  $('#files-folder-select').innerHTML = options(folders.map(folder => [folder.id, folder.name]));
+  $('#files-folder-select').value = filesSelection;
+  $('#files-folder-field').hidden = folders.length < 2;
+  $('#files-empty').hidden = Boolean(folder);
+  frame.hidden = !folder;
+  $('#files-open').hidden = !folder;
+  $('#files-access-note').hidden = !folder;
+  $('#files-description').textContent = folder ? `${folder.name} · Google Drive` : "Your team's documents and folders on Google Drive.";
+  const loading = ['connecting', 'loading'].includes(phase);
+  $('#files-empty-title').textContent = !session ? 'Sign in to view your folders' : loading ? 'Loading your folders…' : 'No team folder available';
+  $('#files-empty-description').textContent = session && !loading
+    ? 'No Drive folder is linked to your current team memberships.'
+    : 'Folders are shown according to your workspace memberships.';
+  for (const button of document.querySelectorAll('[data-files-layout]')) {
+    button.disabled = !folder;
+    button.setAttribute('aria-pressed', String(button.dataset.filesLayout === filesLayout));
+  }
+  if (!folder) {
+    frame.removeAttribute('src');
+    $('#files-open').removeAttribute('href');
+    return;
+  }
+  $('#files-open').href = `https://drive.google.com/drive/folders/${encodeURIComponent(folder.id)}`;
+  frame.title = `${folder.name} Google Drive files`;
+  const url = `https://drive.google.com/embeddedfolderview?id=${encodeURIComponent(folder.id)}#${filesLayout}`;
+  // Retain the embedded view during ordinary tab changes; load a new folder only
+  // when Files is visible. Never retain a folder removed from the profile.
+  if (frame.getAttribute('src') !== url) {
+    frame.removeAttribute('src');
+    if (activeTab === 'files') frame.src = url;
+  }
+}
+
 function switchTab(tab) { if (!TABS.includes(tab) || (tab === 'administration' && (phase !== 'ready' || !isAdmin() || preview.mode))) return; activeTab = tab; if (location.hash !== `#${tab}`) history.replaceState(null, '', `#${tab}`); render(); if (tab === 'administration' && !audit.loaded) loadAdminHistory(); }
 function resetPreview() {
   const saved = preview.saved;
@@ -1423,6 +1479,14 @@ for (const button of document.querySelectorAll('[data-task-layout]')) button.add
   renderTasks(scopedTasks());
 });
 $('#edit-task').addEventListener('click', editOpenTask);
+for (const button of document.querySelectorAll('[data-files-layout]')) button.addEventListener('click', () => {
+  filesLayout = button.dataset.filesLayout;
+  renderFiles();
+});
+$('#files-folder-select').addEventListener('change', event => {
+  filesSelection = event.target.value;
+  renderFiles();
+});
 for (const element of document.querySelectorAll('[data-tab]')) element.addEventListener('click', event => { event.preventDefault(); switchTab(element.dataset.tab); });
 $('.tabs').addEventListener('keydown', event => { if (['ArrowRight', 'ArrowLeft', 'Home', 'End'].includes(event.key)) { event.preventDefault(); const tabs = [...$('.tabs').querySelectorAll('[role="tab"]')].filter(tab => !tab.hidden), index = Math.max(0, tabs.findIndex(tab => tab.dataset.tab === activeTab)); const next = event.key === 'Home' ? 0 : event.key === 'End' ? tabs.length - 1 : (index + (event.key === 'ArrowRight' ? 1 : -1) + tabs.length) % tabs.length; switchTab(tabs[next].dataset.tab); tabs[next].focus(); } });
 window.addEventListener('hashchange', () => { if (TABS.includes(location.hash.slice(1)) || !location.hash) { activeTab = location.hash.slice(1) || 'overview'; render(); if (activeTab === 'administration' && !audit.loaded) loadAdminHistory(); } });
