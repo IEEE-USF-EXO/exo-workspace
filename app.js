@@ -1423,7 +1423,7 @@ async function changeMembership(teamId, remove = false) {
     }
   } finally { if (owner === session?.user.id && version === generation) { busy = false; render(); } }
 }
-function populateTaskScope(projectId, preferredRoot, preferredTeam) {
+function populateTaskScope(projectId, preferredRoot, preferredTeam, selectedTeams) {
   const task = state.tasks.find(row => row.id === $('#task-id').value);
   const primary = sharedTasksReady && task?.team_id;
   const availableTeam = team => team.id === primary || canManageIn(team.id, projectId);
@@ -1435,15 +1435,15 @@ function populateTaskScope(projectId, preferredRoot, preferredTeam) {
   $('#task-subteam').innerHTML = options(available.map(team => [team.id, team.parent_team_id ? teamPath(team.id).split(' / ').slice(1).join(' / ') : 'Team-wide']));
   $('#task-subteam').value = available.some(team => team.id === preferredTeam) ? preferredTeam : available[0]?.id || '';
   fillTaskAssignees(projectId, $('#task-subteam').value);
-  renderExtraTaskTeams(projectId, $('#task-subteam').value);
-  $('#save-task').disabled = busy || !available.length;
+  renderExtraTaskTeams(projectId, $('#task-subteam').value, selectedTeams);
+  updateTaskCreateAvailability();
 }
 function selectedTaskTeams() {
   return [$('#task-subteam').value, ...Array.from(document.querySelectorAll('#task-extra-teams input:checked'), field => field.value)].filter(Boolean);
 }
 function renderExtraTaskTeams(projectId, primaryId, selected = selectedTaskTeams()) {
   $('#task-shared-teams').hidden = !sharedTasksReady;
-  if (!sharedTasksReady) { $('#task-extra-teams').replaceChildren(); return; }
+  if (!sharedTasksReady) { $('#task-extra-teams').replaceChildren(); updateTaskTeamPicker(); return; }
   const task = state.tasks.find(row => row.id === $('#task-id').value);
   const locked = task && !canChangeTaskTeams(task);
   const available = state.teams.filter(team => team.id !== primaryId
@@ -1451,6 +1451,46 @@ function renderExtraTaskTeams(projectId, primaryId, selected = selectedTaskTeams
   $('#task-extra-teams').innerHTML = available.map(team => `<label><input type="checkbox" value="${escapeHTML(team.id)}"${selected.includes(team.id) ? ' checked' : ''}${locked ? ' disabled' : ''}> ${escapeHTML(teamPath(team.id))}</label>`).join('');
   $('#task-shared-team-help').textContent = locked ? 'Changing the assignment requires authority over every assigned team.'
     : available.length ? 'The named assignee must have access to the primary team.' : 'No additional teams are available.';
+  updateTaskTeamPicker();
+}
+function setTaskTeamPickerOpen(open) {
+  $('#task-team-toggle').setAttribute('aria-expanded', String(open));
+  $('#task-team-options').hidden = !open;
+}
+function updateTaskTeamPicker() {
+  const show = sharedTasksReady && !$('#task-id').value;
+  $('#task-team-picker').hidden = !show;
+  setTaskTeamPickerOpen(false);
+  if (!show) return;
+  const selected = selectedTaskTeams();
+  const projectId = $('#task-project').value;
+  const available = state.teams.filter(team => !selected.includes(team.id) && canManageIn(team.id, projectId));
+  $('#task-team-options').innerHTML = available.length
+    ? available.map(team => `<button type="button" class="task-project-choice" data-add-team="${escapeHTML(team.id)}">${escapeHTML(teamPath(team.id))}</button>`).join('')
+    : '<p class="muted">No more teams or subteams are available.</p>';
+  $('#task-team-chips').innerHTML = selected.map((id, index) => {
+    const name = escapeHTML(teamPath(id));
+    return `<span class="task-team-chip"><span>${name}${index === 0 ? ' · Primary' : ''}</span><button type="button" data-remove-team="${escapeHTML(id)}" aria-label="Remove ${name}">×</button></span>`;
+  }).join('');
+  $('#task-team-picker-help').textContent = selected.length
+    ? 'The primary team determines who can be selected as the named assignee.'
+    : 'Choose at least one team or subteam.';
+}
+function applyTaskTeamPickerSelection(teamIds) {
+  const projectId = $('#task-project').value;
+  const primaryId = teamIds[0] || '';
+  if (primaryId && primaryId !== $('#task-subteam').value) {
+    populateTaskScope(projectId, rootId(primaryId), primaryId, teamIds);
+  } else {
+    if (!primaryId) {
+      $('#task-subteam').value = '';
+      fillTaskAssignees(projectId, '');
+    }
+    renderExtraTaskTeams(projectId, primaryId, teamIds);
+  }
+  refreshAITaskScope();
+  updateTaskCreateAvailability();
+  $('#task-team-toggle').focus();
 }
 function taskAIPrompt() {
   const project = state.projects.find(item => item.id === $('#task-project').value)?.name || 'the selected project';
@@ -1472,20 +1512,86 @@ const AI_AGENTS = {
 };
 function selectedAIAgent() { return AI_AGENTS[$('#task-ai-agent').value] || AI_AGENTS.chatgpt; }
 function updateAIAgentButton() { $('#copy-task-prompt').textContent = `Copy prompt & open ${selectedAIAgent().name}`; }
+function setProjectPickerOpen(open) {
+  $('#task-project-toggle').setAttribute('aria-expanded', String(open));
+  $('#task-project-options').hidden = !open;
+}
+function updateTaskProjectPicker() {
+  const select = $('#task-project');
+  const showPicker = !$('#task-id').value && Boolean(select.value);
+  select.hidden = showPicker;
+  $('#task-project-toggle').hidden = !showPicker;
+  $('#task-project-label').htmlFor = showPicker ? 'task-project-toggle' : select.id;
+  setProjectPickerOpen(false);
+  if (showPicker) $('#task-project-value').textContent = select.selectedOptions[0].textContent;
+}
+function selectTaskOption(option = null) {
+  const creating = option !== null;
+  for (const button of $('#task-option-chips').querySelectorAll('[data-task-option]')) {
+    const expanded = button.dataset.taskOption === option;
+    button.setAttribute('aria-expanded', String(expanded));
+    document.getElementById(button.getAttribute('aria-controls')).hidden = creating && !expanded;
+  }
+  $('#task-status-field').hidden = creating;
+  $('#task-scheduling-fields').hidden = creating && option !== 'due' && option !== 'priority';
+  positionTaskOptionPopup();
+}
+function positionTaskOptionPopup() {
+  const chip = $('#task-option-chips [aria-expanded="true"]');
+  if (!chip) return;
+  const editor = $('#task-edit-fields');
+  const anchor = chip.getBoundingClientRect();
+  const below = window.innerHeight - anchor.bottom;
+  const above = anchor.top;
+  const opensAbove = below < 240 && above > below;
+  editor.style.setProperty('--task-option-left', `${anchor.left}px`);
+  editor.style.setProperty('--task-option-top', opensAbove ? 'auto' : `${anchor.bottom + 6}px`);
+  editor.style.setProperty('--task-option-bottom', opensAbove ? `${window.innerHeight - anchor.top + 6}px` : 'auto');
+  editor.style.setProperty('--task-option-space', `${Math.max(0, (opensAbove ? above : below) - 14)}px`);
+}
 function setTaskCreationMode(mode) {
   if (busy || ($('#task-id').value && mode === 'ai')) return;
   const ai = mode === 'ai';
+  const creating = !$('#task-id').value;
+  const manual = creating && !ai;
+  const projectField = $('#task-project-field');
+  const chips = $('#task-option-chips');
+  chips.hidden = !creating;
+  for (const option of ['due', 'priority']) chips.querySelector(`[data-task-option="${option}"]`).hidden = ai;
+  $('#task-dialog').classList.toggle('task-creator-dialog', creating);
+  $('#task-edit-fields').classList.toggle('manual-task-editor', manual);
+  if (ai) {
+    $('#task-ai-panel').prepend(projectField);
+    $('#review-ai-tasks').before(chips);
+  } else {
+    if (manual) $('#single-task-fields').prepend(projectField);
+    else $('#task-assignee-field').after(projectField);
+    $('#task-scheduling-fields').before(chips);
+  }
+  selectTaskOption(creating ? '' : null);
   $('#task-creation-mode').value = ai ? 'ai' : 'single';
   $('#task-ai-panel').hidden = !ai; $('#single-task-fields').hidden = ai;
+  updateTaskProjectPicker();
+  updateTaskTeamPicker();
   for (const field of $('#single-task-fields').querySelectorAll('input,select,textarea')) field.disabled = ai;
   for (const button of document.querySelectorAll('[data-creation-mode]')) button.setAttribute('aria-pressed', String(button.dataset.creationMode === mode));
   $('#save-task').textContent = ai ? 'Create tasks' : 'Save task';
   $('#form-error').hidden = true;
-  if (ai) $('#task-ai-prompt').value = taskAIPrompt();
+  if (ai) refreshAITaskScope();
+  if (creating) updateTaskCreateAvailability();
+}
+function updateTaskCreateAvailability() {
+  $('#save-task').disabled = busy || !$('#task-subteam').value || ($('#task-creation-mode').value === 'ai' && !aiTaskPlan);
+}
+function refreshAITaskScope() {
+  if ($('#task-creation-mode').value !== 'ai') return;
+  $('#task-ai-prompt').value = taskAIPrompt();
+  invalidateAITasks();
 }
 function aiTaskError(message) { $('#task-ai-error').textContent = message; $('#task-ai-error').hidden = !message; }
 function invalidateAITasks() {
   aiTaskPlan = null; $('#task-ai-preview').replaceChildren(); $('#task-ai-summary').textContent = ''; aiTaskError('');
+  if ($('#task-creation-mode').value === 'ai') updateTaskCreateAvailability();
 }
 function normalizeAIResponse(text) {
   return text.trim()
@@ -1527,6 +1633,7 @@ function reviewAITasks() {
     const rows = validateAITasks($('#task-ai-response').value);
     checkAIDuplicates(rows, $('#task-project').value, selectedTaskTeams());
     aiTaskPlan = rows;
+    updateTaskCreateAvailability();
     $('#task-ai-preview').innerHTML = rows.map(task => `<li><h3>${escapeHTML(task.title)}</h3><div class="task-detail-meta"><span class="priority ${task.priority}">${escapeHTML(PRIORITY[task.priority])}</span><span class="muted">${escapeHTML(task.date || 'No due date')}</span></div><p>${escapeHTML(task.description)}</p></li>`).join('');
     $('#task-ai-summary').textContent = `${rows.length} task${rows.length === 1 ? '' : 's'} ready for review. All start as To do. Edit the response and review again to make changes.`;
   } catch (error) { aiTaskError(error.message); }
@@ -1607,6 +1714,7 @@ function openTask(id, showDiscussion = false) {
   $('#task-email-usage').hidden = true;
   aiTaskPlan = null;
   $('#task-ai-response').value = ''; $('#task-ai-preview').replaceChildren();
+  $('#task-ai-panel details').open = false;
   $('#task-ai-summary').textContent = ''; $('#task-ai-error').hidden = true;
   $('#task-creation-options').hidden = Boolean(task);
   for (const field of $('#task-form').querySelectorAll('input,select,textarea')) field.disabled = false;
@@ -1614,7 +1722,7 @@ function openTask(id, showDiscussion = false) {
   $('#task-extra-teams').replaceChildren();
   setTaskCreationMode('single');
   $('#task-title').value = task?.title || ''; $('#task-description').value = task?.description || '';
-  $('#task-status').value = task?.status || 'todo'; $('#task-priority').value = task?.priority || 'medium';
+  $('#task-status').value = task?.status || 'todo'; $('#task-priority').value = task?.priority || 'low';
   $('#task-assignee').innerHTML = options([['', 'Unassigned'], ...state.profiles.map(profile => [profile.id, profile.display_name || 'Workspace member'])]);
   if (task?.assignee_id && !state.profiles.some(profile => profile.id === task.assignee_id)) $('#task-assignee').insertAdjacentHTML('beforeend', options([[task.assignee_id, 'Workspace member']]));
   $('#task-assignee').value = task?.assignee_id || ''; $('#task-due').value = task ? dueDate(task) : '';
@@ -1636,6 +1744,7 @@ function openTask(id, showDiscussion = false) {
     $('#task-project').value = projects.some(project => project.id === state.project) ? state.project : projects[0]?.id || '';
     populateTaskScope($('#task-project').value, state.team, state.subteam);
   }
+  updateTaskProjectPicker();
   $('#delete-task').hidden = !task || !canEdit(task);
   if (task) {
     fillTaskAssignees(task.project_id, task.team_id, taskAssigneeValue(task));
@@ -1718,6 +1827,7 @@ function lockForm(locked) {
     else { field.disabled = field.dataset.wasDisabled === 'true'; delete field.dataset.wasDisabled; }
   }
   $('#save-task').textContent = locked ? 'Saving…' : $('#task-creation-mode').value === 'ai' ? 'Create tasks' : 'Save task';
+  if (!locked && $('#task-creation-mode').value === 'ai') updateTaskCreateAvailability();
 }
 function formError(error) { $('#form-error').textContent = errorMessage(error); $('#form-error').hidden = false; }
 async function saveTask(event) {
@@ -1922,12 +2032,69 @@ document.addEventListener('visibilitychange', () => { if (!document.hidden) queu
 // Also reconcile changes that do not emit an authorized row event, such as revoked access.
 setInterval(() => { if (!document.hidden && (notesFeed.scope || discussion.scope)) queueNotesRefresh(); }, 30000);
 for (const button of document.querySelectorAll('[data-creation-mode]')) button.addEventListener('click', () => setTaskCreationMode(button.dataset.creationMode));
+$('#task-option-chips').addEventListener('click', event => {
+  const button = event.target.closest('[data-task-option]');
+  if (!button) return;
+  const opening = button.getAttribute('aria-expanded') !== 'true';
+  selectTaskOption(opening ? button.dataset.taskOption : '');
+  if (!opening) return;
+  const panel = document.getElementById(button.getAttribute('aria-controls'));
+  const teamControl = $('#task-team-picker').hidden ? $('#task-team') : $('#task-team-toggle');
+  (button.dataset.taskOption === 'teams' ? teamControl : panel.querySelector('select, input')).focus();
+});
+$('#task-dialog').addEventListener('click', event => {
+  const chip = $('#task-option-chips [aria-expanded="true"]');
+  if (chip && !event.target.closest('#task-option-chips') &&
+    !document.getElementById(chip.getAttribute('aria-controls')).contains(event.target)) selectTaskOption('');
+});
+$('#task-dialog').addEventListener('keydown', event => {
+  const chip = $('#task-option-chips [aria-expanded="true"]');
+  if (event.key !== 'Escape' || !chip) return;
+  event.preventDefault();
+  selectTaskOption('');
+  chip.focus();
+});
+window.addEventListener('resize', positionTaskOptionPopup);
+$('#task-dialog').addEventListener('scroll', positionTaskOptionPopup);
 $('#task-ai-agent').addEventListener('change', updateAIAgentButton);
 updateAIAgentButton();
 $('#copy-task-prompt').addEventListener('click', copyTaskPrompt);
 $('#review-ai-tasks').addEventListener('click', reviewAITasks);
 $('#task-ai-response').addEventListener('input', invalidateAITasks);
+$('#task-project-toggle').addEventListener('click', () => {
+  const select = $('#task-project');
+  const open = $('#task-project-options').hidden;
+  if (open) {
+    const choices = Array.from(select.options, option => {
+      const button = document.createElement('button');
+      button.type = 'button';
+      button.className = 'task-project-choice';
+      button.textContent = option.textContent;
+      if (option.selected) button.setAttribute('aria-current', 'true');
+      button.addEventListener('click', () => {
+        if (select.value !== option.value) {
+          select.value = option.value;
+          select.dispatchEvent(new Event('change', { bubbles: true }));
+        }
+        updateTaskProjectPicker();
+        $('#task-project-toggle').focus();
+      });
+      return button;
+    });
+    $('#task-project-options').replaceChildren(...choices);
+  }
+  setProjectPickerOpen(open);
+});
 $('#task-project').addEventListener('change', () => populateTaskScope($('#task-project').value));
+$('#task-team-toggle').addEventListener('click', () => setTaskTeamPickerOpen($('#task-team-options').hidden));
+$('#task-team-options').addEventListener('click', event => {
+  const id = event.target.closest('[data-add-team]')?.dataset.addTeam;
+  if (id) applyTaskTeamPickerSelection([...selectedTaskTeams(), id]);
+});
+$('#task-team-chips').addEventListener('click', event => {
+  const id = event.target.closest('[data-remove-team]')?.dataset.removeTeam;
+  if (id) applyTaskTeamPickerSelection(selectedTaskTeams().filter(teamId => teamId !== id));
+});
 $('#task-team').addEventListener('change', () => populateTaskScope($('#task-project').value, $('#task-team').value));
 $('#task-subteam').addEventListener('change', () => {
   fillTaskAssignees($('#task-project').value, $('#task-subteam').value);
@@ -1939,9 +2106,9 @@ $('#task-assignee').addEventListener('change', () => {
   if (!value.startsWith('group:')) return;
   const groupId = value.slice(6);
   populateTaskScope($('#task-project').value, rootId(groupId), groupId);
-  if ($('#task-creation-mode').value === 'ai') { $('#task-ai-prompt').value = taskAIPrompt(); invalidateAITasks(); }
+  refreshAITaskScope();
 });
-for (const selector of ['#task-project', '#task-team', '#task-subteam', '#task-extra-teams']) $(selector).addEventListener('change', () => { if ($('#task-creation-mode').value === 'ai') { $('#task-ai-prompt').value = taskAIPrompt(); invalidateAITasks(); } });
+for (const selector of ['#task-project', '#task-team', '#task-subteam', '#task-extra-teams']) $(selector).addEventListener('change', refreshAITaskScope);
 for (const selector of ['#task-search', '#status-filter', '#priority-filter']) $(selector).addEventListener(selector === '#task-search' ? 'input' : 'change', () => renderTasks(scopedTasks()));
 document.addEventListener('click', event => { const button = event.target.closest('[data-edit]'); if (button) openTask(button.dataset.edit); });
 document.addEventListener('change', toggleTask);

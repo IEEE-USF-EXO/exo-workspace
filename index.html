@@ -433,7 +433,7 @@
     </div>
 
     <!-- Task dialog: shared drawer for task details, editing, and creation. -->
-    <dialog id="task-dialog">
+    <dialog id="task-dialog" aria-labelledby="dialog-title">
       <form id="task-form">
         <div class="task-drawer-header">
           <div class="dialog-heading">
@@ -501,19 +501,16 @@
             <option value="ai">Tasks from AI</option>
           </select>
           <section id="task-ai-panel" class="task-ai-panel" hidden aria-label="Create tasks from an agent response">
-            <div class="panel-heading">
-              <h3>Draft with your agent</h3>
-              <div class="task-ai-agent-action">
-                <label for="task-ai-agent">Agent</label>
-                <select id="task-ai-agent">
-                  <option value="chatgpt">ChatGPT</option>
-                  <option value="claude">Claude</option>
-                  <option value="gemini">Gemini</option>
-                </select>
-                <button type="button" class="button secondary" id="copy-task-prompt">Copy prompt &amp; open ChatGPT</button>
-              </div>
+            <div class="task-ai-agent-action">
+              <label for="task-ai-agent">Agent</label>
+              <select id="task-ai-agent">
+                <option value="chatgpt">ChatGPT</option>
+                <option value="claude">Claude</option>
+                <option value="gemini">Gemini</option>
+              </select>
+              <button type="button" class="button secondary" id="copy-task-prompt">Copy prompt &amp; open ChatGPT</button>
             </div>
-            <p class="setup-description">Copy the prompt to your agent, replace the text between <code>WORK_NOTES_START</code> and <code>WORK_NOTES_END</code> with your notes, then paste only its JSON response here. Review before creating. The project, group and assignee below apply to every task.</p>
+            <p class="setup-description">Add your work notes to the copied prompt, then paste the agent’s JSON response here. Teams and assignee apply to the whole batch.</p>
             <details>
               <summary>View prompt</summary>
               <textarea id="task-ai-prompt" rows="9" readonly aria-label="Task drafting prompt"></textarea>
@@ -532,46 +529,67 @@
           </section>
           <div id="single-task-fields">
             <label for="task-title">Task name</label>
-            <input id="task-title" required maxlength="160" placeholder="What needs to get done?">
+            <input id="task-title" required maxlength="160" placeholder="Task name">
             <label for="task-description">Description <span class="muted">(optional)</span></label>
             <textarea id="task-description" rows="3" placeholder="Add a little context…" maxlength="10000"></textarea>
-            <div class="form-grid">
-              <div>
+            <div id="task-option-chips" role="group" aria-label="Task options" hidden>
+              <button type="button" class="button secondary" data-task-option="teams" aria-controls="task-team-fields" aria-expanded="false">Teams</button>
+              <button type="button" class="button secondary" data-task-option="assignee" aria-controls="task-assignee-field" aria-expanded="false">Assignee</button>
+              <button type="button" class="button secondary" data-task-option="due" aria-controls="task-due-field" aria-expanded="false">Due date</button>
+              <button type="button" class="button secondary" data-task-option="priority" aria-controls="task-priority-field" aria-expanded="false">Priority</button>
+            </div>
+            <div class="form-grid" id="task-scheduling-fields">
+              <div id="task-status-field">
                 <label for="task-status">Status</label>
                 <select id="task-status"></select>
               </div>
-              <div>
+              <div id="task-priority-field">
                 <label for="task-priority">Priority</label>
                 <select id="task-priority"></select>
               </div>
-              <div>
+              <div id="task-due-field">
                 <label for="task-due">Due date</label>
                 <input id="task-due" type="date">
               </div>
             </div>
           </div>
           <div class="form-grid">
-            <div>
+            <div id="task-assignee-field">
               <label for="task-assignee">Assignee</label>
               <select id="task-assignee"></select>
             </div>
-            <div>
-              <label for="task-project">Project</label>
+            <div id="task-project-field">
+              <label id="task-project-label" for="task-project">Project</label>
               <select id="task-project" required></select>
+              <button type="button" class="task-project-choice" id="task-project-toggle" aria-labelledby="task-project-label task-project-value" aria-expanded="false" aria-controls="task-project-options" hidden>
+                <span id="task-project-value"></span><span aria-hidden="true">▾</span>
+              </button>
+              <div id="task-project-options" class="task-project-options" hidden></div>
             </div>
-            <div>
-              <label for="task-team">Primary team</label>
-              <select id="task-team" required></select>
+            <div id="task-team-fields">
+              <div class="task-native-team-field">
+                <label for="task-team">Primary team</label>
+                <select id="task-team" required></select>
+              </div>
+              <div class="full-width task-native-team-field">
+                <label for="task-subteam">Subteam</label>
+                <select id="task-subteam" required></select>
+              </div>
+              <fieldset class="full-width task-native-team-field" id="task-shared-teams" hidden>
+                <legend>Additional teams or subteams</legend>
+                <div id="task-extra-teams"></div>
+                <p class="muted" id="task-shared-team-help"></p>
+              </fieldset>
+              <div class="full-width" id="task-team-picker" hidden>
+                <label for="task-team-toggle">Teams and subteams</label>
+                <button type="button" class="task-project-choice" id="task-team-toggle" aria-expanded="false" aria-controls="task-team-options">
+                  Add team or subteam <span aria-hidden="true">▾</span>
+                </button>
+                <div id="task-team-options" class="task-project-options" hidden></div>
+                <div id="task-team-chips" class="task-team-chips" aria-label="Selected teams and subteams"></div>
+                <p class="muted" id="task-team-picker-help">The primary team determines who can be selected as the named assignee.</p>
+              </div>
             </div>
-            <div class="full-width">
-              <label for="task-subteam">Subteam</label>
-              <select id="task-subteam" required></select>
-            </div>
-            <fieldset class="full-width" id="task-shared-teams" hidden>
-              <legend>Additional teams or subteams</legend>
-              <div id="task-extra-teams"></div>
-              <p class="muted" id="task-shared-team-help"></p>
-            </fieldset>
           </div>
         </div>
       </form>
