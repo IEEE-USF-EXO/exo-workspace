@@ -26,16 +26,3 @@ private credentials in the service that uses them. Keep the Resend key,
 Google OAuth client secret, Supabase service keys, Cron secret, and private
 roster exports out of Git. The Supabase URL and public browser key in
 `config.js` are intended for the frontend.
-
-## Task email rollout
-
-The Resend API key has been added to Supabase. Sending still requires DNS
-verification in Resend and the remaining Supabase setup. Use the exact
-records displayed for the sending domain in Resend. For the current Forge
-setup on `exo-work.space`, those are a DKIM TXT record at
-`resend._domainkey` and CNAME records at `rsend` and `send`. Task emails
-use Resend's sending API. Inbound mail is outside this setup.
-
-After the worker and Cron job are configured, enable email sending and
-create a test task for a known recipient. Verify the email, task link, and
-daily counter before relying on it for team assignments.

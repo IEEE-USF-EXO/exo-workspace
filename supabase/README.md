@@ -253,48 +253,51 @@ Overview, verify that the task appears once.
 
 ## New-task emails with Resend
 
-Manual and AI task creation queue one email per eligible recipient when
-notifications are enabled. Recipients include the named assignee and members
-of the assigned teams and their subteams who have confirmed workspace accounts
-and task access. GitHub imports and task edits stay quiet. The creator shows
-emails accepted by Resend today and how many are queued. The counter covers
-Exo-Workbench traffic and resets at midnight UTC. The worker reserves up to
-100 delivery slots per day and 3,000 per month. Queued work waits for room.
+### Using task emails
 
-1. Apply `task-notifications.sql` after `shared-tasks.sql`. Email starts off.
-2. Verify a sender domain in Resend and create a sending-only API key.
-3. Set the Edge Function secrets `RESEND_API_KEY`, `TASK_EMAIL_FROM`,
-   `TASK_EMAIL_WORKSPACE_URL` (the production HTTPS app URL), and
-   `TASK_EMAIL_WORKER_SECRET` (a long random secret used only for Cron).
-4. Deploy `task-email-worker` with the repository function configuration.
-   Configure Supabase Cron to POST to `/functions/v1/task-email-worker`
-   once a minute, using `Authorization: Bearer <TASK_EMAIL_WORKER_SECRET>`.
-   Store the Cron copy of the secret in Vault and reference it in the job.
-5. Enable sending in the SQL Editor and verify with a test assignment.
+Create a task from **New task** or **Tasks from AI**. When notifications are on,
+the app automatically queues one email per eligible recipient. Selecting a
+team includes its subteams. Selecting a subteam includes that branch. Adding
+a named assignee includes that person alongside eligible group members, with
+duplicates removed. Eligible recipients need a confirmed workspace email and
+access to the task. A creator who meets those rules can receive the email too.
+Only new tasks created through these app flows queue emails. Task edits,
+GitHub imports, and tasks created before sending was enabled stay quiet.
 
-```sql
-update exo_private.task_email_settings set enabled = true where singleton;
-```
+The task form shows how many workspace emails Resend accepted today and how
+many are queued. The daily counter resets at midnight UTC. The worker reserves
+up to 100 delivery slots per UTC day and 3,000 per UTC month. Pending deliveries
+wait for an available slot. The email subject is **New task in EXO Workspace**
+and the link opens the assigned task after sign-in.
 
-Set `enabled` to `false` to pause sending and creation of new notifications.
-Existing pending deliveries can resume when enabled. The queue is private.
-For troubleshooting, use the worker logs and inspect the `state` and `failure`
-fields in `exo_private.task_emails` in the SQL Editor. The worker rechecks
-recipient access before delivery and uses Resend idempotency keys for retries.
+### Setting up sending
 
-- [Schedule an Edge Function with Cron and Vault](https://supabase.com/docs/guides/functions/schedule-functions)
-- [Resend sending key permissions](https://resend.com/changelog/new-api-key-permissions)
+1. Apply [`task-notifications.sql`](task-notifications.sql) after
+   [`shared-tasks.sql`](shared-tasks.sql). The initial setting is off.
+2. In Resend, verify sending for `exo-work.space`. Copy the DNS records
+   displayed for that domain into Porkbun. The Forge setup uses a DKIM TXT
+   record at `resend._domainkey` and CNAME records at `rsend` and `send`.
+   Create a sending-only API key restricted to this domain.
+3. Add these values in **Supabase → Edge Functions → Secrets**.
 
-### Rollout checkpoint · November 6, 2026
+| Name | Value |
+| --- | --- |
+| `RESEND_API_KEY` | The sending-only key from Resend |
+| `TASK_EMAIL_FROM` | `EXO Workspace <tasks@exo-work.space>`, including the angle brackets |
+| `TASK_EMAIL_WORKSPACE_URL` | `https://exo-work.space/` |
+| `TASK_EMAIL_WORKER_SECRET` | A long random secret generated for the worker |
 
-The maintainer reported applying the Notes & comms, shared tasks, and task
-notification SQL updates, adding the four Edge Function settings, and deploying
-`task-email-worker` with legacy JWT verification off. Resume at the Cron
-setup. Vault setup, Cron invocations, Resend sender verification, and live
-delivery still need confirmation. Keep sending disabled during these checks.
+Deploy [the worker](functions/task-email-worker/index.ts) under the exact slug
+`task-email-worker`. Leave legacy JWT verification off as configured in
+[`config.toml`](config.toml). The worker checks its own bearer secret. The
+dashboard's generic invocation example uses the public client key, so it
+cannot authenticate this worker on its own.
 
-In Vault, add `task_email_worker_secret` with the same value as the Edge
-Function's `TASK_EMAIL_WORKER_SECRET`. With Cron and `pg_net` enabled, run:
+In **Supabase Vault**, create `task_email_worker_secret` with the exact same
+value as `TASK_EMAIL_WORKER_SECRET`. Store the raw secret in both places.
+The Cron job adds the `Bearer ` prefix. If you rotate the secret, update both
+copies. With Cron and `pg_net` enabled, run the schedule in the SQL Editor.
+The URL below is for the production Supabase project.
 
 ```sql
 select cron.schedule(
@@ -316,7 +319,60 @@ select cron.schedule(
 );
 ```
 
-Check for a POST with status 200 in the worker's Invocations tab. Then confirm
-Resend shows Sending as verified for `exo-work.space`. Enable notifications
-and create one task for a known test recipient. Confirm receipt, the task link,
-and the counter before sending to a team.
+See the [Supabase Cron and Vault guide](https://supabase.com/docs/guides/functions/schedule-functions)
+and [Resend sending key permissions](https://resend.com/changelog/new-api-key-permissions).
+
+### Enabling and testing
+
+1. In **Edge Functions → task-email-worker → Logs**, look for a scheduled
+   `POST 200`. With sending off, the response body should be `{"sent":0}`.
+2. Confirm that Resend shows **Sending** as verified and the live site serves
+   the task creator with email queue support. Open **New task** and look for
+   the task email counter or the message that notifications are off.
+3. Enable task emails in the SQL Editor. This applies to all new tasks created
+   through the supported app flows in that Supabase project.
+
+```sql
+update exo_private.task_email_settings set enabled = true where singleton;
+```
+
+Create a fresh task in a test group whose eligible recipients all expect the
+message. After Cron runs, confirm the message in Resend and in the recipient's
+inbox. Follow the link to the task and reopen **New task** to check the counter.
+To pause, run the same SQL with `enabled = false`. This stops new queue entries
+and claims. Pending deliveries can resume when sending is enabled again.
+
+### Troubleshooting
+
+- **Scheduled calls return `401`.** Check that the two worker secret values
+  match and legacy JWT verification is off. The next scheduled call retries
+  automatically.
+- **Scheduled calls return `503`.** Check the Edge Function secrets and confirm
+  the workspace URL is a valid HTTPS URL.
+- **Scheduled calls return `200`, but the email is missing.** Check the queue
+  with the read-only query below. Replace the example title with your task's
+  title.
+
+```sql
+select t.id, t.title, t.created_at, q.recipient_id,
+       q.state, q.failure, q.provider_id, q.sent_at
+from public.tasks t
+left join exo_private.task_emails q on q.task_id = t.id
+where t.title = 'YOUR TEST TASK TITLE'
+order by t.created_at desc;
+```
+
+A blank state means the task has no queue entries. Check whether sending was
+on when the task was created, whether the deployed app uses
+`create_notified_tasks`, and whether the assignment has eligible recipients.
+If the task has queue entries but a specific person is missing, check their
+membership and confirmed workspace email. For `pending` or `failed`, check
+`failure`. The worker marks an entry `skipped` when its recipient is no longer
+eligible. For `sent`, use `provider_id` to look up delivery in Resend.
+
+### Production checkpoint · November 6, 2026
+
+The maintainer applied the SQL updates, configured the worker and Vault, and
+confirmed scheduled `POST 200` responses. The app changes landed on `main` in
+`fe9971d`. Verify delivery with a fresh test task after GitHub Pages serves
+that build.
