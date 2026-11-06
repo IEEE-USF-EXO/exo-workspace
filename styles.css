@@ -271,6 +271,11 @@ button:disabled, input:disabled, select:disabled, textarea:disabled { opacity: .
 button:disabled:hover { filter: none; }
 .task-title-button:disabled { opacity: 1; cursor: default; }
 .full-width { grid-column: 1 / -1; }
+#task-shared-teams { min-width: 0; border: 1px solid var(--line); border-radius: 7px; padding: 10px 12px; }
+#task-extra-teams { display: grid; gap: 6px; }
+#task-extra-teams label { display: flex; align-items: center; gap: 6px; }
+#task-extra-teams input { width: auto; }
+#task-shared-team-help { margin-top: 8px; font-size: 12px; }
 .form-error { color: #9d5a40; background: #fff5ee; border: 1px solid #ebd6c6; border-radius: 6px; padding: 11px; font-size: 11px; margin-bottom: 16px; }
 .badge.blocked { background: #f8e9e4; color: #ad6d59; }
 .badge.review { background: #eaf1f4; color: #648692; }
@@ -412,6 +417,21 @@ body:has(#member-preview:not([hidden])) .topbar { border-bottom-color: #cdbf98; 
 .task-references li { padding-block: 9px; overflow-wrap: anywhere; }
 .task-references a { text-decoration: underline; text-underline-offset: 3px; }
 .updates-panel, .history-panel { margin-top: 22px; }
+.overview-updates { align-items: start; }
+.notes-composer { display: grid; gap: 8px; padding: 0 22px 12px; }
+.notes-subteam-field { display: grid; gap: 8px; }
+.notes-composer label { font-size: 12px; font-weight: 600; }
+.notes-actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.notes-status { padding: 0 22px 12px; font-size: 12px; }
+.notes-status:empty { display: none; }
+.note-entry { display: block; overflow-wrap: anywhere; }
+.note-entry summary { cursor: pointer; }
+.note-entry .note-meta { display: block; margin: 4px 0; font-size: 11px; }
+.note-entry .note-body { margin-top: 8px; white-space: pre-wrap; }
+.note-entry .text-button { text-align: left; }
+.note-entry [data-note-edit] + [data-note-delete] { margin-inline-start: 12px; }
+.task-discussion .notes-composer, .task-discussion .notes-status,
+.task-discussion .note-entry { padding-inline: 0; }
 .activity-list { list-style: none; margin: 0; padding: 0; }
 .activity-item { padding: 15px 22px; border-top: 1px solid var(--line); font-size: 12px; }
 .activity-item p { line-height: 1.8; overflow-wrap: anywhere; }

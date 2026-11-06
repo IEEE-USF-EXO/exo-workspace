@@ -10,6 +10,7 @@ const TASK_FIELDS = `${CORE_TASK_FIELDS},archived_at,archived_by`;
 const ACTIVITY_FIELDS = 'id,task_id,actor_id,actor_name,task_title,project_id,team_id,action,changes,created_at';
 const state = { tasks: [], teams: [], projects: [], profiles: [], memberships: [], leadership: [], activity: [], rosterPeople: [], rosterAccounts: [], rosterGroups: [], project: '', team: 'all', subteam: 'all' };
 let rosterReady = false;
+let sharedTasksReady = false;
 let activityReady = false, recentKey = '', recentRequest = 0, recentLoading = false, recentError = '';
 let recentExpanded = false, recentScope = '';
 let auditRequest = 0;
@@ -17,7 +18,7 @@ let memberListRequest = 0;
 const audit = { rows: [], loading: false, more: false, loaded: false, error: '' };
 let taskHistoryRequest = 0;
 const taskHistory = { taskId: '', rows: [], more: false, loading: false };
-const taskFields = () => `${activityReady ? TASK_FIELDS : CORE_TASK_FIELDS}${rosterReady ? ',assignee_person_id' : ''}`;
+const taskFields = () => `${activityReady ? TASK_FIELDS : CORE_TASK_FIELDS}${rosterReady ? ',assignee_person_id' : ''}${sharedTasksReady ? ',team_ids' : ''}`;
 const TABS = ['overview', 'tasks', 'files', 'administration'];
 let client, session = null, phase = 'connecting', busy = false, generation = 0, authReady = false, activeTab = TABS.includes(location.hash.slice(1)) ? location.hash.slice(1) : 'overview';
 let pendingAuthError = '';
@@ -175,7 +176,7 @@ function taskAssignedTo(task, userId) {
 }
 function fillTaskAssignees(projectId, teamId, preferred = $('#task-assignee').value) {
   const people = assignmentPeople(teamId, projectId);
-  const groups = state.teams.filter(team => team.id === teamId || canManageIn(team.id, projectId));
+  const groups = state.teams.filter(team => team.id === teamId || (!sharedTasksReady && canManageIn(team.id, projectId)));
   $('#task-assignee').innerHTML = `<optgroup label="Groups">${options(groups.map(team => [`group:${team.id}`, teamPath(team.id)]))}</optgroup><optgroup label="People in the selected group">${options(people.map(person => [person.value, `${person.name}${person.pending ? ' · Not signed in yet' : ''}`]))}</optgroup>`;
   if (!preferred || preferred.startsWith('group:')) preferred = `group:${teamId}`;
   const existing = state.tasks.find(task => task.id === $('#task-id').value);
@@ -187,8 +188,8 @@ function assignmentHasAccess(value, teamId, projectId) {
   return !value || (value.startsWith('group:') ? value.slice(6) === teamId && canManageIn(teamId, projectId) :
     value.startsWith('person:') ? personHasGroupAccess(value.slice(7), teamId, projectId) : userHasGroupAccess(value, teamId, projectId));
 }
-function canManageIn(teamId, projectId) {
-  if (!canWorkIn(teamId, projectId) || teamIsArchived(teamId) || preview.mode === 'group') return false;
+function canManageIn(teamId, projectId, allowArchived = false) {
+  if (!canWorkIn(teamId, projectId) || (!allowArchived && teamIsArchived(teamId)) || preview.mode === 'group') return false;
   const parents = ancestors(teamId), id = viewUserId();
   return viewIsAdmin() || state.leadership.some(role => role.user_id === id && !role.revoked_at && parents.includes(role.team_id) && ((role.role === 'team_lead' && !role.project_id) || (role.role === 'project_lead' && role.project_id === projectId)));
 }
@@ -203,14 +204,32 @@ function creationBlockReason() {
   if (!activeTeams().length) return `${prefix}${isAdmin() ? 'Open Administration to create a team and enable task creation.' : 'Ask your EXO chair to create a team.'}`;
   return viewIsMember() ? '' : 'An administrator needs to add you to a group.';
 }
-function canEdit(task) { return !busy && !preview.mode && !task.archived_at && canManageIn(task.team_id, task.project_id); }
-function canProgress(task) { return !busy && !preview.mode && !task.archived_at && !teamIsArchived(task.team_id) && task.status !== 'cancelled' && canWorkIn(task.team_id, task.project_id); }
+const taskTeams = task => task.team_ids || [task.team_id];
+const taskTeamNames = task => taskTeams(task).map(teamPath).join(', ');
+const taskTeamsArchived = task => taskTeams(task).every(teamIsArchived);
+function taskInScope(task, archived = false) {
+  const taskArchived = Boolean(task.archived_at) || taskTeamsArchived(task);
+  return task.project_id === state.project && taskArchived === archived && taskTeams(task).some(id =>
+    (archived || !teamIsArchived(id)) && canWorkIn(id, task.project_id)
+    && (state.team === 'all' || descendantOf(id, state.team))
+    && (state.subteam === 'all' || descendantOf(id, state.subteam)));
+}
+function canSeeTask(task) {
+  const archived = task.archived_at || taskTeamsArchived(task);
+  return taskTeams(task).some(id => (archived || !teamIsArchived(id)) && canWorkIn(id, task.project_id));
+}
+function canChangeTaskTeams(task) {
+  return viewIsAdmin() || taskTeams(task).every(id => canManageIn(id, task.project_id, true));
+}
+function canEdit(task) { return !busy && !preview.mode && !task.archived_at && taskTeams(task).some(id => canManageIn(id, task.project_id)); }
+function canProgress(task) { return !busy && !preview.mode && !task.archived_at && !taskTeamsArchived(task) && task.status !== 'cancelled' && canSeeTask(task); }
 function scopedTasks() {
   if (!viewIsMember()) return [];
   const lens = $('#task-lens').value;
-  return state.tasks.filter(task => canWorkIn(task.team_id, task.project_id) && task.project_id === state.project && (activeTab === 'tasks' && $('#archive-filter').value === 'archived' ? Boolean(task.archived_at) || teamIsArchived(task.team_id) : !task.archived_at && !teamIsArchived(task.team_id)) && (state.team === 'all' || descendantOf(task.team_id, state.team)) && (state.subteam === 'all' || descendantOf(task.team_id, state.subteam)) && (lens !== 'assigned' || (viewUserId() && taskAssignedTo(task, viewUserId()))));
+  return state.tasks.filter(task => taskInScope(task, activeTab === 'tasks' && $('#archive-filter').value === 'archived')
+    && (lens !== 'assigned' || taskAssignedTo(task, viewUserId())));
 }
-function clearData() { for (const key of ['tasks', 'teams', 'projects', 'profiles', 'memberships', 'leadership', 'activity', 'rosterPeople', 'rosterAccounts', 'rosterGroups']) state[key] = []; activityReady = false; rosterReady = false; recentKey = ''; ++recentRequest; ++auditRequest; Object.assign(audit, { rows: [], loading: false, more: false, loaded: false, error: '' }); state.project = ''; state.team = 'all'; state.subteam = 'all'; for (const selector of ['#task-dialog', '#setup-dialog', '#members-dialog', '#projects-dialog', '#teams-dialog']) if ($(selector).open) $(selector).close(); if (!session && $('#import-dialog').open) $('#import-dialog').close(); }
+function clearData() { for (const key of ['tasks', 'teams', 'projects', 'profiles', 'memberships', 'leadership', 'activity', 'rosterPeople', 'rosterAccounts', 'rosterGroups']) state[key] = []; activityReady = false; rosterReady = false; sharedTasksReady = false; recentKey = ''; ++recentRequest; ++auditRequest; Object.assign(audit, { rows: [], loading: false, more: false, loaded: false, error: '' }); state.project = ''; state.team = 'all'; state.subteam = 'all'; for (const selector of ['#task-dialog', '#setup-dialog', '#members-dialog', '#projects-dialog', '#teams-dialog']) if ($(selector).open) $(selector).close(); if (!session && $('#import-dialog').open) $('#import-dialog').close(); }
 function normalizeScope() {
   if (!activeProjects().some(project => project.id === state.project)) state.project = activeProjects()[0]?.id || '';
   const roots = rootsForProject(state.project);
@@ -257,6 +276,7 @@ function activityVerb(event) {
   return { created: 'created', updated: 'updated', deleted: 'deleted', archived: 'archived', restored: 'restored' }[event.action] || event.action;
 }
 function historyValue(field, value) {
+  if (field === 'team_ids' && Array.isArray(value)) return value.map(teamPath).join(', ');
   if (value == null || value === '') return 'None';
   if (field === 'status') return STATUS[value] || value;
   if (field === 'priority') return PRIORITY[value] || value;
@@ -272,7 +292,7 @@ function activityHTML(event, details = false) {
   const task = state.tasks.find(task => task.id === taskId);
   const label = event.task_title || event.entity_label || task?.title || 'Task';
   const actor = event.actor_id && event.actor_id === viewUserId() ? 'You' : event.actor_name || (event.actor_id ? userName(event.actor_id) : 'Administration / system');
-  const title = task && canWorkIn(task.team_id, task.project_id) ? `<button type="button" class="text-button" data-edit="${escapeHTML(taskId)}">${escapeHTML(label)}</button>` : escapeHTML(label);
+  const title = task && canSeeTask(task) ? `<button type="button" class="text-button" data-edit="${escapeHTML(taskId)}">${escapeHTML(label)}</button>` : escapeHTML(label);
   const changes = Object.entries(event.changes || {}).filter(([field]) => !['id', 'created_at', 'updated_at', 'completed_at', 'archived_by'].includes(field));
   const detail = details && changes.length ? `<details class="event-details"><summary>View changes</summary><dl>${changes.map(([field, change]) => `<div><dt>${escapeHTML(field.replaceAll('_', ' '))}</dt><dd>${escapeHTML(historyValue(field, change?.from))} → ${escapeHTML(historyValue(field, change?.to))}</dd></div>`).join('')}</dl></details>` : '';
   return `<li class="activity-item"><p><strong>${escapeHTML(actor)}</strong> ${escapeHTML(activityVerb(event))} ${title}</p><time datetime="${escapeHTML(event.created_at)}">${escapeHTML(new Date(event.created_at).toLocaleString())}</time>${detail}</li>`;
@@ -285,7 +305,11 @@ function activityPage(query, cursor, size = 30) {
 function renderRecentUpdates() {
   const scope = `${generation}|${state.project}|${state.team}|${state.subteam}|${preview.mode}|${preview.subject}`;
   if (recentScope !== scope) { recentScope = scope; recentExpanded = false; }
-  const rows = state.activity.filter(event => event.project_id === state.project && canWorkIn(event.team_id, event.project_id) && (state.team === 'all' || descendantOf(event.team_id, state.team)) && (state.subteam === 'all' || descendantOf(event.team_id, state.subteam)));
+  const rows = state.activity.filter(event => event.project_id === state.project
+    && (event.tasks?.team_ids || [event.team_id]).some(id => canWorkIn(id, event.project_id)
+      && (!sharedTasksReady || !teamIsArchived(id))
+      && (state.team === 'all' || descendantOf(id, state.team))
+      && (state.subteam === 'all' || descendantOf(id, state.subteam))));
   const visible = recentExpanded ? rows : rows.slice(0, 3);
   $('#recent-updates').innerHTML = visible.length ? visible.map(event => activityHTML(event)).join('') : `<li class="activity-empty">${recentLoading ? 'Loading updates…' : recentError || 'No recent updates in this group.'}</li>`;
   $('#toggle-updates').hidden = rows.length <= 3;
@@ -296,11 +320,13 @@ function renderRecentUpdates() {
 async function refreshRecentActivity() {
   if (phase !== 'ready' || !activityReady || !viewIsMember()) { state.activity = []; renderRecentUpdates(); return; }
   const owner = session.user.id, version = generation, request = ++recentRequest;
-  const groups = state.teams.filter(team => canWorkIn(team.id, state.project) && (state.team === 'all' || descendantOf(team.id, state.team)) && (state.subteam === 'all' || descendantOf(team.id, state.subteam))).map(team => team.id);
+  const groups = state.teams.filter(team => (!sharedTasksReady || !teamIsArchived(team.id)) && canWorkIn(team.id, state.project) && (state.team === 'all' || descendantOf(team.id, state.team)) && (state.subteam === 'all' || descendantOf(team.id, state.subteam))).map(team => team.id);
   if (!groups.length) { state.activity = []; recentLoading = false; renderRecentUpdates(); return; }
   recentLoading = true; recentError = ''; renderRecentUpdates();
   try {
-    const { data, error } = await client.from('task_activity').select(ACTIVITY_FIELDS).eq('project_id', state.project).in('team_id', groups).order('created_at', { ascending: false }).order('id', { ascending: false }).range(0, 99);
+    const query = client.from('task_activity').select(sharedTasksReady ? `${ACTIVITY_FIELDS},tasks!inner(team_ids)` : ACTIVITY_FIELDS).eq('project_id', state.project);
+    const scoped = sharedTasksReady ? query.overlaps('tasks.team_ids', groups) : query.in('team_id', groups);
+    const { data, error } = await scoped.order('created_at', { ascending: false }).order('id', { ascending: false }).range(0, 99);
     if (request !== recentRequest || owner !== session?.user.id || version !== generation) return;
     if (error) throw error; state.activity = data || [];
   } catch { if (request === recentRequest && owner === session?.user.id && version === generation) recentError = 'Could not load updates. Try Refresh.'; }
@@ -333,6 +359,285 @@ async function loadAdminHistory(reset = true) {
   } catch { if (request === auditRequest && owner === session?.user.id && version === generation) audit.error = 'History could not be loaded. Try Refresh history.'; }
   finally { if (request === auditRequest && owner === session?.user.id && version === generation) { audit.loading = false; renderAdminHistory(); } }
 }
+const notesFeed = { prefix: 'overview-notes', scope: '', rows: [], request: 0 };
+const discussion = { prefix: 'task-discussion', scope: '', rows: [], request: 0 };
+const noteFields = 'id,author_id,body,created_at,updated_at';
+const noteField = (panel, name) => $(`#${panel.prefix}-${name}`);
+let notesChannel, notesChannelOwner = '', notesChannelId = 0, notesRefreshTimer;
+
+function fillNoteSubteams(selected = '') {
+  const team = $('#overview-notes-destination').value;
+  const subteam = $('#overview-notes-subteam');
+  const teams = notesFeed.teams || [];
+  const children = teams.filter(id => id !== team && rootId(id) === team);
+  $('#overview-notes-subteam-field').hidden = !children.length;
+  subteam.innerHTML = options([
+    ['', teams.includes(team) ? 'Whole team' : 'Select a subteam'],
+    ...children.map(id => [id, ancestors(id).slice(0, -1).reverse().map(parent => teamById(parent).name).join(' / ')])
+  ]);
+  subteam.value = children.includes(selected) ? selected : '';
+}
+
+function selectNoteDestination(id) {
+  $('#overview-notes-destination').value = id && id !== 'announcement' ? rootId(id) : id || '';
+  fillNoteSubteams(id);
+}
+
+function renderNoteComposer(panel) {
+  const composer = noteField(panel, 'composer');
+  composer.hidden = (!panel.writable && !panel.previewComposer) || !panel.ready;
+  if (panel === notesFeed) {
+    $('#overview-notes-preview-message').hidden = !panel.previewComposer;
+    $('#overview-notes-destination').disabled = Boolean(panel.edit || (panel.selectedTeam && !panel.announcements) || panel.saving);
+    $('#overview-notes-subteam').disabled = Boolean(panel.edit || panel.saving);
+  }
+  noteField(panel, 'body').disabled = Boolean(panel.saving || !panel.writable);
+  noteField(panel, 'save').disabled = Boolean(panel.saving || !panel.writable);
+  noteField(panel, 'save').textContent = panel.edit ? 'Save changes' : panel === notesFeed ? 'Post note' : 'Post comment';
+  noteField(panel, 'cancel').hidden = !panel.edit;
+  noteField(panel, 'cancel').disabled = Boolean(panel.saving);
+}
+
+function resetNoteComposer(panel) {
+  panel.edit = null;
+  noteField(panel, 'body').value = '';
+  if (panel === notesFeed) selectNoteDestination(panel.selectedTeam);
+  renderNoteComposer(panel);
+}
+
+function setNoteScope(panel, scope, context = {}) {
+  if (panel.scope === scope) return;
+  Object.assign(panel, { scope, rows: [], displayKey: '', ready: false, saving: false, saveError: '', writable: false,
+    request: panel.request + 1, scopeVersion: (panel.scopeVersion || 0) + 1, ...context });
+  noteField(panel, 'panel').hidden = !scope;
+  noteField(panel, 'list').replaceChildren();
+  noteField(panel, 'status').textContent = scope ? 'Loading…' : '';
+  if (panel === notesFeed) {
+    $('#overview-notes-destination').innerHTML = options([
+      ['', 'Select a team'],
+      ...[...new Set((panel.teams || []).map(rootId))].map(id => [id, teamById(id).name]),
+      ...(panel.announcements ? [['announcement', 'Project-wide announcement']] : [])
+    ]);
+  } else $('#task-discussion-more').hidden = true;
+  resetNoteComposer(panel);
+  if (scope) void loadNotes(panel);
+}
+
+function syncNotes() {
+  const owner = viewIsMember() ? session.user.id : '';
+  const project = state.project;
+  const selectedTeam = state.subteam !== 'all' ? state.subteam : state.team !== 'all' ? state.team : '';
+  const teams = activeTeams().filter(team => canWorkIn(team.id, project) && (!selectedTeam || descendantOf(team.id, selectedTeam))).map(team => team.id);
+  const announcements = viewIsAdmin();
+  const canCompose = teams.length > 0 || announcements;
+  const overviewScope = owner && activeTab === 'overview' && project
+    ? JSON.stringify([generation, owner, project, selectedTeam, teams, preview.mode, preview.subject, announcements]) : '';
+  setNoteScope(notesFeed, overviewScope, {
+    project, selectedTeam: teams.includes(selectedTeam) ? selectedTeam : '', teams, announcements,
+    writable: !preview.mode && canCompose,
+    previewComposer: preview.mode === 'member' && canCompose
+  });
+
+  const task = owner && $('#task-dialog').open && !taskEditing
+    ? state.tasks.find(row => row.id === $('#task-id').value && canSeeTask(row)) : null;
+  const writable = Boolean(task && !preview.mode && !task.archived_at && !taskTeamsArchived(task)
+    && activeProjects().some(project => project.id === task.project_id));
+  setNoteScope(discussion, task ? JSON.stringify([generation, owner, task.id, preview.mode, preview.subject, writable]) : '',
+    { taskId: task?.id, writable, limit: 30 });
+
+  const channelOwner = overviewScope || task ? owner : '';
+  if (notesChannelOwner === channelOwner) return;
+  if (notesChannel) void client.removeChannel(notesChannel);
+  notesChannel = null;
+  notesChannelOwner = channelOwner;
+  if (!channelOwner) return;
+  // Receive change signals only. Refetch each active view through its own RLS query.
+  const channel = client.channel(`workspace-notes-${++notesChannelId}`);
+  for (const table of ['overview_notes', 'task_comments']) {
+    for (const event of ['INSERT', 'UPDATE']) {
+      channel.on('postgres_changes', { event, schema: 'public', table }, queueNotesRefresh);
+    }
+  }
+  notesChannel = channel;
+  channel.subscribe(status => {
+    if (status === 'SUBSCRIBED' && channel === notesChannel) queueNotesRefresh();
+  });
+}
+
+function queueNotesRefresh() {
+  clearTimeout(notesRefreshTimer);
+  notesRefreshTimer = setTimeout(() => {
+    for (const panel of [notesFeed, discussion]) if (panel.scope) void loadNotes(panel);
+  }, 150);
+}
+
+async function loadNotes(panel) {
+  const request = ++panel.request;
+  const overview = panel === notesFeed;
+  try {
+    let rows, more = false;
+    if (overview) {
+      const notes = client.from('overview_notes').select(`${noteFields},team_id`).eq('project_id', panel.project);
+      const comments = client.from('task_comments').select(`${noteFields},task_id,tasks!inner(title,team_id,project_id,archived_at)`)
+        .eq('tasks.project_id', panel.project).is('tasks.archived_at', null);
+      const scopedComments = sharedTasksReady ? comments.overlaps('tasks.team_ids', panel.teams) : comments.in('tasks.team_id', panel.teams);
+      const [noteResult, commentResult] = await Promise.all([
+        newestNotes(panel.teams.length ? notes.or(`team_id.is.null,team_id.in.(${panel.teams.join(',')})`) : notes.is('team_id', null), 10),
+        panel.teams.length ? newestNotes(scopedComments, 10) : { data: [] }
+      ]);
+      if (noteResult.error) throw noteResult.error;
+      if (commentResult.error) throw commentResult.error;
+      rows = [...noteResult.data, ...commentResult.data]
+        .sort((a, b) => b.created_at.localeCompare(a.created_at) || b.id.localeCompare(a.id)).slice(0, 10);
+    } else {
+      const result = await newestNotes(client.from('task_comments').select(noteFields).eq('task_id', panel.taskId), panel.limit + 1);
+      if (result.error) throw result.error;
+      rows = result.data.slice(0, panel.limit);
+      more = result.data.length > panel.limit;
+    }
+    if (request !== panel.request) return;
+    panel.rows = rows;
+    panel.ready = true;
+    renderNoteComposer(panel);
+    if (!panel.saving && !panel.saveError) noteField(panel, 'status').textContent = rows.length ? '' : overview ? 'No notes or comments in this view yet.' : 'No comments yet.';
+    if (!overview) $('#task-discussion-more').hidden = !more;
+    renderNoteRows(panel);
+  } catch (error) {
+    if (request !== panel.request) return;
+    panel.ready = false;
+    panel.rows = [];
+    renderNoteRows(panel);
+    renderNoteComposer(panel);
+    noteField(panel, 'status').textContent = overview && ['42P01', 'PGRST205'].includes(error.code)
+      ? 'Notes & comms will be available after the database update.' : 'Could not load notes. Retrying when connected.';
+  }
+}
+
+function newestNotes(query, limit) {
+  return query.order('created_at', { ascending: false }).order('id', { ascending: false }).limit(limit);
+}
+
+function canDeleteNote(panel, row) {
+  return panel === notesFeed && panel.writable && !row.task_id
+    && (row.author_id === session?.user.id || isAdmin());
+}
+
+function renderNoteRows(panel) {
+  const list = noteField(panel, 'list');
+  const markup = panel.rows.map(row => {
+    const label = row.tasks?.title || (panel === discussion ? '' : row.team_id ? teamPath(row.team_id) : 'Project announcement');
+    const meta = `<span class="note-meta muted">${escapeHTML(userName(row.author_id))} · <time datetime="${escapeHTML(row.created_at)}">${escapeHTML(new Date(row.created_at).toLocaleString())}</time>${label ? ` · ${escapeHTML(label)}` : ''}</span>`;
+    const snippet = row.body.replace(/\s+/g, ' ').trim();
+    const previewText = escapeHTML(snippet.length > 160 ? `${snippet.slice(0, 160)}…` : snippet);
+    const edit = panel.writable && !row.task_id && row.author_id === session?.user.id
+      ? `<button type="button" class="text-button" data-note-edit="${escapeHTML(row.id)}">${panel === discussion ? 'Edit comment' : 'Edit note'}</button>` : '';
+    const remove = canDeleteNote(panel, row)
+      ? `<button type="button" class="text-button" data-note-delete="${escapeHTML(row.id)}">Delete note</button>` : '';
+    const content = row.task_id
+      ? `<button type="button" class="text-button" data-discussion-task="${escapeHTML(row.task_id)}">${previewText}</button>${meta}`
+      : panel === discussion ? `${meta}<p class="note-body">${escapeHTML(row.body)}</p>`
+      : `<details><summary>${previewText}${meta}</summary><p class="note-body">${escapeHTML(row.body)}</p></details>`;
+    return `<li class="activity-item note-entry" data-note-id="${escapeHTML(row.id)}">${content}${edit}${remove}</li>`;
+  }).join('');
+  if (panel.displayKey === markup) return;
+  panel.displayKey = markup;
+  const expanded = new Set([...list.querySelectorAll('details[open]')].map(item => item.parentElement.dataset.noteId));
+  list.innerHTML = markup;
+  for (const item of list.querySelectorAll('details')) item.open = expanded.has(item.parentElement.dataset.noteId);
+}
+
+async function saveNote(panel) {
+  if (!panel.scope || !panel.ready || !panel.writable || panel.saving) return;
+  const scopeVersion = panel.scopeVersion;
+  const body = noteField(panel, 'body').value.trim();
+  const status = noteField(panel, 'status');
+  if (!body) { status.textContent = panel.saveError = 'Enter a message before posting.'; noteField(panel, 'body').focus(); return; }
+  const overview = panel === notesFeed;
+  const team = $('#overview-notes-destination').value;
+  const subteam = $('#overview-notes-subteam');
+  const destination = subteam.value || team;
+  const groupDestination = panel.teams?.includes(destination) && rootId(destination) === team;
+  if (overview && !panel.edit && !groupDestination && !(destination === 'announcement' && panel.announcements)) {
+    status.textContent = panel.saveError = team ? 'Select a subteam you can post to.' : 'Select a team to post to.';
+    (team ? subteam : $('#overview-notes-destination')).focus();
+    return;
+  }
+  const edit = panel.edit;
+  panel.saving = true;
+  panel.saveError = '';
+  renderNoteComposer(panel);
+  status.textContent = 'Saving…';
+  try {
+    const table = client.from(overview ? 'overview_notes' : 'task_comments');
+    const query = edit
+      ? table.update({ body }).eq('id', edit.id).eq('updated_at', edit.updated_at)
+      : table.insert(overview ? { project_id: panel.project, team_id: destination === 'announcement' ? null : destination, body }
+        : { task_id: panel.taskId, body });
+    const { data, error } = await query.select('id').maybeSingle();
+    if (error) throw error;
+    if (!data) throw new Error('This entry changed or is unavailable. Reopen it to edit the latest version.');
+    if (panel.scopeVersion === scopeVersion) { panel.saving = false; resetNoteComposer(panel); status.textContent = ''; }
+    queueNotesRefresh();
+  } catch (error) {
+    if (panel.scopeVersion === scopeVersion) {
+      panel.saving = false;
+      renderNoteComposer(panel);
+      status.textContent = panel.saveError = errorMessage(error);
+    }
+  }
+}
+
+async function deleteNote(panel, row) {
+  if (panel.saving || !canDeleteNote(panel, row) || !confirm('Delete this note permanently?')) return;
+  const scopeVersion = panel.scopeVersion;
+  panel.saving = true;
+  panel.saveError = '';
+  renderNoteComposer(panel);
+  noteField(panel, 'status').textContent = 'Deleting…';
+  try {
+    const { data, error } = await client.from('overview_notes').delete().eq('id', row.id).select('id').maybeSingle();
+    if (error) throw error;
+    if (!data) throw new Error('This note is no longer available to delete.');
+    if (panel.scopeVersion !== scopeVersion) return;
+    panel.request += 1;
+    panel.rows = panel.rows.filter(note => note.id !== row.id);
+    renderNoteRows(panel);
+    if (panel.edit?.id === row.id) resetNoteComposer(panel);
+  } catch (error) {
+    if (panel.scopeVersion === scopeVersion) {
+      panel.saveError = error.code === '42501' && /permission denied for table overview_notes/i.test(error.message)
+        ? 'Note deletion is unavailable. Ask an EXO chair to apply the latest Notes & comms database update.'
+        : errorMessage(error);
+    }
+  } finally {
+    if (panel.scopeVersion === scopeVersion) {
+      panel.saving = false;
+      renderNoteComposer(panel);
+      noteField(panel, 'status').textContent = panel.saveError;
+    }
+    queueNotesRefresh();
+  }
+}
+
+function handleNoteClick(panel, event) {
+  const deleteId = event.target.closest('[data-note-delete]')?.dataset.noteDelete;
+  if (deleteId) {
+    const note = panel.rows.find(row => row.id === deleteId);
+    if (note) void deleteNote(panel, note);
+    return;
+  }
+  const editId = event.target.closest('[data-note-edit]')?.dataset.noteEdit;
+  const row = panel.rows.find(row => row.id === editId);
+  if (!row || !panel.writable || panel.saving || row.author_id !== session?.user.id) return;
+  panel.edit = row;
+  if (panel === notesFeed) selectNoteDestination(row.team_id || 'announcement');
+  panel.saveError = '';
+  noteField(panel, 'status').textContent = '';
+  noteField(panel, 'body').value = row.body;
+  renderNoteComposer(panel);
+  noteField(panel, 'body').focus();
+}
+
 function renderOverview(tasks) {
   const done = tasks.filter(task => task.status === 'done').length, inProgress = tasks.filter(task => task.status === 'in_progress').length;
   const percent = tasks.length ? Math.round(done / tasks.length * 100) : 0;
@@ -340,7 +645,7 @@ function renderOverview(tasks) {
   const stats = [['Total tasks', tasks.length, 'Across this workspace view', '<span class="nav-icon nav-icon-tasks" aria-hidden="true"></span>'], ['In progress', inProgress, 'Work currently underway', '◷'], ['Completed', done, 'Tasks marked as done', '✓'], ['Overdue', tasks.filter(overdue).length, 'Tasks past their due date', '⚑']];
   $('#stats').innerHTML = stats.map(([label, count, note, icon], index) => `<div class="stat"><div class="stat-top"><span class="label-with-help">${label}<span class="help"><button type="button" class="help-button" aria-label="About ${escapeHTML(label)}" aria-describedby="stat-help-${index}" aria-expanded="false">ⓘ</button><span class="help-text" role="tooltip" id="stat-help-${index}">${escapeHTML(note)}</span></span></span><span class="stat-icon">${icon}</span></div><strong>${available ? count : '—'}</strong></div>`).join('');
   const upcoming = tasks.filter(task => !isClosed(task)).sort((a, b) => (a.due_at || '9999').localeCompare(b.due_at || '9999')).slice(0, 4);
-  $('#up-next').innerHTML = available && upcoming.length ? upcoming.map(task => `<div class="upcoming-task">${checkbox(task)}<div class="upcoming-detail">${titleButton(task)}<small>${escapeHTML(teamPath(task.team_id))} · ${escapeHTML(taskAssigneeName(task))}</small></div><span class="due ${overdue(task) ? 'overdue' : ''}">${formatDate(task.due_at)}</span></div>`).join('') : `<div class="up-next-empty">${available ? 'No upcoming tasks in this view.' : 'Your shared tasks will appear once the workspace is available.'}</div>`;
+  $('#up-next').innerHTML = available && upcoming.length ? upcoming.map(task => `<div class="upcoming-task">${checkbox(task)}<div class="upcoming-detail">${titleButton(task)}<small>${escapeHTML(taskTeamNames(task))} · ${escapeHTML(taskAssigneeName(task))}</small></div><span class="due ${overdue(task) ? 'overdue' : ''}">${formatDate(task.due_at)}</span></div>`).join('') : `<div class="up-next-empty">${available ? 'No upcoming tasks in this view.' : 'Your shared tasks will appear once the workspace is available.'}</div>`;
   $('#progress-percent').innerHTML = `${available ? percent : '—'}<span>%</span>`;
   $('#progress-bar').style.width = `${available ? percent : 0}%`;
   $('#status-breakdown').innerHTML = Object.entries(STATUS).map(([value, label]) => `<div class="breakdown-row"><span class="legend-dot ${STATUS_CLASS[value]}"></span>${label}<strong>${available ? tasks.filter(task => task.status === value).length : '—'}</strong></div>`).join('');
@@ -349,14 +654,14 @@ function renderOverview(tasks) {
 }
 function renderTasks(tasks) {
   const query = $('#task-search').value.toLowerCase().trim();
-  const filtered = tasks.filter(task => `${task.title} ${task.description} ${taskAssigneeName(task)} ${teamPath(task.team_id)}`.toLowerCase().includes(query) && ($('#status-filter').value === 'all' || task.status === $('#status-filter').value) && ($('#priority-filter').value === 'all' || task.priority === $('#priority-filter').value));
+  const filtered = tasks.filter(task => `${task.title} ${task.description} ${taskAssigneeName(task)} ${taskTeamNames(task)}`.toLowerCase().includes(query) && ($('#status-filter').value === 'all' || task.status === $('#status-filter').value) && ($('#priority-filter').value === 'all' || task.priority === $('#priority-filter').value));
   const archivedView = $('#archive-filter').value === 'archived';
   const closed = filtered.filter(isClosed), includeClosed = archivedView || showClosedTasks || ['done', 'cancelled'].includes($('#status-filter').value);
   const visible = filtered.filter(task => !isClosed(task) || includeClosed);
   const groupFor = task => isClosed(task) ? 'Completed / cancelled' : overdue(task) ? 'Overdue' : ({ blocked: 'Blocked', in_progress: 'In progress', review: 'Awaiting review', todo: 'Not started' }[task.status] || 'Other');
   const order = ['Blocked', 'Overdue', 'In progress', 'Awaiting review', 'Not started', 'Completed / cancelled', 'Other'];
   visible.sort((a, b) => order.indexOf(groupFor(a)) - order.indexOf(groupFor(b)) || (a.due_at || '9999').localeCompare(b.due_at || '9999') || a.title.localeCompare(b.title));
-  const showGroups = new Set(visible.map(task => task.team_id)).size > 1;
+  const showGroups = new Set(visible.flatMap(taskTeams)).size > 1;
   $('#task-group-heading').hidden = !showGroups;
   $('#task-list-title').textContent = archivedView ? 'Archived tasks' : $('#task-lens').value === 'assigned' ? 'My tasks' : viewIsAdmin() ? 'Workspace tasks' : 'Group tasks';
   $('#list-count').textContent = viewIsMember() ? visible.length : '—';
@@ -367,14 +672,14 @@ function renderTasks(tasks) {
   $('#task-rows').innerHTML = visible.map(task => {
     const name = taskAssigneeName(task);
     const group = groupFor(task), heading = previous === group ? '' : `<tr class="task-section"><th colspan="${showGroups ? 6 : 5}" scope="rowgroup">${group}</th></tr>`; previous = group;
-    return `${heading}<tr class="task-item ${task.status === 'done' ? 'is-done' : ''}"><td class="check-cell">${checkbox(task)}</td><td class="task-name-cell">${titleButton(task)}${!(task.assignee_id || task.assignee_person_id) ? '<small class="task-subtitle">Group assignment</small>' : ''}${['urgent', 'high'].includes(task.priority) ? `<small class="priority ${task.priority}">${PRIORITY[task.priority]}</small>` : ''}</td><td data-label="Status"><span class="badge ${STATUS_CLASS[task.status] || 'todo'}">${escapeHTML(STATUS[task.status] || task.status)}</span></td><td data-label="Due" class="due ${overdue(task) ? 'overdue' : ''}">${formatDate(task.due_at)}</td><td data-label="Assignee"><div class="assignee"><span class="avatar">${escapeHTML((task.assignee_id || task.assignee_person_id) ? name.split(/\s+/).map(part => part[0]).slice(0, 2).join('').toUpperCase() : '–')}</span>${escapeHTML(name)}</div></td><td data-label="Group" ${showGroups ? '' : 'hidden'}>${escapeHTML(teamPath(task.team_id))}</td></tr>`;
+    return `${heading}<tr class="task-item ${task.status === 'done' ? 'is-done' : ''}"><td class="check-cell">${checkbox(task)}</td><td class="task-name-cell">${titleButton(task)}${!(task.assignee_id || task.assignee_person_id) ? '<small class="task-subtitle">Group assignment</small>' : ''}${['urgent', 'high'].includes(task.priority) ? `<small class="priority ${task.priority}">${PRIORITY[task.priority]}</small>` : ''}</td><td data-label="Status"><span class="badge ${STATUS_CLASS[task.status] || 'todo'}">${escapeHTML(STATUS[task.status] || task.status)}</span></td><td data-label="Due" class="due ${overdue(task) ? 'overdue' : ''}">${formatDate(task.due_at)}</td><td data-label="Assignee"><div class="assignee"><span class="avatar">${escapeHTML((task.assignee_id || task.assignee_person_id) ? name.split(/\s+/).map(part => part[0]).slice(0, 2).join('').toUpperCase() : '–')}</span>${escapeHTML(name)}</div></td><td data-label="Group" ${showGroups ? '' : 'hidden'}>${escapeHTML(taskTeamNames(task))}</td></tr>`;
   }).join('');
   previous = '';
   $('#task-cards').innerHTML = visible.map(task => {
     const group = groupFor(task), heading = previous === group ? '' : `<h3 class="task-card-section">${group}</h3>`; previous = group;
     const description = (task.description || '').split('\n\nImported from: https://github.com/orgs/IEEE-USF-EXO/projects/3')[0].replace(/\s+/g, ' ').trim();
     const showOwner = $('#task-lens').value !== 'assigned';
-    return `${heading}<article class="compact-task ${task.status === 'done' ? 'is-done' : ''}" data-task-card="${escapeHTML(task.id)}"><div class="task-card-heading"><h3>${titleButton(task)}</h3>${['urgent', 'high'].includes(task.priority) ? `<span class="priority ${task.priority}">${PRIORITY[task.priority]}</span>` : ''}<span class="task-card-arrow" aria-hidden="true">↗</span></div><div class="task-card-meta"><span class="badge ${STATUS_CLASS[task.status] || 'todo'}">${escapeHTML(STATUS[task.status] || task.status)}</span>${task.due_at ? `<span class="due ${overdue(task) ? 'overdue' : ''}">${formatDate(task.due_at)}</span>` : ''}${showOwner ? `<span>${escapeHTML(taskAssigneeName(task))}</span>` : ''}${showGroups ? `<span>${escapeHTML(teamPath(task.team_id))}</span>` : ''}</div>${description ? `<p class="task-card-description">${escapeHTML(description.slice(0, 180))}${description.length > 180 ? '…' : ''}</p>` : ''}</article>`;
+    return `${heading}<article class="compact-task ${task.status === 'done' ? 'is-done' : ''}" data-task-card="${escapeHTML(task.id)}"><div class="task-card-heading"><h3>${titleButton(task)}</h3>${['urgent', 'high'].includes(task.priority) ? `<span class="priority ${task.priority}">${PRIORITY[task.priority]}</span>` : ''}<span class="task-card-arrow" aria-hidden="true">↗</span></div><div class="task-card-meta"><span class="badge ${STATUS_CLASS[task.status] || 'todo'}">${escapeHTML(STATUS[task.status] || task.status)}</span>${task.due_at ? `<span class="due ${overdue(task) ? 'overdue' : ''}">${formatDate(task.due_at)}</span>` : ''}${showOwner ? `<span>${escapeHTML(taskAssigneeName(task))}</span>` : ''}${showGroups ? `<span>${escapeHTML(taskTeamNames(task))}</span>` : ''}</div>${description ? `<p class="task-card-description">${escapeHTML(description.slice(0, 180))}${description.length > 180 ? '…' : ''}</p>` : ''}</article>`;
   }).join('');
   const layout = taskLayout();
   $('#task-cards').hidden = layout !== 'list'; $('#task-table-view').hidden = layout !== 'table';
@@ -398,7 +703,7 @@ function render() {
     try { const saved = localStorage.getItem(`exo-task-layout:${taskLayoutUser}`); if (['list', 'table'].includes(saved)) taskLayoutChoice = saved; } catch { /* The default layout remains usable. */ }
   }
   if (taskLensUser !== session?.user.id) { taskLensChosen = false; taskLensUser = session?.user.id || ''; }
-  const groupTasks = state.tasks.filter(task => !task.archived_at && !teamIsArchived(task.team_id) && task.project_id === state.project && canWorkIn(task.team_id, task.project_id) && (state.team === 'all' || descendantOf(task.team_id, state.team)) && (state.subteam === 'all' || descendantOf(task.team_id, state.subteam)));
+  const groupTasks = state.tasks.filter(task => taskInScope(task));
   const personalTasks = groupTasks.some(task => taskAssignedTo(task, viewUserId()));
   if (phase === 'ready' && preview.mode !== 'group' && !taskLensChosen) $('#task-lens').value = viewIsAdmin() ? 'all' : personalTasks ? 'assigned' : 'team';
   $('#task-scope-note').hidden = !viewIsMember() || viewIsAdmin() || preview.mode === 'group' || taskLensChosen || personalTasks || !groupTasks.length;
@@ -479,7 +784,7 @@ function render() {
   const open = state.tasks.find(task => task.id === $('#task-id').value);
   $('#task-progress-status').disabled = !open || !canProgress(open);
   if ($('#task-dialog').open) $('#delete-task').disabled = busy || !activityReady;
-  renderOverview(tasks); renderTasks(tasks); renderAdminHistory();
+  renderOverview(tasks); renderTasks(tasks); renderAdminHistory(); syncNotes();
   const key = `${generation}|${state.project}|${state.team}|${state.subteam}|${preview.mode}|${preview.subject}`;
   if (phase === 'ready' && activityReady && recentKey !== key) { recentKey = key; setTimeout(refreshRecentActivity, 0); }
 }
@@ -579,7 +884,7 @@ function renderPreview() {
   if (phase !== 'ready') { $('#preview-summary').textContent = 'Refreshing the preview’s memberships and roles…'; return; }
   const label = preview.mode === 'group' ? `Ordinary member of ${teamPath(preview.subject)}` : userName(preview.subject);
   const roles = preview.mode === 'member' ? state.leadership.filter(role => role.user_id === preview.subject && !role.revoked_at).map(role => role.role.replaceAll('_', ' ')) : [];
-  const tasks = scopedTasks(), editable = tasks.filter(task => canWorkIn(task.team_id, task.project_id)).length;
+  const tasks = scopedTasks(), editable = tasks.filter(canSeeTask).length;
   $('#preview-summary').textContent = `${label}${roles.length ? ` · ${[...new Set(roles)].join(', ')}` : ''} · Workspace access: ${viewIsMember() ? 'yes' : 'no'} · Could create tasks: ${canCreate() ? 'yes' : 'no'} · Could edit ${editable} of ${tasks.length} tasks in this scope. Preview saves are disabled.`;
 }
 // Range pagination prevents silently dropping records at Supabase's default row cap.
@@ -594,6 +899,10 @@ async function readAll(table, fields, order = 'id') {
   }
 }
 async function readTaskDataset() {
+  for (const fields of [`${TASK_FIELDS},team_ids,assignee_person_id`, `${TASK_FIELDS},team_ids`]) {
+    try { return { rows: await readAll('tasks', fields), ready: true, shared: true }; }
+    catch (error) { if (!['PGRST204', '42703'].includes(error.code)) throw error; }
+  }
   try { return { rows: await readAll('tasks', `${TASK_FIELDS},assignee_person_id`), ready: true }; }
   catch (error) {
     if (!['PGRST204', '42703'].includes(error.code)) throw error;
@@ -639,6 +948,7 @@ async function loadWorkspace() {
     ]);
     if (current !== generation || userId !== session?.user.id) return;
     activityReady = tasks.ready;
+    sharedTasksReady = Boolean(tasks.shared);
     rosterReady = roster.ready;
     Object.assign(state, { rosterPeople: roster.rosterPeople, rosterAccounts: roster.rosterAccounts, rosterGroups: roster.rosterGroups });
     Object.assign(state, { teams, projects, profiles, memberships, leadership, tasks: tasks.rows });
@@ -678,7 +988,7 @@ function updateConnectedBanner() {
   else if (!state.projects.length) setBanner('Connected · no projects yet', viewIsAdmin() ? 'Open Administration to create your first project.' : 'An EXO chair can create your first project.', 'ready');
   else if (!state.teams.length) setBanner('Connected · no teams yet', viewIsAdmin() ? 'Open Administration to create a team and start adding tasks.' : 'An EXO chair can create teams for task assignments.', 'ready');
   else {
-    const count = state.tasks.filter(task => canWorkIn(task.team_id, task.project_id)).length;
+    const count = state.tasks.filter(canSeeTask).length;
     setBanner('Connected to Supabase', `${count} task${count === 1 ? '' : 's'} available to your groups across projects. Use Refresh to get the latest changes.`, 'ready');
   }
 }
@@ -1094,18 +1404,37 @@ async function changeMembership(teamId, remove = false) {
   } finally { if (owner === session?.user.id && version === generation) { busy = false; render(); } }
 }
 function populateTaskScope(projectId, preferredRoot, preferredTeam) {
-  const roots = rootsForProject(projectId).filter(root => state.teams.some(team => rootId(team.id) === root.id && canManageIn(team.id, projectId)));
+  const task = state.tasks.find(row => row.id === $('#task-id').value);
+  const primary = sharedTasksReady && task?.team_id;
+  const availableTeam = team => team.id === primary || canManageIn(team.id, projectId);
+  const roots = state.teams.filter(root => !root.parent_team_id
+    && state.teams.some(team => rootId(team.id) === root.id && availableTeam(team)));
   $('#task-team').innerHTML = options(roots.map(team => [team.id, team.name]));
   $('#task-team').value = roots.some(team => team.id === preferredRoot) ? preferredRoot : roots[0]?.id || '';
-  const available = state.teams.filter(team => rootId(team.id) === $('#task-team').value && canManageIn(team.id, projectId));
+  const available = state.teams.filter(team => rootId(team.id) === $('#task-team').value && availableTeam(team));
   $('#task-subteam').innerHTML = options(available.map(team => [team.id, team.parent_team_id ? teamPath(team.id).split(' / ').slice(1).join(' / ') : 'Team-wide']));
   $('#task-subteam').value = available.some(team => team.id === preferredTeam) ? preferredTeam : available[0]?.id || '';
   fillTaskAssignees(projectId, $('#task-subteam').value);
+  renderExtraTaskTeams(projectId, $('#task-subteam').value);
   $('#save-task').disabled = busy || !available.length;
+}
+function selectedTaskTeams() {
+  return [$('#task-subteam').value, ...Array.from(document.querySelectorAll('#task-extra-teams input:checked'), field => field.value)].filter(Boolean);
+}
+function renderExtraTaskTeams(projectId, primaryId, selected = selectedTaskTeams()) {
+  $('#task-shared-teams').hidden = !sharedTasksReady;
+  if (!sharedTasksReady) { $('#task-extra-teams').replaceChildren(); return; }
+  const task = state.tasks.find(row => row.id === $('#task-id').value);
+  const locked = task && !canChangeTaskTeams(task);
+  const available = state.teams.filter(team => team.id !== primaryId
+    && ((task && taskTeams(task).includes(team.id)) || (!locked && canManageIn(team.id, projectId))));
+  $('#task-extra-teams').innerHTML = available.map(team => `<label><input type="checkbox" value="${escapeHTML(team.id)}"${selected.includes(team.id) ? ' checked' : ''}${locked ? ' disabled' : ''}> ${escapeHTML(teamPath(team.id))}</label>`).join('');
+  $('#task-shared-team-help').textContent = locked ? 'Changing the assignment requires authority over every assigned team.'
+    : available.length ? 'The named assignee must have access to the primary team.' : 'No additional teams are available.';
 }
 function taskAIPrompt() {
   const project = state.projects.find(item => item.id === $('#task-project').value)?.name || 'the selected project';
-  const group = teamPath($('#task-subteam').value);
+  const group = selectedTaskTeams().map(teamPath).join(', ');
   return `Convert the user's work notes below into practical EXO Workspace tasks.
 Project: ${project}. Group: ${group}. Today: ${today()}.
 Use these task-writing conventions: concise action titles, descriptions beginning with "Deliverable:" and followed by "Evidence:", and "Decision: [topic]" titles for decisions. Preserve only dates, priorities, dependencies, links, and requirements stated in the notes. Interpret "today" as ${today()} and "tomorrow" as the next calendar day. If the notes request one task, return one task; otherwise split independent deliverables into separate tasks. The assignee is selected in EXO Workspace, so do not include an assignee field.
@@ -1166,8 +1495,8 @@ function validateAITasks(text) {
     return { id: crypto.randomUUID(), title: item.title.trim(), description: item.description.trim(), priority: item.priority, date: item.due_date };
   });
 }
-function checkAIDuplicates(rows, projectId, teamId) {
-  const titles = new Set(state.tasks.filter(task => task.project_id === projectId && task.team_id === teamId && !task.archived_at).map(task => task.title.trim().toLowerCase()));
+function checkAIDuplicates(rows, projectId, teamIds) {
+  const titles = new Set(state.tasks.filter(task => task.project_id === projectId && taskTeams(task).some(id => teamIds.includes(id)) && !task.archived_at).map(task => task.title.trim().toLowerCase()));
   const duplicate = rows.find(task => titles.has(task.title.toLowerCase()));
   if (duplicate) throw new Error(`“${duplicate.title}” already exists in this group and project. Remove it from the response or give the new task a distinct title.`);
 }
@@ -1176,7 +1505,7 @@ function reviewAITasks() {
   invalidateAITasks();
   try {
     const rows = validateAITasks($('#task-ai-response').value);
-    checkAIDuplicates(rows, $('#task-project').value, $('#task-subteam').value);
+    checkAIDuplicates(rows, $('#task-project').value, selectedTaskTeams());
     aiTaskPlan = rows;
     $('#task-ai-preview').innerHTML = rows.map(task => `<li><h3>${escapeHTML(task.title)}</h3><div class="task-detail-meta"><span class="priority ${task.priority}">${escapeHTML(PRIORITY[task.priority])}</span><span class="muted">${escapeHTML(task.date || 'No due date')}</span></div><p>${escapeHTML(task.description)}</p></li>`).join('');
     $('#task-ai-summary').textContent = `${rows.length} task${rows.length === 1 ? '' : 's'} ready for review. All start as To do. Edit the response and review again to make changes.`;
@@ -1198,15 +1527,17 @@ async function saveAITasks() {
   if (busy || preview.mode || !session || $('#task-id').value || !taskEditing) return;
   if (!aiTaskPlan) { aiTaskError('Review the agent response before creating tasks.'); return; }
   const projectId = $('#task-project').value, teamId = $('#task-subteam').value, assignee = $('#task-assignee').value || null;
+  const teamIds = selectedTaskTeams();
   if (!canManageIn(teamId, projectId)) { aiTaskError('Choose a project and group you lead.'); return; }
   if (!assignmentHasAccess(assignee || '', teamId, projectId)) { aiTaskError('The assignee needs access to this group first.'); return; }
-  try { checkAIDuplicates(aiTaskPlan, projectId, teamId); } catch (error) { aiTaskError(error.message); return; }
+  try { checkAIDuplicates(aiTaskPlan, projectId, teamIds); } catch (error) { aiTaskError(error.message); return; }
   const owner = session.user.id, version = generation;
   const rows = aiTaskPlan.map(task => ({ id: task.id, title: task.title, description: task.description, priority: task.priority, status: 'todo', due_at: task.date ? new Date(`${task.date}T23:59:59`).toISOString() : null, project_id: projectId, team_id: teamId, ...assigneeValues(assignee || ''), created_by: owner }));
   busy = true; aiTaskError(''); lockForm(true); render();
   try {
     // One atomic batch. Stable IDs make retrying a lost response safe without updating existing tasks.
-    const { error } = await client.from('tasks').upsert(rows, { onConflict: 'id', ignoreDuplicates: true });
+    const assignments = sharedTasksReady ? rows.map(task => ({ ...task, team_ids: teamIds })) : rows;
+    const { error } = await client.from('tasks').upsert(assignments, { onConflict: 'id', ignoreDuplicates: true });
     if (error) throw error;
     const { data, error: readError } = await client.from('tasks').select(taskFields()).in('id', rows.map(task => task.id));
     if (readError || data?.length !== rows.length) throw new Error('The batch was saved, but could not be reloaded. Refresh the workspace before trying again.');
@@ -1220,9 +1551,9 @@ async function saveAITasks() {
   } catch (error) { if (owner === session?.user.id && version === generation) aiTaskError(errorMessage(error)); }
   finally { busy = false; lockForm(false); render(); }
 }
-function openTask(id) {
+function openTask(id, showDiscussion = false) {
   const task = id ? state.tasks.find(task => task.id === id) : null;
-  if (id && (!task || !canWorkIn(task.team_id, task.project_id))) return;
+  if (id && (!task || !canSeeTask(task))) return;
   if ((!task && (!canCreate() || preview.mode)) || busy || !viewIsMember()) return;
   $('#task-form').reset(); $('#form-error').hidden = true;
   aiTaskPlan = null;
@@ -1231,6 +1562,7 @@ function openTask(id) {
   $('#task-creation-options').hidden = Boolean(task);
   for (const field of $('#task-form').querySelectorAll('input,select,textarea')) field.disabled = false;
   $('#task-id').value = task?.id || ''; $('#dialog-title').textContent = task ? 'Task details' : 'New task';
+  $('#task-extra-teams').replaceChildren();
   setTaskCreationMode('single');
   $('#task-title').value = task?.title || ''; $('#task-description').value = task?.description || '';
   $('#task-status').value = task?.status || 'todo'; $('#task-priority').value = task?.priority || 'medium';
@@ -1241,9 +1573,11 @@ function openTask(id) {
     $('#task-project').innerHTML = options([[task.project_id, state.projects.find(project => project.id === task.project_id)?.name || 'Project']]);
     $('#task-team').innerHTML = options([[rootId(task.team_id), teamById(rootId(task.team_id))?.name || 'Team']]);
     $('#task-subteam').innerHTML = options([[task.team_id, teamPath(task.team_id)]]);
-    if (canEdit(task) && rosterReady) populateTaskScope(task.project_id, rootId(task.team_id), task.team_id);
+    if (canEdit(task) && (rosterReady || sharedTasksReady) && canChangeTaskTeams(task)) populateTaskScope(task.project_id, rootId(task.team_id), task.team_id);
     $('#task-project').disabled = true;
-    if (!rosterReady) for (const selector of ['#task-team', '#task-subteam']) $(selector).disabled = true;
+    if ((!rosterReady && !sharedTasksReady) || !canChangeTaskTeams(task)) {
+      for (const selector of ['#task-team', '#task-subteam']) $(selector).disabled = true;
+    }
     if (!canEdit(task)) for (const field of $('#task-form').querySelectorAll('input,select,textarea')) field.disabled = true;
     $('#dialog-title').textContent = preview.mode ? 'Task details · testing view' : canEdit(task) ? 'Edit task' : 'Task details · read only';
     $('#save-task').disabled = !canEdit(task);
@@ -1254,7 +1588,10 @@ function openTask(id) {
     populateTaskScope($('#task-project').value, state.team, state.subteam);
   }
   $('#delete-task').hidden = !task || !canEdit(task);
-  if (task) fillTaskAssignees(task.project_id, task.team_id, taskAssigneeValue(task));
+  if (task) {
+    fillTaskAssignees(task.project_id, task.team_id, taskAssigneeValue(task));
+    renderExtraTaskTeams(task.project_id, task.team_id, taskTeams(task));
+  }
   taskEditing = !task;
   $('#task-detail-view').hidden = !task;
   $('#task-edit-fields').hidden = Boolean(task);
@@ -1270,18 +1607,20 @@ function openTask(id) {
     $('#task-detail-title').textContent = task.title;
     $('#task-detail-meta').innerHTML = `<span class="badge ${STATUS_CLASS[task.status]}">${STATUS[task.status]}</span><span class="priority ${task.priority}">${escapeHTML(PRIORITY[task.priority])}</span>`;
     setLinkedText($('#task-instructions'), task.description || 'No instructions added yet.');
-    $('#task-detail-facts').innerHTML = [['Assignee', taskAssigneeName(task)], ['Due date', formatDate(task.due_at)], ['Group', teamPath(task.team_id)], ['Project', state.projects.find(project => project.id === task.project_id)?.name || 'Project']].map(([label, value]) => `<div><dt>${label}</dt><dd>${escapeHTML(value)}</dd></div>`).join('');
+    $('#task-detail-facts').innerHTML = [['Assignee', taskAssigneeName(task)], ['Due date', formatDate(task.due_at)], ['Teams', taskTeamNames(task)], ['Project', state.projects.find(project => project.id === task.project_id)?.name || 'Project']].map(([label, value]) => `<div><dt>${label}</dt><dd>${escapeHTML(value)}</dd></div>`).join('');
     loadTaskReferences(task);
     loadTaskHistory(task, true);
-    $('#delete-task').hidden = Boolean(preview.mode) || !canManageIn(task.team_id, task.project_id);
+    $('#delete-task').hidden = Boolean(preview.mode) || taskTeamsArchived(task) || !canChangeTaskTeams(task);
     $('#delete-task').textContent = task.archived_at ? 'Restore task' : 'Archive task';
     $('#delete-task').disabled = !activityReady;
     $('#delete-task').title = activityReady ? '' : 'The activity database update is needed first.';
-    if (teamIsArchived(task.team_id)) $('#task-detail-meta').insertAdjacentHTML('beforeend', '<span class="badge cancelled">Team archived</span>');
+    if (taskTeamsArchived(task)) $('#task-detail-meta').insertAdjacentHTML('beforeend', '<span class="badge cancelled">Team archived</span>');
     if (task.archived_at) $('#task-detail-meta').insertAdjacentHTML('beforeend', '<span class="badge cancelled">Archived</span>');
   }
   showDialog($('#task-dialog'));
-  if (task) { $('#task-detail-title').tabIndex = -1; $('#task-detail-title').focus(); }
+  syncNotes();
+  if (task && showDiscussion) $('#task-discussion-title').focus();
+  else if (task) { $('#task-detail-title').tabIndex = -1; $('#task-detail-title').focus(); }
   else $('#task-title').focus();
 }
 async function loadTaskReferences(task) {
@@ -1315,7 +1654,7 @@ async function loadTaskHistory(task, reset = true) {
 function editOpenTask() {
   const task = state.tasks.find(task => task.id === $('#task-id').value);
   if (!task || !canEdit(task) || busy || preview.mode) return;
-  taskEditing = true; $('#task-detail-view').hidden = true; $('#task-edit-fields').hidden = false;
+  taskEditing = true; $('#task-detail-view').hidden = true; $('#task-edit-fields').hidden = false; syncNotes();
   $('#edit-task').hidden = true; $('#save-task').hidden = false; $('#delete-task').hidden = false;
   $('#cancel-dialog').textContent = 'Cancel'; $('#dialog-title').textContent = 'Edit task'; $('#task-title').focus();
   $('#delete-task').hidden = true;
@@ -1342,8 +1681,17 @@ async function saveTask(event) {
   const values = { title, description: $('#task-description').value.trim(), status: $('#task-status').value, priority: $('#task-priority').value, ...assigneeValues($('#task-assignee').value),
     due_at: !date ? null : existing && dueDate(existing) === date ? existing.due_at : new Date(`${date}T23:59:59`).toISOString() };
   const teamId = $('#task-subteam').value, projectId = $('#task-project').value;
-  if (!canManageIn(teamId, projectId)) { formError(new Error('Choose a project and group you lead.')); return; }
-  if (!assignmentHasAccess($('#task-assignee').value, teamId, projectId)) { formError(new Error('Choose a group or a person with access to the selected group.')); return; }
+  const teamIds = selectedTaskTeams();
+  const changedTeams = !existing || teamId !== existing.team_id || teamIds.length !== taskTeams(existing).length
+    || teamIds.some(team => !taskTeams(existing).includes(team));
+  if (changedTeams && (!teamIds.length || (existing && !canChangeTaskTeams(existing))
+    || teamIds.some(team => !canManageIn(team, projectId) && !(existing && taskTeams(existing).includes(team))))) {
+    formError(new Error('Choose teams you manage to change the assignment.')); return;
+  }
+  const assignee = $('#task-assignee').value;
+  const keepsAssignee = existing && existing.team_id === teamId && taskAssigneeValue(existing) === assignee;
+  if (!keepsAssignee && !assignmentHasAccess(assignee, teamId, projectId)) { formError(new Error('Choose a person with access to the primary team.')); return; }
+  if (sharedTasksReady && changedTeams) values.team_ids = teamIds;
   if (existing && existing.team_id !== teamId) values.team_id = teamId;
   const owner = session.user.id, version = generation;
   busy = true; lockForm(true); render();
@@ -1353,7 +1701,9 @@ async function saveTask(event) {
     if (error) throw error; if (!data) throw new Error('This task changed or you no longer have permission. Close this dialog, refresh, and try again.');
     if (owner !== session?.user.id || version !== generation) return;
     state.tasks = existing ? state.tasks.map(task => task.id === id ? data : task) : [...state.tasks, data];
-    state.project = data.project_id; state.team = rootId(data.team_id); state.subteam = data.team_id === state.team ? 'all' : data.team_id;
+    if (!existing) {
+      state.project = data.project_id; state.team = rootId(data.team_id); state.subteam = data.team_id === state.team ? 'all' : data.team_id;
+    }
     $('#task-search').value = ''; $('#status-filter').value = 'all'; $('#priority-filter').value = 'all';
     savePreferences(); $('#task-dialog').close(); recentKey = ''; audit.loaded = false; toast(existing ? 'Task saved.' : 'Task created.');
   } catch (error) { if (owner === session?.user.id && version === generation) formError(error); }
@@ -1386,7 +1736,7 @@ async function updateTaskProgress(task, status) {
 async function deleteTask() {
   if (preview.mode) return;
   const task = state.tasks.find(task => task.id === $('#task-id').value);
-  if (!task || busy || !activityReady || !canManageIn(task.team_id, task.project_id) || !confirm(task.archived_at ? 'Restore this task to the active workspace?' : 'Archive this task? Its instructions and history will be kept.')) return;
+  if (!task || busy || !activityReady || taskTeamsArchived(task) || !canChangeTaskTeams(task) || !confirm(task.archived_at ? 'Restore this task to the active workspace?' : 'Archive this task? Its instructions and history will be kept.')) return;
   const owner = session.user.id, version = generation; busy = true; lockForm(true); render();
   try {
     const { data, error } = await client.rpc('manage_task', { p_task: task.id, p_expected: task.updated_at, p_values: { archived: !task.archived_at } }).select(taskFields()).maybeSingle();
@@ -1494,7 +1844,23 @@ for (const selector of ['#new-task', '#add-task-row']) $(selector).addEventListe
 $('#see-tasks').addEventListener('click', () => switchTab('tasks'));
 for (const selector of ['#close-dialog', '#cancel-dialog']) $(selector).addEventListener('click', () => requestDialogClose($('#task-dialog')));
 $('#task-title').addEventListener('input', () => $('#task-title').setCustomValidity(''));
-$('#task-dialog').addEventListener('close', () => $('#task-title').setCustomValidity(''));
+$('#task-dialog').addEventListener('close', () => { $('#task-title').setCustomValidity(''); syncNotes(); });
+$('#overview-notes-composer').addEventListener('submit', event => { event.preventDefault(); void saveNote(notesFeed); });
+$('#overview-notes-destination').addEventListener('change', () => fillNoteSubteams(notesFeed.selectedTeam));
+$('#task-discussion-save').addEventListener('click', () => void saveNote(discussion));
+for (const panel of [notesFeed, discussion]) {
+  noteField(panel, 'cancel').addEventListener('click', () => { panel.saveError = ''; resetNoteComposer(panel); noteField(panel, 'status').textContent = ''; });
+  noteField(panel, 'list').addEventListener('click', event => handleNoteClick(panel, event));
+}
+$('#overview-notes-list').addEventListener('click', event => {
+  const task = event.target.closest('[data-discussion-task]');
+  if (task) openTask(task.dataset.discussionTask, true);
+});
+$('#task-discussion-more').addEventListener('click', () => { discussion.limit += 30; void loadNotes(discussion); });
+window.addEventListener('online', queueNotesRefresh);
+document.addEventListener('visibilitychange', () => { if (!document.hidden) queueNotesRefresh(); });
+// Also reconcile changes that do not emit an authorized row event, such as revoked access.
+setInterval(() => { if (!document.hidden && (notesFeed.scope || discussion.scope)) queueNotesRefresh(); }, 30000);
 for (const button of document.querySelectorAll('[data-creation-mode]')) button.addEventListener('click', () => setTaskCreationMode(button.dataset.creationMode));
 $('#task-ai-agent').addEventListener('change', updateAIAgentButton);
 updateAIAgentButton();
@@ -1503,15 +1869,19 @@ $('#review-ai-tasks').addEventListener('click', reviewAITasks);
 $('#task-ai-response').addEventListener('input', invalidateAITasks);
 $('#task-project').addEventListener('change', () => populateTaskScope($('#task-project').value));
 $('#task-team').addEventListener('change', () => populateTaskScope($('#task-project').value, $('#task-team').value));
-$('#task-subteam').addEventListener('change', () => fillTaskAssignees($('#task-project').value, $('#task-subteam').value));
+$('#task-subteam').addEventListener('change', () => {
+  fillTaskAssignees($('#task-project').value, $('#task-subteam').value);
+  renderExtraTaskTeams($('#task-project').value, $('#task-subteam').value);
+});
 $('#task-assignee').addEventListener('change', () => {
+  if (sharedTasksReady) return;
   const value = $('#task-assignee').value;
   if (!value.startsWith('group:')) return;
   const groupId = value.slice(6);
   populateTaskScope($('#task-project').value, rootId(groupId), groupId);
   if ($('#task-creation-mode').value === 'ai') { $('#task-ai-prompt').value = taskAIPrompt(); invalidateAITasks(); }
 });
-for (const selector of ['#task-project', '#task-team', '#task-subteam']) $(selector).addEventListener('change', () => { if ($('#task-creation-mode').value === 'ai') { $('#task-ai-prompt').value = taskAIPrompt(); invalidateAITasks(); } });
+for (const selector of ['#task-project', '#task-team', '#task-subteam', '#task-extra-teams']) $(selector).addEventListener('change', () => { if ($('#task-creation-mode').value === 'ai') { $('#task-ai-prompt').value = taskAIPrompt(); invalidateAITasks(); } });
 for (const selector of ['#task-search', '#status-filter', '#priority-filter']) $(selector).addEventListener(selector === '#task-search' ? 'input' : 'change', () => renderTasks(scopedTasks()));
 document.addEventListener('click', event => { const button = event.target.closest('[data-edit]'); if (button) openTask(button.dataset.edit); });
 document.addEventListener('change', toggleTask);

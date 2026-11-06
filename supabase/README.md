@@ -203,3 +203,69 @@ subteam archive flags. Restoring it leaves independently archived subteams hidde
 Tasks, task archive flags, memberships, roster approvals, and history remain intact.
 Tasks in archived teams appear in the task archive view and cannot be edited until
 the team is restored. Project archive/restore continues to work independently.
+
+## Live Notes & comms
+
+For an existing database, run `overview-notes.sql` after `group-task-access.sql`
+and the archive migrations (`activity-log.sql`, `project-management.sql`, and
+`team-management.sql`), then deploy or refresh the frontend. Fresh installs
+include the same changes in `schema.sql`. The migration adds Overview notes,
+applies group and author permissions, and enables Postgres Changes for
+`overview_notes` and `task_comments` when the Supabase publication is present.
+If the publication was created after migration, rerun `overview-notes.sql` to
+register both tables.
+
+Members can post, edit, and delete their own team and subteam notes. Chairs can
+delete any visible note and can also post project announcements. Use the team
+picker followed by the subteam picker when a note is for a specific subteam.
+Open a task to post or edit your own discussion comments. The
+Overview previews recent notes and comments across the selected scope, with
+project announcements included in each group view. Archived tasks retain
+read-only discussion. Updates use Supabase Realtime with a periodic refresh
+while the view is visible.
+
+To review member permissions, use **View as → Member**. The composer shows
+the member's destinations and disables posting. Use separate signed-in
+browser sessions to verify live delivery and actual posting. If users can
+edit their notes but get a permissions error on Delete, rerun the current
+`overview-notes.sql` to install the delete grant and policy.
+
+## Shared tasks
+
+Run `shared-tasks.sql` after `overview-notes.sql` and after installing any
+optional roster assignment migrations. The fresh-install schema includes
+shared tasks. Reapply `shared-tasks.sql` after any later migration that
+replaces task permissions or the task editor RPC.
+
+The task form and Tasks from AI show **Additional teams or subteams** once
+the migration is installed. Existing tasks keep their original assignment.
+Shared tasks have one status, due date, and optional named assignee. Assignee
+eligibility follows the primary team. A shared task is counted once across
+teams and is visible in each active assigned group, with the same discussion
+and activity. If one assigned team is archived, the other active teams can
+continue to work on the task.
+
+A lead of any active assigned group can edit shared task details. Changing
+the assignments requires management access to every current and selected
+group or chair access. Verify this with a lead scoped to only one assigned
+team, a member from the other team, and an unrelated member. In the combined
+Overview, verify that the task appears once.
+
+## Planned new-task email
+
+On successful manual or AI task creation, automatically queue an
+   email for the named assignee, if present, and members of every assigned
+   team or subteam, including any groups beneath those assignments. A
+   subteam-only assignment does not notify members of its parent team or
+   sibling subteams through those memberships. Recipients need an active
+   linked workspace account and access to the task. The task form needs no
+   email options. Resolve recipients on the server and send one email per
+   person even when they qualify through both direct and group assignments.
+   Key deliveries by task and recipient so retries can track prior sends.
+   Send individual emails with a link to the task and keep note text and
+   roster addresses out of the message. A sending failure should leave the
+   task saved and the delivery available for retry. Proposed copy: “Hey!
+   Check the Workspace. You have a new task.” A sender and mail provider
+   still need to be configured. GitHub imports and task edits do not send mail.
+
+Verify that overlapping memberships and retries do not cause duplicate emails.

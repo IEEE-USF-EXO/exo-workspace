@@ -248,21 +248,43 @@
             <span id="overview-scope"></span>
           </div>
           <div class="stats" id="stats"></div>
-          <section class="panel updates-panel" aria-labelledby="updates-title">
-            <div class="panel-heading">
-              <h2 id="updates-title">Recent updates</h2>
-              <button type="button" class="text-button" id="refresh-updates">Refresh</button>
-            </div>
-            <ol id="recent-updates" class="activity-list"></ol>
-            <button
-              type="button"
-              class="history-more"
-              id="toggle-updates"
-              aria-controls="recent-updates"
-              aria-expanded="false"
-              hidden
-            >Show more updates</button>
-          </section>
+          <div class="overview-grid overview-updates">
+            <section class="panel" aria-labelledby="updates-title">
+              <div class="panel-heading">
+                <h2 id="updates-title">Recent updates</h2>
+                <button type="button" class="text-button" id="refresh-updates">Refresh</button>
+              </div>
+              <ol id="recent-updates" class="activity-list"></ol>
+              <button
+                type="button"
+                class="history-more"
+                id="toggle-updates"
+                aria-controls="recent-updates"
+                aria-expanded="false"
+                hidden
+              >Show more updates</button>
+            </section>
+            <section class="panel" id="overview-notes-panel" aria-labelledby="overview-notes-title" hidden>
+              <div class="panel-heading"><h2 id="overview-notes-title">Notes &amp; comms</h2></div>
+              <form class="notes-composer" id="overview-notes-composer" hidden>
+                <label for="overview-notes-destination">Post to</label>
+                <select id="overview-notes-destination"></select>
+                <div class="notes-subteam-field" id="overview-notes-subteam-field" hidden>
+                  <label for="overview-notes-subteam">Subteam</label>
+                  <select id="overview-notes-subteam"></select>
+                </div>
+                <label for="overview-notes-body">Note</label>
+                <textarea id="overview-notes-body" maxlength="10000" rows="3"></textarea>
+                <div class="notes-actions">
+                  <button class="button primary" id="overview-notes-save" type="submit">Post note</button>
+                  <button class="button secondary" id="overview-notes-cancel" type="button" hidden>Cancel edit</button>
+                </div>
+                <p id="overview-notes-preview-message" class="muted" hidden>Member preview is read-only.</p>
+              </form>
+              <p id="overview-notes-status" class="notes-status muted" role="status"></p>
+              <ol id="overview-notes-list" class="activity-list"></ol>
+            </section>
+          </div>
           <div class="overview-grid">
             <section class="panel">
               <div class="panel-heading">
@@ -446,6 +468,20 @@
           <dl id="task-detail-facts" class="task-detail-facts"></dl>
           <h3 class="detail-section-title">References</h3>
           <ul id="task-references" class="task-references"></ul>
+          <section id="task-discussion-panel" class="task-discussion" aria-labelledby="task-discussion-title" hidden>
+            <h3 id="task-discussion-title" class="detail-section-title" tabindex="-1">Discussion</h3>
+            <div class="notes-composer" id="task-discussion-composer" hidden>
+              <label for="task-discussion-body">Comment</label>
+              <textarea id="task-discussion-body" maxlength="10000" rows="3"></textarea>
+              <div class="notes-actions">
+                <button class="button primary" id="task-discussion-save" type="button">Post comment</button>
+                <button class="button secondary" id="task-discussion-cancel" type="button" hidden>Cancel edit</button>
+              </div>
+            </div>
+            <p id="task-discussion-status" class="notes-status muted" role="status"></p>
+            <ol id="task-discussion-list" class="activity-list"></ol>
+            <button id="task-discussion-more" class="history-more" type="button" hidden>Show older comments</button>
+          </section>
           <details id="task-history-section" class="task-history-section">
             <summary>Activity history</summary>
             <ol id="task-history" class="activity-list"></ol>
@@ -523,13 +559,18 @@
               <select id="task-project" required></select>
             </div>
             <div>
-              <label for="task-team">Team</label>
+              <label for="task-team">Primary team</label>
               <select id="task-team" required></select>
             </div>
             <div class="full-width">
               <label for="task-subteam">Subteam</label>
               <select id="task-subteam" required></select>
             </div>
+            <fieldset class="full-width" id="task-shared-teams" hidden>
+              <legend>Additional teams or subteams</legend>
+              <div id="task-extra-teams"></div>
+              <p class="muted" id="task-shared-team-help"></p>
+            </fieldset>
           </div>
         </div>
       </form>
