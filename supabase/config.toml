@@ -1,2 +1,5 @@
-# GitHub synchronization is deferred. No Edge Function is configured or deployed.
-# Configure authentication when an actual function handler is implemented.
+project_id = "exo-workspace"
+
+# The worker authenticates scheduled calls with TASK_EMAIL_WORKER_SECRET.
+[functions.task-email-worker]
+verify_jwt = false

@@ -251,21 +251,72 @@ group or chair access. Verify this with a lead scoped to only one assigned
 team, a member from the other team, and an unrelated member. In the combined
 Overview, verify that the task appears once.
 
-## Planned new-task email
+## New-task emails with Resend
 
-On successful manual or AI task creation, automatically queue an
-   email for the named assignee, if present, and members of every assigned
-   team or subteam, including any groups beneath those assignments. A
-   subteam-only assignment does not notify members of its parent team or
-   sibling subteams through those memberships. Recipients need an active
-   linked workspace account and access to the task. The task form needs no
-   email options. Resolve recipients on the server and send one email per
-   person even when they qualify through both direct and group assignments.
-   Key deliveries by task and recipient so retries can track prior sends.
-   Send individual emails with a link to the task and keep note text and
-   roster addresses out of the message. A sending failure should leave the
-   task saved and the delivery available for retry. Proposed copy: “Hey!
-   Check the Workspace. You have a new task.” A sender and mail provider
-   still need to be configured. GitHub imports and task edits do not send mail.
+Manual and AI task creation queue one email per eligible recipient when
+notifications are enabled. Recipients include the named assignee and members
+of the assigned teams and their subteams who have confirmed workspace accounts
+and task access. GitHub imports and task edits stay quiet. The creator shows
+emails accepted by Resend today and how many are queued. The counter covers
+Exo-Workbench traffic and resets at midnight UTC. The worker reserves up to
+100 delivery slots per day and 3,000 per month. Queued work waits for room.
 
-Verify that overlapping memberships and retries do not cause duplicate emails.
+1. Apply `task-notifications.sql` after `shared-tasks.sql`. Email starts off.
+2. Verify a sender domain in Resend and create a sending-only API key.
+3. Set the Edge Function secrets `RESEND_API_KEY`, `TASK_EMAIL_FROM`,
+   `TASK_EMAIL_WORKSPACE_URL` (the production HTTPS app URL), and
+   `TASK_EMAIL_WORKER_SECRET` (a long random secret used only for Cron).
+4. Deploy `task-email-worker` with the repository function configuration.
+   Configure Supabase Cron to POST to `/functions/v1/task-email-worker`
+   once a minute, using `Authorization: Bearer <TASK_EMAIL_WORKER_SECRET>`.
+   Store the Cron copy of the secret in Vault and reference it in the job.
+5. Enable sending in the SQL Editor and verify with a test assignment.
+
+```sql
+update exo_private.task_email_settings set enabled = true where singleton;
+```
+
+Set `enabled` to `false` to pause sending and creation of new notifications.
+Existing pending deliveries can resume when enabled. The queue is private.
+For troubleshooting, use the worker logs and inspect the `state` and `failure`
+fields in `exo_private.task_emails` in the SQL Editor. The worker rechecks
+recipient access before delivery and uses Resend idempotency keys for retries.
+
+- [Schedule an Edge Function with Cron and Vault](https://supabase.com/docs/guides/functions/schedule-functions)
+- [Resend sending key permissions](https://resend.com/changelog/new-api-key-permissions)
+
+### Rollout checkpoint · November 6, 2026
+
+The maintainer reported applying the Notes & comms, shared tasks, and task
+notification SQL updates, adding the four Edge Function settings, and deploying
+`task-email-worker` with legacy JWT verification off. Resume at the Cron
+setup. Vault setup, Cron invocations, Resend sender verification, and live
+delivery still need confirmation. Keep sending disabled during these checks.
+
+In Vault, add `task_email_worker_secret` with the same value as the Edge
+Function's `TASK_EMAIL_WORKER_SECRET`. With Cron and `pg_net` enabled, run:
+
+```sql
+select cron.schedule(
+  'exo-task-email-worker',
+  '* * * * *',
+  $job$
+    select net.http_post(
+      url := 'https://tnupwlucufewosslvcaz.supabase.co/functions/v1/task-email-worker',
+      headers := jsonb_build_object(
+        'Content-Type', 'application/json',
+        'Authorization', 'Bearer ' || decrypted_secret
+      ),
+      body := '{}'::jsonb,
+      timeout_milliseconds := 60000
+    )
+    from vault.decrypted_secrets
+    where name = 'task_email_worker_secret';
+  $job$
+);
+```
+
+Check for a POST with status 200 in the worker's Invocations tab. Then confirm
+Resend shows Sending as verified for `exo-work.space`. Enable notifications
+and create one task for a known test recipient. Confirm receipt, the task link,
+and the counter before sending to a team.

@@ -11,6 +11,7 @@ const ACTIVITY_FIELDS = 'id,task_id,actor_id,actor_name,task_title,project_id,te
 const state = { tasks: [], teams: [], projects: [], profiles: [], memberships: [], leadership: [], activity: [], rosterPeople: [], rosterAccounts: [], rosterGroups: [], project: '', team: 'all', subteam: 'all' };
 let rosterReady = false;
 let sharedTasksReady = false;
+let newTaskId = '';
 let activityReady = false, recentKey = '', recentRequest = 0, recentLoading = false, recentError = '';
 let recentExpanded = false, recentScope = '';
 let auditRequest = 0;
@@ -963,7 +964,26 @@ async function loadWorkspace() {
     clearData(); phase = 'error'; setBanner('Workspace could not be loaded', errorMessage(error), 'error');
   }
   render();
+  if (phase === 'ready') openLinkedTask();
   if (activeTab === 'administration' && isAdmin() && !preview.mode) loadAdminHistory();
+}
+function linkedTaskId() {
+  const id = new URLSearchParams(location.search).get('task');
+  return /^[\da-f]{8}-(?:[\da-f]{4}-){3}[\da-f]{12}$/i.test(id || '') ? id : '';
+}
+function openLinkedTask() {
+  const id = linkedTaskId() || sessionStorage.getItem('exo-linked-task');
+  if (!id) return;
+  sessionStorage.removeItem('exo-linked-task');
+  const url = new URL(location.href);
+  url.searchParams.delete('task');
+  history.replaceState(null, '', url);
+  const task = state.tasks.find(row => row.id === id && canSeeTask(row));
+  if (!task) { toast('This task is unavailable.'); return; }
+  state.project = task.project_id;
+  state.team = state.subteam = 'all';
+  switchTab('tasks');
+  openTask(id);
 }
 // Recheck persisted memberships so edits in Supabase take effect without signing
 // out. Do not interrupt an open form; the database still checks every request.
@@ -1523,6 +1543,35 @@ async function copyTaskPrompt() {
     toast(agentWindow ? `Select and copy the prompt above, then paste it into ${agent.name}.` : `Select and copy the prompt above, then open ${agent.name}.`);
   }
 }
+async function refreshTaskEmailUsage() {
+  const counter = $('#task-email-usage');
+  if (!sharedTasksReady || !session || !$('#task-dialog').open || $('#task-id').value) return;
+  const version = generation, formId = newTaskId;
+  try {
+    const { data, error } = await client.rpc('task_email_usage');
+    if (version !== generation || formId !== newTaskId || !$('#task-dialog').open) return;
+    counter.hidden = Boolean(error || !data);
+    if (!counter.hidden) {
+      counter.textContent = data.enabled
+        ? `Task emails today: ${data.sent_today} / ${data.daily_limit} sent (UTC) · ${data.pending} queued`
+        : 'Task email notifications are off.';
+    }
+  } catch {
+    if (version === generation && formId === newTaskId) counter.hidden = true;
+  }
+}
+async function createTaskRows(rows) {
+  if (sharedTasksReady) {
+    const { data, error } = await client.rpc('create_notified_tasks', { p_tasks: rows }).select(taskFields());
+    if (!error) return data;
+    if (error.code !== 'PGRST202') throw error;
+  }
+  const { error } = await client.from('tasks').upsert(rows, { onConflict: 'id', ignoreDuplicates: true });
+  if (error) throw error;
+  const result = await client.from('tasks').select(taskFields()).in('id', rows.map(task => task.id));
+  if (result.error) throw result.error;
+  return result.data;
+}
 async function saveAITasks() {
   if (busy || preview.mode || !session || $('#task-id').value || !taskEditing) return;
   if (!aiTaskPlan) { aiTaskError('Review the agent response before creating tasks.'); return; }
@@ -1537,10 +1586,8 @@ async function saveAITasks() {
   try {
     // One atomic batch. Stable IDs make retrying a lost response safe without updating existing tasks.
     const assignments = sharedTasksReady ? rows.map(task => ({ ...task, team_ids: teamIds })) : rows;
-    const { error } = await client.from('tasks').upsert(assignments, { onConflict: 'id', ignoreDuplicates: true });
-    if (error) throw error;
-    const { data, error: readError } = await client.from('tasks').select(taskFields()).in('id', rows.map(task => task.id));
-    if (readError || data?.length !== rows.length) throw new Error('The batch was saved, but could not be reloaded. Refresh the workspace before trying again.');
+    const data = await createTaskRows(assignments);
+    if (data?.length !== rows.length) throw new Error('The batch was saved, but could not be reloaded. Refresh the workspace before trying again.');
     if (owner !== session?.user.id || version !== generation) return;
     const ids = new Set(data.map(task => task.id)); state.tasks = [...state.tasks.filter(task => !ids.has(task.id)), ...data];
     state.project = projectId; state.team = rootId(teamId); state.subteam = teamId === state.team ? 'all' : teamId;
@@ -1556,6 +1603,8 @@ function openTask(id, showDiscussion = false) {
   if (id && (!task || !canSeeTask(task))) return;
   if ((!task && (!canCreate() || preview.mode)) || busy || !viewIsMember()) return;
   $('#task-form').reset(); $('#form-error').hidden = true;
+  newTaskId = task ? '' : crypto.randomUUID();
+  $('#task-email-usage').hidden = true;
   aiTaskPlan = null;
   $('#task-ai-response').value = ''; $('#task-ai-preview').replaceChildren();
   $('#task-ai-summary').textContent = ''; $('#task-ai-error').hidden = true;
@@ -1618,6 +1667,7 @@ function openTask(id, showDiscussion = false) {
     if (task.archived_at) $('#task-detail-meta').insertAdjacentHTML('beforeend', '<span class="badge cancelled">Archived</span>');
   }
   showDialog($('#task-dialog'));
+  if (!task) void refreshTaskEmailUsage();
   syncNotes();
   if (task && showDiscussion) $('#task-discussion-title').focus();
   else if (task) { $('#task-detail-title').tabIndex = -1; $('#task-detail-title').focus(); }
@@ -1696,9 +1746,17 @@ async function saveTask(event) {
   const owner = session.user.id, version = generation;
   busy = true; lockForm(true); render();
   try {
-    const query = existing ? activityReady ? client.rpc('manage_task', { p_task: id, p_expected: existing.updated_at, p_values: values }) : client.from('tasks').update(values).eq('id', id).eq('updated_at', existing.updated_at) : client.from('tasks').insert({ ...values, project_id: projectId, team_id: teamId, created_by: owner });
-    const { data, error } = await query.select(taskFields()).maybeSingle();
-    if (error) throw error; if (!data) throw new Error('This task changed or you no longer have permission. Close this dialog, refresh, and try again.');
+    let data;
+    if (existing) {
+      const query = activityReady ? client.rpc('manage_task', { p_task: id, p_expected: existing.updated_at, p_values: values })
+        : client.from('tasks').update(values).eq('id', id).eq('updated_at', existing.updated_at);
+      const result = await query.select(taskFields()).maybeSingle();
+      if (result.error) throw result.error;
+      data = result.data;
+    } else {
+      [data] = await createTaskRows([{ ...values, id: newTaskId, project_id: projectId, team_id: teamId, created_by: owner }]);
+    }
+    if (!data) throw new Error('This task changed or you no longer have permission. Close this dialog, refresh, and try again.');
     if (owner !== session?.user.id || version !== generation) return;
     state.tasks = existing ? state.tasks.map(task => task.id === id ? data : task) : [...state.tasks, data];
     if (!existing) {
@@ -1756,6 +1814,8 @@ async function authenticate() {
       const { error } = await client.auth.signOut({ scope: 'local' }); if (error) throw error;
       session = null; clearData(); busy = false; await loadWorkspace();
     } else {
+      const taskId = linkedTaskId();
+      if (taskId) sessionStorage.setItem('exo-linked-task', taskId);
       const { error } = await client.auth.signInWithOAuth({ provider: EXO_CONFIG.authProvider, options: { redirectTo: EXO_CONFIG.authRedirectUrl, queryParams: { prompt: 'select_account' } } });
       if (error) throw error;
     }
@@ -1966,4 +2026,5 @@ document.addEventListener('keydown', event => {
 window.addEventListener('focus', refreshGroupAccess);
 document.addEventListener('visibilitychange', refreshGroupAccess);
 setInterval(refreshGroupAccess, 30000);
+setInterval(() => { if (!document.hidden) void refreshTaskEmailUsage(); }, 30000);
 render(); initialize();
