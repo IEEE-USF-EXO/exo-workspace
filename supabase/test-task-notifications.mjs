@@ -45,6 +45,7 @@ const tasks = [{
   id: '65df43f4-e827-4911-90b7-e748fcd325e5', project_id: project,
   team_id: child, team_ids: [child, other], title: 'Test gripper', description: '',
   status: 'todo', priority: 'medium', assignee_id: recipient,
+  due_at: '2026-11-07T04:59:59Z',
 }];
 const create = rows => db.query('select id from public.create_notified_tasks($1::jsonb)', [JSON.stringify(rows)]);
 await as(recipient);
@@ -65,6 +66,8 @@ await db.query('delete from public.team_members where user_id=$1', [revoked]);
 await as('', 'service_role');
 const [delivery] = (await db.query('select * from public.claim_task_email()')).rows;
 assert.equal(delivery.email, 'recipient@example.test');
+assert.equal(delivery.task_title, 'Test gripper');
+assert.equal(new Date(delivery.task_due_at).toISOString(), '2026-11-07T04:59:59.000Z');
 assert.equal((await db.query('select * from public.claim_task_email()')).rows.length, 0);
 await db.query("select public.finish_task_email($1,$2,'sent','resend-test-id')", [delivery.id, delivery.lease]);
 await as(chair);

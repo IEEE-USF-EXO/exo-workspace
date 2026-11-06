@@ -282,6 +282,19 @@ For troubleshooting, use the worker logs and inspect the `state` and `failure`
 fields in `exo_private.task_emails` in the SQL Editor. The worker rechecks
 recipient access before delivery and uses Resend idempotency keys for retries.
 
+### Updating the email to show task details
+
+Pause sending, rerun [`task-notifications.sql`](task-notifications.sql) in
+the SQL Editor, then redeploy
+[`task-email-worker`](functions/task-email-worker/index.ts). Re-enable
+sending after both updates and verify with a new test task. Cron uses the
+existing schedule and secrets.
+
+On the first send attempt, Supabase reads the task's title and `due_at` from
+`public.tasks` and saves them in the private delivery row. Retries reuse that
+copy. The worker formats the due date in Tampa time (`America/New_York`) and
+shows **No due date** when the field is empty.
+
 - [Schedule an Edge Function with Cron and Vault](https://supabase.com/docs/guides/functions/schedule-functions)
 - [Resend sending key permissions](https://resend.com/changelog/new-api-key-permissions)
 

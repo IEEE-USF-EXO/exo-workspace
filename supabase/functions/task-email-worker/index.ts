@@ -1,10 +1,23 @@
-type Delivery = { id: string; task_id: string; email: string; lease: string };
+type Delivery = {
+  id: string;
+  task_id: string;
+  email: string;
+  lease: string;
+  task_title: string | null;
+  task_due_at: string | null;
+};
 type Result = 'sent' | 'retry' | 'failed' | 'rate_limit' | 'daily_quota' | 'monthly_quota';
+const dueDateFormat = new Intl.DateTimeFormat('en-US', {
+  dateStyle: 'long',
+  timeZone: 'America/New_York',
+});
 
 async function send(delivery: Delivery, key: string, from: string, workspace: string): Promise<[Result, string]> {
   const link = new URL(workspace);
   link.searchParams.set('task', delivery.task_id);
   link.hash = 'tasks';
+  const dueDate = delivery.task_due_at ? dueDateFormat.format(new Date(delivery.task_due_at)) : 'No due date';
+  const taskDetails = delivery.task_title == null ? '' : `Task: ${delivery.task_title}\nDue date: ${dueDate}\n\n`;
   try {
     const response = await fetch('https://api.resend.com/emails', {
       method: 'POST',
@@ -17,8 +30,8 @@ async function send(delivery: Delivery, key: string, from: string, workspace: st
       body: JSON.stringify({
         from,
         to: [delivery.email],
-        subject: 'New task in EXO Workspace',
-        text: `Hey! Check the Workspace. You have a new task.\n\n${link.href}`,
+        subject: 'Workspace wants you 🫵 to see this task',
+        text: `${taskDetails}Access task through this link \n\n${link.href}`,
       }),
     });
     const body = await response.json().catch(() => ({}));

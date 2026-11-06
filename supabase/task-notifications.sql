@@ -22,6 +22,9 @@ create table if not exists exo_private.task_emails (
   unique (task_id,recipient_id),
   unique (task_id,email)
 );
+alter table exo_private.task_emails
+  add column if not exists task_title text,
+  add column if not exists task_due_at timestamptz;
 create index if not exists exo_task_email_due on exo_private.task_emails(next_attempt) where state='pending';
 create index if not exists exo_task_email_sent on exo_private.task_emails(sent_at) where state='sent';
 
@@ -129,8 +132,10 @@ $$;
 revoke all on function public.task_email_usage() from public,anon;
 grant execute on function public.task_email_usage() to authenticated;
 
-create or replace function public.claim_task_email()
-returns table(id uuid,task_id uuid,email text,lease uuid) language plpgsql security definer set search_path='' as $$
+drop function if exists public.claim_task_email();
+create function public.claim_task_email()
+returns table(id uuid,task_id uuid,email text,lease uuid,task_title text,task_due_at timestamptz)
+language plpgsql security definer set search_path='' as $$
 declare candidate exo_private.task_emails;
   utc_day date := (clock_timestamp() at time zone 'UTC')::date;
   month_start date := date_trunc('month',utc_day::timestamp)::date;
@@ -154,9 +159,13 @@ begin
     update exo_private.task_emails q set state='skipped',lease=null where q.id=candidate.id;
   end loop;
   insert into exo_private.task_email_slots(day,delivery_id) values(utc_day,candidate.id) on conflict do nothing;
+  -- Keep the email body stable across attempts with the same delivery ID.
   return query update exo_private.task_emails q
-    set first_attempt=coalesce(q.first_attempt,now()), next_attempt=now()+interval '2 minutes', lease=gen_random_uuid()
-    where q.id=candidate.id returning q.id,q.task_id,q.email,q.lease;
+    set first_attempt=coalesce(q.first_attempt,now()), next_attempt=now()+interval '2 minutes', lease=gen_random_uuid(),
+      task_title=case when q.first_attempt is null and q.task_title is null then t.title else q.task_title end,
+      task_due_at=case when q.first_attempt is null and q.task_title is null then t.due_at else q.task_due_at end
+    from public.tasks t where q.id=candidate.id and t.id=q.task_id
+    returning q.id,q.task_id,q.email,q.lease,q.task_title,q.task_due_at;
 end $$;
 
 create or replace function public.finish_task_email(p_id uuid,p_lease uuid,p_result text,p_detail text)
