@@ -267,12 +267,7 @@
             <section class="panel" id="overview-notes-panel" aria-labelledby="overview-notes-title" hidden>
               <div class="panel-heading"><h2 id="overview-notes-title">Notes &amp; comms</h2></div>
               <form class="notes-composer" id="overview-notes-composer" hidden>
-                <label for="overview-notes-destination">Post to</label>
-                <select id="overview-notes-destination"></select>
-                <div class="notes-subteam-field" id="overview-notes-subteam-field" hidden>
-                  <label for="overview-notes-subteam">Subteam</label>
-                  <select id="overview-notes-subteam"></select>
-                </div>
+                <p class="muted label-with-help"><span id="overview-notes-recipient" aria-live="polite"></span><span class="help"><button type="button" class="help-button" aria-label="How to change the note recipient" aria-describedby="overview-notes-recipient-help" aria-expanded="false">&#9432;</button><span class="help-text" role="tooltip" id="overview-notes-recipient-help">To change who you are writing to, use the Team or Subteam selector in the top bar.</span></span></p>
                 <label for="overview-notes-body">Note</label>
                 <textarea id="overview-notes-body" maxlength="10000" rows="3"></textarea>
                 <div class="notes-actions">

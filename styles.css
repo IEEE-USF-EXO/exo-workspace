@@ -583,3 +583,6 @@ body:has(#member-preview:not([hidden])) .topbar { border-bottom-color: #cdbf98; 
   .help-text { width: 180px; }
   .stat:nth-child(even) .help-text { left: auto; right: 0; }
 }
+
+/* Temporary welcome preview: never intercept the sign-in controls. */
+.welcome-confetti { position: fixed; inset: 0; width: 100vw; height: 100vh; pointer-events: none; z-index: 1; }

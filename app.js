@@ -366,22 +366,8 @@ const noteFields = 'id,author_id,body,created_at,updated_at';
 const noteField = (panel, name) => $(`#${panel.prefix}-${name}`);
 let notesChannel, notesChannelOwner = '', notesChannelId = 0, notesRefreshTimer;
 
-function fillNoteSubteams(selected = '') {
-  const team = $('#overview-notes-destination').value;
-  const subteam = $('#overview-notes-subteam');
-  const teams = notesFeed.teams || [];
-  const children = teams.filter(id => id !== team && rootId(id) === team);
-  $('#overview-notes-subteam-field').hidden = !children.length;
-  subteam.innerHTML = options([
-    ['', teams.includes(team) ? 'Whole team' : 'Select a subteam'],
-    ...children.map(id => [id, ancestors(id).slice(0, -1).reverse().map(parent => teamById(parent).name).join(' / ')])
-  ]);
-  subteam.value = children.includes(selected) ? selected : '';
-}
-
-function selectNoteDestination(id) {
-  $('#overview-notes-destination').value = id && id !== 'announcement' ? rootId(id) : id || '';
-  fillNoteSubteams(id);
+function noteDestination(panel) {
+  return panel.selectedTeam || (panel.announcements && state.team === 'all' ? 'announcement' : '');
 }
 
 function renderNoteComposer(panel) {
@@ -389,11 +375,14 @@ function renderNoteComposer(panel) {
   composer.hidden = (!panel.writable && !panel.previewComposer) || !panel.ready;
   if (panel === notesFeed) {
     $('#overview-notes-preview-message').hidden = !panel.previewComposer;
-    $('#overview-notes-destination').disabled = Boolean(panel.edit || (panel.selectedTeam && !panel.announcements) || panel.saving);
-    $('#overview-notes-subteam').disabled = Boolean(panel.edit || panel.saving);
+    const destination = panel.edit ? panel.edit.team_id || 'announcement' : noteDestination(panel);
+    $('#overview-notes-recipient').textContent = destination
+      ? `${panel.edit ? 'You are editing a note to' : 'You are writing a note to'} ${destination === 'announcement' ? 'everyone in this project (project-wide announcement)' : teamPath(destination)}.`
+      : 'Select a team or subteam in the top bar to write a note.';
+    panel.hasDestination = Boolean(destination);
   }
-  noteField(panel, 'body').disabled = Boolean(panel.saving || !panel.writable);
-  noteField(panel, 'save').disabled = Boolean(panel.saving || !panel.writable);
+  noteField(panel, 'body').disabled = Boolean(panel.saving || !panel.writable || (panel === notesFeed && !panel.hasDestination));
+  noteField(panel, 'save').disabled = Boolean(panel.saving || !panel.writable || (panel === notesFeed && !panel.hasDestination));
   noteField(panel, 'save').textContent = panel.edit ? 'Save changes' : panel === notesFeed ? 'Post note' : 'Post comment';
   noteField(panel, 'cancel').hidden = !panel.edit;
   noteField(panel, 'cancel').disabled = Boolean(panel.saving);
@@ -402,7 +391,6 @@ function renderNoteComposer(panel) {
 function resetNoteComposer(panel) {
   panel.edit = null;
   noteField(panel, 'body').value = '';
-  if (panel === notesFeed) selectNoteDestination(panel.selectedTeam);
   renderNoteComposer(panel);
 }
 
@@ -413,13 +401,7 @@ function setNoteScope(panel, scope, context = {}) {
   noteField(panel, 'panel').hidden = !scope;
   noteField(panel, 'list').replaceChildren();
   noteField(panel, 'status').textContent = scope ? 'Loading…' : '';
-  if (panel === notesFeed) {
-    $('#overview-notes-destination').innerHTML = options([
-      ['', 'Select a team'],
-      ...[...new Set((panel.teams || []).map(rootId))].map(id => [id, teamById(id).name]),
-      ...(panel.announcements ? [['announcement', 'Project-wide announcement']] : [])
-    ]);
-  } else $('#task-discussion-more').hidden = true;
+  if (panel !== notesFeed) $('#task-discussion-more').hidden = true;
   resetNoteComposer(panel);
   if (scope) void loadNotes(panel);
 }
@@ -554,13 +536,10 @@ async function saveNote(panel) {
   const status = noteField(panel, 'status');
   if (!body) { status.textContent = panel.saveError = 'Enter a message before posting.'; noteField(panel, 'body').focus(); return; }
   const overview = panel === notesFeed;
-  const team = $('#overview-notes-destination').value;
-  const subteam = $('#overview-notes-subteam');
-  const destination = subteam.value || team;
-  const groupDestination = panel.teams?.includes(destination) && rootId(destination) === team;
-  if (overview && !panel.edit && !groupDestination && !(destination === 'announcement' && panel.announcements)) {
-    status.textContent = panel.saveError = team ? 'Select a subteam you can post to.' : 'Select a team to post to.';
-    (team ? subteam : $('#overview-notes-destination')).focus();
+  const destination = overview ? noteDestination(panel) : '';
+  if (overview && !panel.edit && !panel.teams?.includes(destination) && !(destination === 'announcement' && panel.announcements)) {
+    status.textContent = panel.saveError = 'Select a team or subteam in the top bar to post a note.';
+    $('#team-select').focus();
     return;
   }
   const edit = panel.edit;
@@ -631,7 +610,6 @@ function handleNoteClick(panel, event) {
   const row = panel.rows.find(row => row.id === editId);
   if (!row || !panel.writable || panel.saving || row.author_id !== session?.user.id) return;
   panel.edit = row;
-  if (panel === notesFeed) selectNoteDestination(row.team_id || 'announcement');
   panel.saveError = '';
   noteField(panel, 'status').textContent = '';
   noteField(panel, 'body').value = row.body;
@@ -690,6 +668,62 @@ function renderTasks(tasks) {
   $('#empty-description').textContent = !viewIsMember() ? 'This account has no workspace access. See the message above.' : $('#task-lens').value === 'assigned' ? 'You have no assignments matching this view.' : closed.length ? 'Use Show completed to see finished work.' : tasks.length ? 'Try another search or adjust your filters.' : 'Your group’s tasks will appear here.';
   $('#empty-group-tasks').hidden = !viewIsMember() || $('#task-lens').value !== 'assigned';
 }
+// Preview mode: celebrate every signed-out page visit, without a persistent first-visit flag.
+let welcomeConfettiPlayed = false;
+function playWelcomeConfetti() {
+  if (welcomeConfettiPlayed) return;
+  welcomeConfettiPlayed = true;
+  if (window.matchMedia('(prefers-reduced-motion: reduce)').matches) return;
+  const dialog = $('#signin-dialog');
+  const canvas = document.createElement('canvas');
+  canvas.className = 'welcome-confetti';
+  canvas.setAttribute('aria-hidden', 'true');
+  dialog.append(canvas); // Keep the effect in the modal's top layer, above its backdrop.
+  const context = canvas.getContext('2d');
+  if (!context) { canvas.remove(); return; }
+  const width = window.innerWidth, height = window.innerHeight;
+  const scale = Math.min(window.devicePixelRatio || 1, 2);
+  canvas.width = width * scale; canvas.height = height * scale;
+  context.scale(scale, scale);
+  const colors = ['#5b9b72', '#f5bd4f', '#e97983', '#69b9db', '#aa86d6', '#ffffff'];
+  const particles = Array.from({ length: 180 }, (_, index) => {
+    const fromLeft = index % 2 === 0;
+    return {
+      x: fromLeft ? width * .12 : width * .88, y: height * .7,
+      vx: (fromLeft ? 1 : -1) * (110 + Math.random() * 390),
+      vy: -440 - Math.random() * 440,
+      size: 5 + Math.random() * 7, rotation: Math.random() * Math.PI,
+      spin: (Math.random() - .5) * 12, color: colors[index % colors.length],
+      phase: Math.random() * Math.PI * 2
+    };
+  });
+  let previous, start;
+  function frame(now) {
+    start ??= now;
+    const elapsed = (now - start) / 1000;
+    if (!dialog.open || elapsed > 4.5 || document.hidden) { canvas.remove(); return; }
+    const dt = Math.min((now - (previous ?? now)) / 1000, .04);
+    previous = now;
+    context.clearRect(0, 0, width, height);
+    context.globalAlpha = Math.min(1, (4.5 - elapsed) / .8);
+    for (const particle of particles) {
+      particle.vx *= Math.exp(-.55 * dt);
+      particle.vy += 420 * dt;
+      particle.x += particle.vx * dt; particle.y += particle.vy * dt;
+      particle.rotation += particle.spin * dt;
+      context.save();
+      context.translate(particle.x, particle.y);
+      context.rotate(particle.rotation);
+      context.scale(1, Math.cos(elapsed * 9 + particle.phase));
+      context.fillStyle = particle.color;
+      context.fillRect(-particle.size / 2, -particle.size / 4, particle.size, particle.size / 2);
+      context.restore();
+    }
+    requestAnimationFrame(frame);
+  }
+  requestAnimationFrame(frame);
+}
+
 function render() {
   if (preview.mode && !['loading', 'connecting'].includes(phase) && (!session || !isAdmin())) resetPreview();
   if (preview.mode === 'member' && !state.profiles.some(profile => profile.id === preview.subject) && phase === 'ready') resetPreview();
@@ -741,7 +775,10 @@ function render() {
   $('#signin-reload').hidden = phase !== 'error' || authReady;
   $('#close-signin').disabled = busy;
   if (session && $('#signin-dialog').open) $('#signin-dialog').close();
-  else if (!session && !signinDismissed && ['signed-out', 'error'].includes(phase) && !$('#signin-dialog').open) showDialog($('#signin-dialog'));
+  else if (!session && !signinDismissed && ['signed-out', 'error'].includes(phase) && !$('#signin-dialog').open) {
+    showDialog($('#signin-dialog'));
+    playWelcomeConfetti();
+  }
   $('#auth-user').hidden = !session;
   $('#auth-user').textContent = session ? (state.profiles.find(profile => profile.id === session.user.id)?.display_name || session.user.user_metadata?.full_name || 'Signed in') : '';
   $('#refresh-data').hidden = !client; $('#refresh-data').disabled = busy || phase === 'loading';
@@ -2016,7 +2053,6 @@ for (const selector of ['#close-dialog', '#cancel-dialog']) $(selector).addEvent
 $('#task-title').addEventListener('input', () => $('#task-title').setCustomValidity(''));
 $('#task-dialog').addEventListener('close', () => { $('#task-title').setCustomValidity(''); syncNotes(); });
 $('#overview-notes-composer').addEventListener('submit', event => { event.preventDefault(); void saveNote(notesFeed); });
-$('#overview-notes-destination').addEventListener('change', () => fillNoteSubteams(notesFeed.selectedTeam));
 $('#task-discussion-save').addEventListener('click', () => void saveNote(discussion));
 for (const panel of [notesFeed, discussion]) {
   noteField(panel, 'cancel').addEventListener('click', () => { panel.saveError = ''; resetNoteComposer(panel); noteField(panel, 'status').textContent = ''; });
