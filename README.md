@@ -6,6 +6,11 @@ EXO Workspace is the task and team portal for IEEE USF EXO. The live site is
 The site serves the HTML, CSS, and JavaScript in the repository root. The
 [Supabase runbook](supabase/README.md) covers SQL migrations and backend setup.
 
+The public task board supports browsing without signing in. Task summaries and
+team/project labels are public; member actions and internal discussions retain
+their existing permissions. Apply the [public board migration](supabase/README.md#public-task-browsing)
+before deploying this frontend to an existing installation.
+
 ## Integrations to hand over
 
 | Service | What the next maintainer needs |

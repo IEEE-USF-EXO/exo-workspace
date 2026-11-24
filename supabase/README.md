@@ -1,5 +1,49 @@
 # Supabase SQL
 
+## Public task browsing
+
+For existing installations, run `public-task-board.sql` **after**
+`shared-tasks.sql`, using the migration owner in Supabase SQL Editor. Apply the
+SQL before deploying the updated `app.js`, `index.html`, and `privacy.html`
+together. Fresh installations use `schema.sql`, which includes this migration.
+
+The board publishes every task, including completed, cancelled, and archived
+tasks. Current tasks are shown by default; visitors can use project/team,
+status, search, completed, and archive controls without signing in. Archived
+projects remain selectable. Sign-in and membership are needed for contributions.
+
+Three read-only views (`public_tasks`, `public_task_teams`, and
+`public_task_projects`) expose explicit field lists to both `anon` and
+`authenticated`. They intentionally execute as the migration owner to publish
+summaries across group boundaries. Only SELECT is granted; source-table RLS and
+write permissions are unchanged. Do not add private columns or write grants to
+these views. Task titles and descriptions, including URLs within descriptions,
+are public. Assignee identities, roster/contact data, comments, attached
+references, and history are excluded. Internal panels still require the task's
+existing group access.
+
+Validation (local development dependencies: `@electric-sql/pglite` and `jsdom`):
+
+```sh
+node supabase/test-public-task-board.mjs
+node supabase/test-public-task-board-ui.mjs
+node supabase/test-shared-tasks.mjs
+node supabase/test-roster-ui.mjs
+node supabase/test-team-management-ui.mjs
+```
+
+After rollout, open an incognito window and a task link. Verify browsing,
+filters, details, and optional sign-in; then confirm a member can update only
+their permitted tasks. A signed-in nonmember should retain public browsing.
+If the views are unavailable, public browsing shows an unavailable message.
+If member tools fail to load, the app keeps a public read-only board.
+
+To roll back public access, revoke SELECT on all three views from `anon` and
+`authenticated`, and restore the previous frontend together. This migration
+does not modify or delete task records.
+
+## Earlier migrations
+
 For the current dashboard update, run `independent-teams.sql` once in the
 Supabase SQL Editor, then refresh Workspace. It removes the task requirement for
 project/team links without deleting existing tasks or legacy links. Members can

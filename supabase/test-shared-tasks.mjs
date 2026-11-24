@@ -6,7 +6,7 @@ const db = new PGlite();
 const read = async file => (await fs.readFile(new URL(file, import.meta.url), 'utf8')).replace(/\r\n/g, '\n').trimEnd();
 const migration = await read('shared-tasks.sql');
 const schema = await read('schema.sql');
-assert.ok(schema.endsWith(migration), 'The install schema must include the current migration');
+assert.ok(schema.includes(migration), 'The install schema must include the current migration');
 await db.exec(`
   create role anon; create role authenticated; create role service_role bypassrls;
   create schema auth;
@@ -15,7 +15,7 @@ await db.exec(`
     $$ select nullif(current_setting('request.jwt.claim.sub',true),'')::uuid $$;
   grant usage on schema auth to authenticated,service_role;
 `);
-await db.exec(schema.slice(0, -migration.length));
+await db.exec(schema.slice(0, schema.indexOf(migration)));
 const id = async (sql, args = []) => (await db.query(sql, args)).rows[0].id;
 const user = email => id('insert into auth.users(id,email) values(gen_random_uuid(),$1) returning id', [email]);
 const team = name => id('insert into public.teams(name) values($1) returning id', [name]);

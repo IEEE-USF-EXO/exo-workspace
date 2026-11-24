@@ -249,7 +249,7 @@
           </div>
           <div class="stats" id="stats"></div>
           <div class="overview-grid overview-updates">
-            <section class="panel" aria-labelledby="updates-title">
+            <section class="panel" id="recent-updates-panel" aria-labelledby="updates-title">
               <div class="panel-heading">
                 <h2 id="updates-title">Recent updates</h2>
                 <button type="button" class="text-button" id="refresh-updates">Refresh</button>
@@ -461,7 +461,7 @@
           <h3 class="detail-section-title">Instructions</h3>
           <div id="task-instructions" class="task-instructions"></div>
           <dl id="task-detail-facts" class="task-detail-facts"></dl>
-          <h3 class="detail-section-title">References</h3>
+          <h3 class="detail-section-title" id="task-references-title">References</h3>
           <ul id="task-references" class="task-references"></ul>
           <section id="task-discussion-panel" class="task-discussion" aria-labelledby="task-discussion-title" hidden>
             <h3 id="task-discussion-title" class="detail-section-title" tabindex="-1">Discussion</h3>
@@ -768,7 +768,7 @@
       </div>
       <div class="eyebrow">YOUR TEAM’S WORKSPACE</div>
       <h2 id="signin-title">Welcome to EXO.</h2>
-      <p id="signin-description">Sign in to see your team’s tasks,<br>priorities, and progress in one place.</p>
+      <p id="signin-description">Browse tasks without an account. Sign in to contribute<br>with your team’s existing permissions.</p>
       <button class="button signin-google" id="google-signin" type="button" autofocus>
         <svg width="18" height="18" viewBox="0 0 48 48" aria-hidden="true">
           <path
