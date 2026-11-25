@@ -586,3 +586,37 @@ body:has(#member-preview:not([hidden])) .topbar { border-bottom-color: #cdbf98; 
 
 /* Temporary welcome preview: never intercept the sign-in controls. */
 .welcome-confetti { position: fixed; inset: 0; width: 100vw; height: 100vh; pointer-events: none; z-index: 1; }
+
+/* Joke chat widget: top layer, with a fixed-position fallback. */
+#fake-agent {
+  position: fixed;
+  inset: auto max(20px, env(safe-area-inset-right)) max(20px, env(safe-area-inset-bottom)) auto;
+  display: flex;
+  flex-direction: column;
+  align-items: flex-end;
+  gap: 12px;
+  width: auto;
+  height: auto;
+  max-width: calc(100vw - 40px);
+  margin: 0;
+  padding: 0;
+  border: 0;
+  overflow: visible;
+  background: transparent;
+  color: var(--ink);
+  z-index: 2147483647;
+}
+#fake-agent::backdrop { display: none; }
+#fake-agent[hidden] { display: none; }
+.fake-agent-bubble { position: relative; }
+#fake-agent-dismiss { position: absolute; top: -10px; right: -6px; z-index: 1; display: grid; place-items: center; width: 28px; height: 28px; padding: 0; border: 1px solid var(--line); border-radius: 50%; background: var(--paper); color: var(--ink); font-size: 21px; line-height: 1; box-shadow: 0 2px 8px #223e3226; opacity: 0; pointer-events: none; }
+.fake-agent-bubble:hover #fake-agent-dismiss, .fake-agent-bubble:focus-within #fake-agent-dismiss { opacity: 1; pointer-events: auto; }
+@media (hover: none) { #fake-agent-dismiss { opacity: 1; pointer-events: auto; } }
+#fake-agent-launcher { display: flex; align-items: center; justify-content: center; gap: 8px; min-width: 72px; height: 58px; padding: 0 17px; border-radius: 30px; background: var(--green); color: white; font-size: 14px; font-weight: 600; box-shadow: 0 6px 24px #223e3233; }
+.fake-agent-chat { width: 320px; max-width: calc(100vw - 40px); max-height: calc(100dvh - 120px); overflow: auto; border: 1px solid var(--line); border-radius: 16px; background: var(--paper); box-shadow: 0 12px 40px #223e322b; }
+.fake-agent-chat[hidden] { display: none; }
+.fake-agent-header { display: flex; align-items: center; justify-content: space-between; gap: 16px; padding: 14px 16px; border-bottom: 1px solid var(--line); }
+#fake-agent-close { width: 36px; height: 36px; border-radius: 50%; font-size: 26px; line-height: 1; }
+#fake-agent-close:hover { background: var(--soft); }
+.fake-agent-conversation { padding: 22px 16px 32px; }
+.fake-agent-conversation p { padding: 14px 16px; border-radius: 12px 12px 12px 3px; background: var(--soft); font-size: 16px; line-height: 1.6; }
